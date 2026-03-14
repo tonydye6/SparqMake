@@ -1,12 +1,38 @@
-# SparqMake — Document Structure
+# SparqMake
 
-| Folder | Contains | Formats |
-|--------|----------|---------|
-| `01_Strategy/` | Business requirements — the WHY for this tool. | BRD (.docx) |
-| `02_Product/` | Product definition — the WHAT. Requirements, metrics, and experiments. | PRD (.docx), Non-Functional Req Sheet (.xlsx), Analytics Plan (.xlsx), Experiment Brief (.docx) |
-| `03_Design/` | UX/UI design artifacts — flows, wireframes, and visual specs. | User Flows (.fig), UX Specification (.docx + .fig), Wireframes & Mockups (.fig), Interaction Design Guidelines (.fig + .docx), UI Design Specification (.fig), Research & Testing Bundle (.docx + .xlsx) |
-| `04_Engineering/` | Technical specifications — architecture, APIs, and functional specs. | Architecture Document (.md), API & Interface Spec (.yaml + .md), FSD (.docx), SRS (.docx) |
-| `05_QA/` | Test plans, test cases, and quality assurance artifacts. | QA Documentation (.xlsx + .docx) |
-| `06_Launch/` | Launch readiness — release plans, user docs, and ops runbooks. | Release Plan / Version Scope (.xlsx), User Documentation (.md), Support Playbook (.docx), Operational Runbook (.md) |
+> **AI-powered image and asset generation with brand compliance**
 
-See `_Shared/` at the project root for cross-cutting documents (Risk Register, Assumption Register, Decision Log, Design System).
+Part of the [SparqPlaymaker™](https://github.com/tonydye6/SparqPlaymaker) platform — Wave 2 — Content & Compliance
+
+---
+
+## Overview
+
+SparqMake handles static visual asset creation — athlete cards, social media graphics, promotional materials, and merchandise mockups. It supports event-driven and on-demand modes, variant generation, and automated brand compliance checks.
+
+## Documentation Suite
+
+This repository contains the complete 7-tier documentation for SparqMake:
+
+| Tier | Folder | Documents | Format |
+|------|--------|-----------|--------|
+| 1 — Strategy | `01_Strategy/` | Business Requirements Document (BRD) | .docx |
+| 2 — Product | `02_Product/` | PRD, NFR Sheet, Analytics Plan | .docx, .xlsx |
+| 3 — Architecture | `03_Technical/` | Architecture Doc, API Spec, Data Model | .md |
+| 4 — QA & Testing | `04_QA/` | Test Plan, QA Matrix, Performance Test Plan | .xlsx |
+| 5 — Documentation | `05_Documentation/` | User Guide, Admin Guide, API Documentation | .md |
+| 6 — Operations | `06_Operations/` | Operational Runbook, Monitoring Guide, Incident Response | .md |
+| 7 — Launch | `07_Launch/` | Launch Checklist, Go/No-Go Criteria, Rollback Plan | .md |
+
+## Platform Context
+
+SparqMake is one of 14 tools in the SparqPlaymaker™ platform for AI-powered college sports NIL licensing:
+
+**Wave 1 — Core Pipeline:** HomeBase · CrownCore · SparqGen · NILGuard
+**Wave 2 — Content & Compliance:** SparqMake · SparqReel · BrandWeave · EcoTune
+**Wave 3 — Distribution & Analytics:** SparqPlug · PlayPulse · SparqInsights · FlowState
+**Wave 4 — Visibility & Intelligence:** SparqRadar · SparqDashboard
+
+---
+
+*SparqPlaymaker™ is a product of Sparq Games.*
