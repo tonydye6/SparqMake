@@ -869,11 +869,11 @@ function BrandEditor({ brand }: { brand: Brand }) {
 }
 
 const BRAND_ASSET_GROUPS = [
-  { key: "logos", label: "Logos & Marks", assetClass: "compositing", role: null, description: "Primary and secondary logos for compositing" },
-  { key: "characters", label: "Character References", assetClass: "subject_reference", role: "primary_subject", description: "Character images for AI generation" },
-  { key: "styles", label: "Style Plates & Backgrounds", assetClass: "style_reference", role: null, description: "Mood boards, textures, and backgrounds" },
-  { key: "gameplay", label: "Gameplay References", assetClass: "subject_reference", role: "supporting", description: "In-game screenshots and action shots" },
-  { key: "partner", label: "Partner / Compliance Marks", assetClass: "compositing", role: "overlay", description: "Sponsor logos and compliance marks" },
+  { key: "logos", label: "Logos & Marks", assetClass: "compositing", role: null, description: "Primary and secondary logos for compositing", nameHints: ["logo", "icon", "mark", "wordmark", "badge"] },
+  { key: "characters", label: "Character References", assetClass: "subject_reference", role: "primary_subject", description: "Character images for AI generation", nameHints: ["char_", "_char", "character"] },
+  { key: "styles", label: "Style Plates & Backgrounds", assetClass: "style_reference", role: null, description: "Mood boards, textures, and backgrounds", nameHints: ["bg_", "background", "plate", "style", "texture", "mood"] },
+  { key: "gameplay", label: "Gameplay References", assetClass: "subject_reference", role: "supporting", description: "In-game screenshots and action shots", nameHints: ["screenshot", "gameplay", "ref_screenshot"] },
+  { key: "partner", label: "Partner / Compliance Marks", assetClass: "compositing", role: "overlay", description: "Sponsor logos and compliance marks", nameHints: ["partner", "sponsor", "compliance"] },
 ];
 
 function BrandAssetGroups({ brandId }: { brandId: string }) {
@@ -896,7 +896,13 @@ function BrandAssetGroups({ brandId }: { brandId: string }) {
   const getAvailableVisuals = (group: typeof BRAND_ASSET_GROUPS[0]) => {
     if (!allAssets?.data) return [];
     const groupAssetIds = new Set(getGroupAssets(group).map(a => a.id));
-    return allAssets.data.filter(a => a.type === "visual" && !groupAssetIds.has(a.id));
+    const hints = group.nameHints || [];
+    return allAssets.data.filter(a => {
+      if (a.type !== "visual" || groupAssetIds.has(a.id)) return false;
+      if (hints.length === 0) return true;
+      const name = (a.name || "").toLowerCase();
+      return hints.some(h => name.includes(h));
+    });
   };
 
   const assignToGroup = (assetId: string, group: typeof BRAND_ASSET_GROUPS[0]) => {
@@ -985,23 +991,26 @@ function BrandAssetGroups({ brandId }: { brandId: string }) {
                     </DialogTrigger>
                     <DialogContent className="max-w-3xl w-[90vw]">
                       <DialogHeader><DialogTitle>Add to {group.label}</DialogTitle></DialogHeader>
-                      <div className="grid grid-cols-4 sm:grid-cols-5 md:grid-cols-6 gap-3 max-h-[60vh] overflow-y-auto pt-4 pr-1">
-                        {getAvailableVisuals(group).map(asset => (
-                          <button
-                            key={asset.id}
-                            onClick={() => { assignToGroup(asset.id, group); setAddDialogOpen(null); }}
-                            className="aspect-square rounded-md overflow-hidden border-2 border-border bg-muted/30 hover:border-primary transition-colors"
-                          >
-                            {asset.thumbnailUrl || asset.fileUrl ? (
-                              <img src={asset.thumbnailUrl || asset.fileUrl || ""} alt={asset.name} className="w-full h-full object-cover" />
-                            ) : (
-                              <div className="w-full h-full flex items-center justify-center"><ImageIcon size={16} className="text-muted-foreground" /></div>
-                            )}
-                          </button>
-                        ))}
-                        {getAvailableVisuals(group).length === 0 && (
-                          <p className="col-span-6 text-center text-sm text-muted-foreground py-8">No available visual assets.</p>
-                        )}
+                      <div className="max-h-[60vh] overflow-y-auto pt-4 pr-1">
+                        <div className="grid grid-cols-4 sm:grid-cols-5 md:grid-cols-6 gap-3">
+                          {getAvailableVisuals(group).map(asset => (
+                            <button
+                              key={asset.id}
+                              onClick={() => { assignToGroup(asset.id, group); setAddDialogOpen(null); }}
+                              className="relative w-full rounded-md border-2 border-border bg-muted/30 hover:border-primary transition-colors overflow-hidden"
+                              style={{ paddingBottom: "100%" }}
+                            >
+                              {asset.thumbnailUrl || asset.fileUrl ? (
+                                <img src={asset.thumbnailUrl || asset.fileUrl || ""} alt={asset.name} className="absolute inset-0 w-full h-full object-cover" />
+                              ) : (
+                                <div className="absolute inset-0 flex items-center justify-center"><ImageIcon size={16} className="text-muted-foreground" /></div>
+                              )}
+                            </button>
+                          ))}
+                          {getAvailableVisuals(group).length === 0 && (
+                            <p className="col-span-6 text-center text-sm text-muted-foreground py-8">No matching visual assets found.</p>
+                          )}
+                        </div>
                       </div>
                     </DialogContent>
                   </Dialog>
