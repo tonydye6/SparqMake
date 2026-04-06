@@ -928,7 +928,18 @@ function IntelligenceEditor({ asset, onUpdate, isPending }: { asset: Asset; onUp
             </div>
             <div className="space-y-1">
               <label className="text-[10px] uppercase text-muted-foreground font-semibold">Franchise</label>
-              <Input value={franchise} onChange={e => setFranchise(e.target.value)} className="h-8 text-xs bg-card border-border" placeholder="e.g. Crown U" />
+              <Select value={franchise || "_none"} onValueChange={v => setFranchise(v === "_none" ? "" : v)}>
+                <SelectTrigger className="h-8 text-xs bg-card border-border">
+                  <SelectValue placeholder="Select Franchise" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="_none">None</SelectItem>
+                  <SelectItem value="Sparq">Sparq</SelectItem>
+                  <SelectItem value="Crown U">Crown U</SelectItem>
+                  <SelectItem value="Mascot Mayhem">Mascot Mayhem</SelectItem>
+                  <SelectItem value="Rumble U">Rumble U</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </div>
 
