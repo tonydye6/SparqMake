@@ -877,7 +877,7 @@ const BRAND_ASSET_GROUPS = [
 ];
 
 function BrandAssetGroups({ brandId }: { brandId: string }) {
-  const { data: allAssets } = useGetAssets({ brandId });
+  const { data: allAssets } = useGetAssets({ brandId, limit: 200 });
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const updateMutation = useUpdateAsset();
@@ -893,9 +893,10 @@ function BrandAssetGroups({ brandId }: { brandId: string }) {
     });
   };
 
-  const getUnassignedVisuals = () => {
+  const getAvailableVisuals = (group: typeof BRAND_ASSET_GROUPS[0]) => {
     if (!allAssets?.data) return [];
-    return allAssets.data.filter(a => a.type === "visual" && !a.assetClass);
+    const groupAssetIds = new Set(getGroupAssets(group).map(a => a.id));
+    return allAssets.data.filter(a => a.type === "visual" && !groupAssetIds.has(a.id));
   };
 
   const assignToGroup = (assetId: string, group: typeof BRAND_ASSET_GROUPS[0]) => {
@@ -982,14 +983,14 @@ function BrandAssetGroups({ brandId }: { brandId: string }) {
                     <DialogTrigger asChild>
                       <Button variant="outline" size="sm"><Plus className="w-3.5 h-3.5 mr-1" /> Add Asset</Button>
                     </DialogTrigger>
-                    <DialogContent className="max-w-lg">
+                    <DialogContent className="max-w-3xl w-[90vw]">
                       <DialogHeader><DialogTitle>Add to {group.label}</DialogTitle></DialogHeader>
-                      <div className="grid grid-cols-4 gap-2 max-h-[300px] overflow-y-auto pt-4">
-                        {getUnassignedVisuals().map(asset => (
+                      <div className="grid grid-cols-4 sm:grid-cols-5 md:grid-cols-6 gap-3 max-h-[60vh] overflow-y-auto pt-4 pr-1">
+                        {getAvailableVisuals(group).map(asset => (
                           <button
                             key={asset.id}
                             onClick={() => { assignToGroup(asset.id, group); setAddDialogOpen(null); }}
-                            className="aspect-square rounded-md overflow-hidden border border-border bg-muted/30 hover:border-primary transition-colors"
+                            className="aspect-square rounded-md overflow-hidden border-2 border-border bg-muted/30 hover:border-primary transition-colors"
                           >
                             {asset.thumbnailUrl || asset.fileUrl ? (
                               <img src={asset.thumbnailUrl || asset.fileUrl || ""} alt={asset.name} className="w-full h-full object-cover" />
@@ -998,8 +999,8 @@ function BrandAssetGroups({ brandId }: { brandId: string }) {
                             )}
                           </button>
                         ))}
-                        {getUnassignedVisuals().length === 0 && (
-                          <p className="col-span-4 text-center text-sm text-muted-foreground py-8">No unassigned visual assets available.</p>
+                        {getAvailableVisuals(group).length === 0 && (
+                          <p className="col-span-6 text-center text-sm text-muted-foreground py-8">No available visual assets.</p>
                         )}
                       </div>
                     </DialogContent>
