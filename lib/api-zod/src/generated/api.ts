@@ -283,6 +283,8 @@ export const GetAssetsQueryParams = zod.object({
   type: zod.coerce.string().optional(),
   status: zod.coerce.string().optional(),
   search: zod.coerce.string().optional(),
+  limit: zod.coerce.number().optional(),
+  offset: zod.coerce.number().optional(),
 });
 
 export const GetAssetsResponseItem = zod.object({

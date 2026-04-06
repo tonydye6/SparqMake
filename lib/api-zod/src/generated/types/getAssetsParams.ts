@@ -11,4 +11,6 @@ export type GetAssetsParams = {
   type?: string;
   status?: string;
   search?: string;
+  limit?: number;
+  offset?: number;
 };

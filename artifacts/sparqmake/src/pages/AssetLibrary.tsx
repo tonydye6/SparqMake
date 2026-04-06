@@ -76,12 +76,14 @@ export default function AssetLibrary() {
     type: "visual", 
     brandId: selectedBrand !== "all" ? selectedBrand : undefined,
     status: statusFilter !== "all" ? statusFilter : undefined,
-    search: searchQuery || undefined
+    search: searchQuery || undefined,
+    limit: 200
   });
   
   const { data: briefs, isLoading: briefsLoading } = useGetAssets({ 
     type: "context",
     brandId: selectedBrand !== "all" ? selectedBrand : undefined,
+    limit: 200
   });
 
   const { data: hashtagSets } = useGetHashtagSets({
