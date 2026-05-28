@@ -696,6 +696,51 @@ router.post("/creatives/:id/variants/:variantId/regenerate", generationLimiter, 
     return;
   }
 
+  const [thresholdRow] = await db.select().from(appSettingsTable).where(eq(appSettingsTable.key, "dailyCostThreshold"));
+  const budgetThreshold = thresholdRow ? parseFloat(thresholdRow.value) : null;
+  let reservationId: string | null = null;
+
+  if (budgetThreshold !== null && !isNaN(budgetThreshold) && budgetThreshold > 0) {
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+
+    const estimatedGenerationCost = estimateImagenCost(1);
+    reservationId = crypto.randomUUID();
+
+    const budgetCheckResult = await db.transaction(async (tx) => {
+      const BUDGET_LOCK_KEY = 100001;
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(${BUDGET_LOCK_KEY})`);
+      const [todayResult] = await tx.select({
+        totalCost: sql<number>`COALESCE(SUM(${costLogsTable.costUsd}), 0)`,
+      }).from(costLogsTable).where(gte(costLogsTable.createdAt, todayStart));
+      const currentSpend = Number(todayResult?.totalCost || 0);
+
+      if (currentSpend + estimatedGenerationCost > budgetThreshold) {
+        return { exceeded: true as const, todaySpend: currentSpend };
+      }
+
+      await tx.insert(costLogsTable).values({
+        id: reservationId,
+        creativeId,
+        service: "system",
+        operation: "budget_reservation",
+        model: null,
+        costUsd: estimatedGenerationCost,
+      });
+      return { exceeded: false as const, todaySpend: currentSpend };
+    });
+
+    if (budgetCheckResult.exceeded) {
+      res.status(429).json({
+        error: "Daily budget exceeded",
+        todaySpend: budgetCheckResult.todaySpend,
+        threshold: budgetThreshold,
+        message: `Today's spend ($${budgetCheckResult.todaySpend.toFixed(2)}) has reached the daily budget limit ($${budgetThreshold.toFixed(2)}). Increase the limit in Cost Dashboard settings or wait until tomorrow.`,
+      });
+      return;
+    }
+  }
+
   let regenTmpDir: string | null = null;
   try {
     const selectedAssets = (campaign.selectedAssets || []) as import("../services/context-assembly.js").SelectedAssetRef[];
@@ -791,6 +836,10 @@ router.post("/creatives/:id/variants/:variantId/regenerate", generationLimiter, 
           .where(eq(creativeVariantsTable.id, variantId))
           .returning();
 
+        if (reservationId) {
+          await tx.delete(costLogsTable).where(eq(costLogsTable.id, reservationId));
+        }
+
         const cost = estimateImagenCost(1);
         await tx.insert(costLogsTable).values({
           creativeId,
@@ -826,6 +875,11 @@ router.post("/creatives/:id/variants/:variantId/regenerate", generationLimiter, 
   } catch (error) {
     if (regenTmpDir) {
       try { fs.rmSync(regenTmpDir, { recursive: true, force: true }); } catch {}
+    }
+    if (reservationId) {
+      try {
+        await db.delete(costLogsTable).where(eq(costLogsTable.id, reservationId));
+      } catch {}
     }
     const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: `Regeneration failed: ${message}` });
