@@ -91,6 +91,30 @@ import { useBrandReadiness } from "@/hooks/useBrandReadiness";
 import { LayoutSpecEditor } from "@/components/layout-editor";
 import { ScheduleProfileEditor } from "@/components/ScheduleProfileEditor";
 
+function FontPreview({ fontId, fileUrl }: { fontId: string; fileUrl: string }) {
+  const family = `preview-${fontId}`;
+  useEffect(() => {
+    let safeUrl: string;
+    try {
+      safeUrl = new URL(fileUrl, window.location.origin).href;
+    } catch {
+      return;
+    }
+    const face = new FontFace(family, `url(${JSON.stringify(safeUrl)})`);
+    let cancelled = false;
+    face.load()
+      .then((loaded) => { if (!cancelled) document.fonts.add(loaded); })
+      .catch(() => { /* preview is best-effort */ });
+    return () => { cancelled = true; document.fonts.delete(face); };
+  }, [family, fileUrl]);
+
+  return (
+    <p className="mt-2 text-sm" style={{ fontFamily: family }}>
+      The quick brown fox jumps over the lazy dog
+    </p>
+  );
+}
+
 const SETTINGS_SECTIONS = [
   { id: "section-readiness", label: "Brand Readiness" },
   { id: "section-brand-dna", label: "Brand DNA" },
@@ -520,66 +544,38 @@ function BrandEditor({ brand }: { brand: Brand }) {
     return () => observers.forEach(o => o.disconnect());
   }, []);
 
+  const brandToFormValues = (b: typeof brand) => ({
+    name: b.name,
+    slug: b.slug,
+    colorPrimary: b.colorPrimary,
+    colorSecondary: b.colorSecondary,
+    colorAccent: b.colorAccent,
+    colorBackground: b.colorBackground,
+    voiceDescription: b.voiceDescription || "",
+    timezone: ((b as Record<string, unknown>).timezone as string) || "America/New_York",
+    characterStyleRules: b.characterStyleRules || "",
+    imagenPrefix: b.imagenPrefix || "",
+    negativePrompt: b.negativePrompt || "",
+    bannedTerms: b.bannedTerms?.join(", ") || "",
+    trademarkRules: b.trademarkRules || "",
+    platformRules: JSON.stringify(b.platformRules || {}, null, 2),
+    hashtagStrategy: JSON.stringify(b.hashtagStrategy || {}, null, 2),
+  });
+
   const { register, handleSubmit, reset, watch, setValue, formState: { isDirty } } = useForm({
-    defaultValues: {
-      name: brand.name,
-      slug: brand.slug,
-      colorPrimary: brand.colorPrimary,
-      colorSecondary: brand.colorSecondary,
-      colorAccent: brand.colorAccent,
-      colorBackground: brand.colorBackground,
-      voiceDescription: brand.voiceDescription || "",
-      timezone: (brand as Record<string, unknown>).timezone as string || "America/New_York",
-      characterStyleRules: brand.characterStyleRules || "",
-      imagenPrefix: brand.imagenPrefix || "",
-      negativePrompt: brand.negativePrompt || "",
-      bannedTerms: brand.bannedTerms?.join(", ") || "",
-      trademarkRules: brand.trademarkRules || "",
-      platformRules: JSON.stringify(brand.platformRules || {}, null, 2),
-      hashtagStrategy: JSON.stringify(brand.hashtagStrategy || {}, null, 2),
-    }
+    defaultValues: brandToFormValues(brand),
   });
 
   const updateBrandMutation = useUpdateBrand({
     mutation: {
-      onSuccess: (_, variables) => {
+      onSuccess: (updated, variables) => {
         queryClient.invalidateQueries({ queryKey: ["/api/brands"] });
         queryClient.invalidateQueries({ queryKey: ["brand-readiness", brand.id] });
         toast({ title: "Brand updated successfully" });
-        // Reset RHF dirty state so the unsaved changes banner clears
-        const submitted = variables.data as Partial<{
-          name: string;
-          slug: string;
-          colorPrimary: string;
-          colorSecondary: string;
-          colorAccent: string;
-          colorBackground: string;
-          voiceDescription: string;
-          characterStyleRules: string;
-          imagenPrefix: string;
-          negativePrompt: string;
-          bannedTerms: string[] | string;
-          trademarkRules: string;
-          platformRules: Record<string, unknown>;
-          hashtagStrategy: Record<string, unknown>;
-        }>;
-        reset({
-          name: submitted.name ?? brand.name,
-          slug: submitted.slug ?? brand.slug,
-          colorPrimary: submitted.colorPrimary ?? brand.colorPrimary,
-          colorSecondary: submitted.colorSecondary ?? brand.colorSecondary,
-          colorAccent: submitted.colorAccent ?? brand.colorAccent,
-          colorBackground: submitted.colorBackground ?? brand.colorBackground,
-          voiceDescription: submitted.voiceDescription ?? "",
-          timezone: (submitted as Record<string, unknown>).timezone as string ?? ((brand as Record<string, unknown>).timezone as string || "America/New_York"),
-          characterStyleRules: submitted.characterStyleRules ?? "",
-          imagenPrefix: submitted.imagenPrefix ?? "",
-          negativePrompt: submitted.negativePrompt ?? "",
-          bannedTerms: Array.isArray(submitted.bannedTerms) ? submitted.bannedTerms.join(", ") : (submitted.bannedTerms ?? ""),
-          trademarkRules: submitted.trademarkRules ?? "",
-          platformRules: JSON.stringify(submitted.platformRules || {}, null, 2),
-          hashtagStrategy: JSON.stringify(submitted.hashtagStrategy || {}, null, 2),
-        });
+        const merged = (updated && typeof updated === "object" && (updated as { id?: string }).id)
+          ? (updated as typeof brand)
+          : ({ ...brand, ...(variables.data as Partial<typeof brand>) } as typeof brand);
+        reset(brandToFormValues(merged));
       },
       onError: (err: unknown) => {
         const message = err instanceof Error ? err.message : "Unknown error";
@@ -606,8 +602,18 @@ function BrandEditor({ brand }: { brand: Brand }) {
       updateBrandMutation.mutate({
         id: brand.id,
         data: {
-          ...brand,
-          ...data,
+          name: data.name,
+          slug: data.slug,
+          colorPrimary: data.colorPrimary,
+          colorSecondary: data.colorSecondary,
+          colorAccent: data.colorAccent,
+          colorBackground: data.colorBackground,
+          voiceDescription: data.voiceDescription,
+          timezone: data.timezone,
+          characterStyleRules: data.characterStyleRules,
+          imagenPrefix: data.imagenPrefix,
+          negativePrompt: data.negativePrompt,
+          trademarkRules: data.trademarkRules,
           bannedTerms: bannedTermsArray,
           platformRules: parsedPlatformRules,
           hashtagStrategy: parsedHashtagStrategy,
@@ -1058,7 +1064,6 @@ function BrandFontManagement({ brandId }: { brandId: string }) {
               fileUrl: res.url,
               mimeType: file.type || `font/${ext}`,
               fileSizeBytes: file.size,
-              uploadedBy: "current_user",
               tags: [],
               fontName: file.name.replace(/\.[^.]+$/, ''),
               fontWeight: "400",
@@ -1166,14 +1171,7 @@ function BrandFontManagement({ brandId }: { brandId: string }) {
                           <span className="text-[10px] text-muted-foreground">{(font.fileSizeBytes / 1024).toFixed(0)} KB</span>
                         )}
                       </div>
-                      {font.fileUrl && (
-                        <>
-                          <style>{`@font-face { font-family: 'preview-${font.id}'; src: url('${font.fileUrl}'); }`}</style>
-                          <p className="mt-2 text-sm" style={{ fontFamily: `'preview-${font.id}'` }}>
-                            The quick brown fox jumps over the lazy dog
-                          </p>
-                        </>
-                      )}
+                      {font.fileUrl && <FontPreview fontId={font.id} fileUrl={font.fileUrl} />}
                     </>
                   )}
                 </div>

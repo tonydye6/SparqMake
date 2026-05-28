@@ -68,16 +68,21 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 function FirstRunGuard({ children }: { children: React.ReactNode }) {
   const [brands, setBrands] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [errored, setErrored] = useState(false);
 
   useEffect(() => {
     apiFetch("/api/brands?limit=1", { credentials: "include" })
-      .then(res => res.json())
-      .then(data => {
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then((data) => {
         setBrands(data.data || data || []);
         setLoading(false);
       })
       .catch((err) => {
         console.error("Failed to load brands:", err);
+        setErrored(true);
         setLoading(false);
       });
   }, []);
@@ -90,7 +95,7 @@ function FirstRunGuard({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (brands.length === 0) {
+  if (!errored && brands.length === 0) {
     return <Redirect to="/setup" />;
   }
 

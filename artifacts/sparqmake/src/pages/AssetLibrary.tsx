@@ -91,6 +91,7 @@ export default function AssetLibrary() {
   });
 
   interface UploadItem {
+    id: string;
     file: File;
     status: "pending" | "uploading" | "done" | "error";
     error?: string;
@@ -103,7 +104,7 @@ export default function AssetLibrary() {
   const uploadTotal = uploadQueue.length;
   const isUploading = uploadQueue.some(i => i.status === "uploading" || i.status === "pending");
 
-  const processQueue = useCallback(async (queue: UploadItem[]) => {
+  const processQueue = useCallback(async () => {
     if (uploadActiveRef.current) return;
     uploadActiveRef.current = true;
 
@@ -112,8 +113,16 @@ export default function AssetLibrary() {
     let completed = 0;
     let failed = 0;
 
-    const uploadOne = async (item: UploadItem, index: number) => {
-      setUploadQueue(prev => prev.map((p, i) => i === index ? { ...p, status: "uploading" } : p));
+    const readPending = () =>
+      new Promise<UploadItem[]>((resolve) => {
+        setUploadQueue((prev) => {
+          resolve(prev.filter((p) => p.status === "pending"));
+          return prev;
+        });
+      });
+
+    const uploadOne = async (item: UploadItem) => {
+      setUploadQueue(prev => prev.map(p => p.id === item.id ? { ...p, status: "uploading" } : p));
       try {
         const formData = new FormData();
         formData.append("file", item.file);
@@ -135,50 +144,73 @@ export default function AssetLibrary() {
             thumbnailUrl: url,
             mimeType: item.file.type,
             fileSizeBytes: item.file.size,
-            uploadedBy: "current_user",
             tags: [],
           }),
         });
         if (!createRes.ok) throw new Error("Failed to create asset record");
         completed++;
-        setUploadQueue(prev => prev.map((p, i) => i === index ? { ...p, status: "done" } : p));
+        setUploadQueue(prev => prev.map(p => p.id === item.id ? { ...p, status: "done" } : p));
       } catch (err) {
         failed++;
         const message = err instanceof Error ? err.message : "Unknown error";
-        setUploadQueue(prev => prev.map((p, i) => i === index ? { ...p, status: "error", error: message } : p));
+        setUploadQueue(prev => prev.map(p => p.id === item.id ? { ...p, status: "error", error: message } : p));
       }
     };
 
-    for (let i = 0; i < queue.length; i += MAX_CONCURRENT) {
-      const batch = queue.slice(i, i + MAX_CONCURRENT);
-      await Promise.allSettled(batch.map((item, batchIdx) => uploadOne(item, i + batchIdx)));
-    }
+    try {
+      let pending = await readPending();
+      while (pending.length > 0) {
+        for (let i = 0; i < pending.length; i += MAX_CONCURRENT) {
+          const batch = pending.slice(i, i + MAX_CONCURRENT);
+          await Promise.allSettled(batch.map(uploadOne));
+        }
+        pending = await readPending();
+      }
 
-    queryClient.invalidateQueries({ queryKey: ["/api/assets"] });
-    uploadActiveRef.current = false;
+      queryClient.invalidateQueries({ queryKey: ["/api/assets"] });
 
-    if (failed === 0) {
-      toast({ title: `${completed} asset${completed !== 1 ? "s" : ""} uploaded successfully` });
-    } else {
-      toast({
-        variant: "destructive",
-        title: `Upload complete: ${completed} succeeded, ${failed} failed`,
-      });
+      if (failed === 0) {
+        toast({ title: `${completed} asset${completed !== 1 ? "s" : ""} uploaded successfully` });
+      } else {
+        toast({
+          variant: "destructive",
+          title: `Upload complete: ${completed} succeeded, ${failed} failed`,
+        });
+      }
+    } finally {
+      uploadActiveRef.current = false;
     }
   }, [selectedBrand, brands, queryClient, toast]);
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     if (acceptedFiles.length === 0) return;
-    const items: UploadItem[] = acceptedFiles.map(file => ({ file, status: "pending" as const }));
-    setUploadQueue(items);
-    processQueue(items);
+    const items: UploadItem[] = acceptedFiles.map(file => ({
+      id: crypto.randomUUID(),
+      file,
+      status: "pending" as const,
+    }));
+    setUploadQueue(prev => [...prev, ...items]);
+    void processQueue();
   }, [processQueue]);
 
   const dismissUploadQueue = useCallback(() => {
     if (!isUploading) setUploadQueue([]);
   }, [isUploading]);
 
-  const { getRootProps, getInputProps, isDragActive, open: openDropzone } = useDropzone({ onDrop, noClick: false, multiple: true });
+  const { getRootProps, getInputProps, isDragActive, open: openDropzone } = useDropzone({
+    onDrop,
+    noClick: false,
+    multiple: true,
+    accept: { "image/*": [], "video/mp4": [".mp4"] },
+    maxSize: 50 * 1024 * 1024,
+    onDropRejected: (rejections) => {
+      toast({
+        variant: "destructive",
+        title: "Some files were rejected",
+        description: rejections.map((r) => r.file.name).join(", "),
+      });
+    },
+  });
 
   const toggleSelection = (id: string) => {
     setSelectedIds(prev => {
@@ -511,7 +543,7 @@ function VisualAssetCard({ asset, selected, onToggleSelect, bulkMode }: { asset:
     handleUpdate(updates);
   };
 
-  const isSubjectReference = asset.assetClass === "subject_reference" || (asset.type === "image" || asset.mimeType?.startsWith("image/"));
+  const isSubjectReference = asset.assetClass === "subject_reference";
 
   const handleCheckboxClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -754,7 +786,6 @@ function BriefsTab({ briefs, brands, isLoading }: { briefs: Asset[], brands: any
         content: data.content,
         status: "approved",
         tags: data.tags ? data.tags.split(",").map((s:string) => s.trim()) : [],
-        uploadedBy: "current_user"
       }
     });
   };

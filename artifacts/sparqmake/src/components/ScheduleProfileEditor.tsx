@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { Fragment, useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -272,8 +272,8 @@ export function ScheduleProfileEditor({ brandId, timezone }: ScheduleProfileEdit
                 </div>
               ))}
               {DAYS.map((dayLabel, dayIndex) => (
-                <>
-                  <div key={`label-${dayIndex}`} className="flex items-center text-xs font-medium text-muted-foreground pr-2 justify-end">
+                <Fragment key={dayIndex}>
+                  <div className="flex items-center text-xs font-medium text-muted-foreground pr-2 justify-end">
                     {dayLabel}
                   </div>
                   {HOURS.map(hour => {
@@ -291,7 +291,7 @@ export function ScheduleProfileEditor({ brandId, timezone }: ScheduleProfileEdit
                       />
                     );
                   })}
-                </>
+                </Fragment>
               ))}
             </div>
           </div>

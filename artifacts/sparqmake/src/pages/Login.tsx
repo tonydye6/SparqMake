@@ -1,7 +1,17 @@
+const API_BASE = import.meta.env.VITE_API_URL || "";
+
+function sanitizeReturnTo(raw: string | null): string {
+  if (!raw || !raw.startsWith("/") || raw.startsWith("//")) return "/";
+  return raw;
+}
+
 export default function Login() {
+  const params = new URLSearchParams(window.location.search);
+  const returnTo = sanitizeReturnTo(params.get("returnTo"));
+  const authError = params.get("error");
+
   const handleGoogleSignIn = () => {
-    const returnTo = new URLSearchParams(window.location.search).get("returnTo") || "/";
-    window.location.href = `/api/auth/google?returnTo=${encodeURIComponent(returnTo)}`;
+    window.location.href = `${API_BASE}/api/auth/google?returnTo=${encodeURIComponent(returnTo)}`;
   };
 
   return (
@@ -48,7 +58,7 @@ export default function Login() {
           Sign in with Google
         </button>
 
-        {new URLSearchParams(window.location.search).get("error") && (
+        {authError && (
           <p className="text-sm text-destructive text-center">
             Authentication failed. Please try again.
           </p>

@@ -1,5 +1,6 @@
 import { apiFetch } from "@/lib/utils";
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
+import { format } from "date-fns";
 import { ChevronLeft, ChevronRight, Filter, Clock, Send, RotateCcw, AlertCircle, CheckCircle2, Loader2, CalendarPlus, Sparkles, Edit3, AlertTriangle } from "lucide-react";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Button } from "@/components/ui/button";
@@ -105,7 +106,7 @@ export default function Calendar() {
   const isCurrentMonth = today.getFullYear() === year && today.getMonth() === month;
   const todayDate = today.getDate();
 
-  const fetchEntries = useCallback(() => {
+  const fetchEntries = useCallback((opts?: { silent?: boolean }) => {
     let start: Date, end: Date;
     if (viewMode === "month") {
       start = new Date(year, month, 1);
@@ -118,7 +119,7 @@ export default function Calendar() {
       end.setHours(23, 59, 59);
     }
 
-    setIsLoading(true);
+    if (!opts?.silent) setIsLoading(true);
 
     const params = new URLSearchParams({
       start: start.toISOString(),
@@ -140,7 +141,7 @@ export default function Calendar() {
       });
   }, [year, month, currentDate, brandFilter, viewMode]);
 
-  useMemo(() => {
+  useEffect(() => {
     fetchEntries();
   }, [fetchEntries]);
 
@@ -327,6 +328,8 @@ export default function Calendar() {
       return;
     }
 
+    fetchEntries({ silent: true });
+
     const dateLabel = newDate.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
     const timeLabel = newDate.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 
@@ -379,7 +382,7 @@ export default function Calendar() {
 
       toast(toastConfig);
     }
-  }, [entries, toast, checkConflicts]);
+  }, [entries, toast, checkConflicts, fetchEntries]);
 
   const handleEditTimeSave = useCallback(async () => {
     if (!editTimeEntry || !editTimeValue) return;
@@ -761,7 +764,7 @@ export default function Calendar() {
                       onClick={(e) => {
                         e.stopPropagation();
                         const dt = new Date(entry.scheduledAt);
-                        setEditTimeValue(dt.toISOString().slice(0, 16));
+                        setEditTimeValue(format(dt, "yyyy-MM-dd'T'HH:mm"));
                         setEditTimeEntry(entry);
                       }}
                     >

@@ -13,7 +13,8 @@ interface StepUploadLogoProps {
   onSkip: () => void;
 }
 
-const ACCEPTED_TYPES = "image/png,image/jpeg,image/svg+xml,image/webp,image/gif";
+const ACCEPTED_TYPES = "image/png,image/jpeg,image/webp,image/gif";
+const MAX_LOGO_BYTES = 5 * 1024 * 1024;
 
 export default function StepUploadLogo({
   brandId,
@@ -35,6 +36,15 @@ export default function StepUploadLogo({
     async (file: File) => {
       if (!brandId) {
         toast({ title: "No brand selected", variant: "destructive" });
+        return;
+      }
+
+      if (!ACCEPTED_TYPES.split(",").includes(file.type)) {
+        toast({ title: "Unsupported file type", description: "Use PNG, JPEG, WebP, or GIF.", variant: "destructive" });
+        return;
+      }
+      if (file.size > MAX_LOGO_BYTES) {
+        toast({ title: "File too large", description: "Logos must be under 5 MB.", variant: "destructive" });
         return;
       }
 
@@ -182,7 +192,7 @@ export default function StepUploadLogo({
               Drag your logo here or click to browse
             </p>
             <p className="text-xs text-muted-foreground mt-1">
-              PNG, JPEG, SVG, WebP, or GIF
+              PNG, JPEG, WebP, or GIF (max 5 MB)
             </p>
           </div>
         </div>

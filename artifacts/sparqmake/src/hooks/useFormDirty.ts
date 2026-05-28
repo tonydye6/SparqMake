@@ -30,6 +30,7 @@ export function useFormDirty(initialValues: unknown, currentValues: unknown): bo
     if (!isDirty) return;
     const handler = (e: BeforeUnloadEvent) => {
       e.preventDefault();
+      e.returnValue = "";
     };
     window.addEventListener("beforeunload", handler);
     return () => window.removeEventListener("beforeunload", handler);
