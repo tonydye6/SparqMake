@@ -10,6 +10,7 @@ import * as path from "path";
 import * as os from "os";
 import multer from "multer";
 import { generationLimiter } from "../lib/rate-limit.js";
+import { validateUploadedBuffer } from "../services/fileValidation.js";
 
 function clampVolume(v: unknown, fallback: number): number {
   const n = typeof v === "number" ? v : parseFloat(String(v ?? ""));
@@ -308,6 +309,17 @@ router.post("/creatives/:id/variants/:variantId/audio-upload", generationLimiter
 
   if (!req.file) {
     res.status(400).json({ error: "No audio file provided" });
+    return;
+  }
+
+  const audioValidation = await validateUploadedBuffer(
+    req.file.buffer,
+    req.file.mimetype,
+    req.file.originalname,
+    ["audio"],
+  );
+  if (!audioValidation.ok) {
+    res.status(400).json({ error: audioValidation.error });
     return;
   }
 

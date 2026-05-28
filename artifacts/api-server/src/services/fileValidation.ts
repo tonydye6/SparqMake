@@ -1,4 +1,4 @@
-import { fileTypeFromFile } from "file-type";
+import { fileTypeFromBuffer, fileTypeFromFile } from "file-type";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -149,6 +149,157 @@ export async function validateUploadedFile(
   }
 
   return { ok: true, detectedMime: detected.mime };
+}
+
+/**
+ * Buffer-based variant of `validateUploadedFile` for routes that use
+ * `multer.memoryStorage()`. Inspects the first bytes of the buffer to confirm
+ * the true file type matches the claimed MIME and falls within the allowed
+ * categories. Font validation reuses the same 4-byte signature checks.
+ *
+ * Unlike the file-based variant, this does NOT touch the filesystem — the
+ * caller is responsible for discarding the buffer on failure.
+ */
+export async function validateUploadedBuffer(
+  buffer: Buffer,
+  claimedMime: string,
+  originalName: string,
+  allowedCategories: ReadonlyArray<FileCategory>,
+): Promise<ValidationResult> {
+  const normalizedClaimed = normalizeMime(claimedMime);
+  const claimedCategory = categoryForMime(claimedMime);
+  if (!claimedCategory || !allowedCategories.includes(claimedCategory)) {
+    return { ok: false, error: `File type ${claimedMime} not allowed` };
+  }
+
+  if (claimedCategory === "font") {
+    const ext = path.extname(originalName).toLowerCase();
+    if (!FONT_EXTS.has(ext)) {
+      return { ok: false, error: "Invalid font file extension" };
+    }
+    const fontResult = validateFontBufferBytes(buffer, ext);
+    if (!fontResult.ok) return fontResult;
+    const extToMime: Record<string, string> = {
+      ".woff2": "font/woff2",
+      ".woff": "font/woff",
+      ".ttf": "font/ttf",
+      ".otf": "font/otf",
+    };
+    const expectedMime = extToMime[ext];
+    if (expectedMime && normalizedClaimed !== expectedMime) {
+      return {
+        ok: false,
+        error: `Font file extension ${ext} does not match claimed MIME ${claimedMime}`,
+      };
+    }
+    return { ok: true };
+  }
+
+  let detected;
+  try {
+    detected = await fileTypeFromBuffer(buffer);
+  } catch (err) {
+    return {
+      ok: false,
+      error: `Could not read uploaded file: ${err instanceof Error ? err.message : "unknown error"}`,
+    };
+  }
+
+  if (!detected) {
+    return { ok: false, error: "Could not determine file type from contents" };
+  }
+
+  const detectedNormalized = normalizeMime(detected.mime);
+  const detectedCategory = categoryForMime(detected.mime);
+  if (!detectedCategory || detectedCategory !== claimedCategory) {
+    return {
+      ok: false,
+      error: `File contents (${detected.mime}) do not match claimed type (${claimedMime})`,
+      detectedMime: detected.mime,
+    };
+  }
+
+  if (detectedNormalized !== normalizedClaimed) {
+    return {
+      ok: false,
+      error: `File contents (${detected.mime}) do not match claimed type (${claimedMime})`,
+      detectedMime: detected.mime,
+    };
+  }
+
+  return { ok: true, detectedMime: detected.mime };
+}
+
+function validateFontBufferBytes(buffer: Buffer, ext: string): ValidationResult {
+  if (buffer.length < 4) {
+    return { ok: false, error: "Uploaded font is too small to validate" };
+  }
+  const head = buffer.subarray(0, 4);
+  const ascii = head.toString("ascii");
+  const isWoff = ascii === "wOFF";
+  const isWoff2 = ascii === "wOF2";
+  const isOtf = ascii === "OTTO";
+  const isTtf =
+    ascii === "true" ||
+    (head[0] === 0x00 && head[1] === 0x01 && head[2] === 0x00 && head[3] === 0x00);
+
+  const expected: Record<string, boolean> = {
+    ".woff": isWoff,
+    ".woff2": isWoff2,
+    ".otf": isOtf || isTtf,
+    ".ttf": isTtf || isOtf,
+  };
+
+  if (!expected[ext]) {
+    return {
+      ok: false,
+      error: `Font file contents do not match a valid ${ext} font signature`,
+    };
+  }
+  return { ok: true };
+}
+
+/**
+ * Lightweight content check for CSV uploads. `file-type` cannot detect CSV
+ * (it's just plain text), so we look at the first KB of the buffer:
+ *   1. Reject if it contains NUL bytes or a high ratio of non-printable bytes
+ *      (a strong signal it's actually a binary file renamed to `.csv`).
+ *   2. Reject if the prefix is not valid UTF-8.
+ * The caller is expected to parse the CSV afterwards; structural validation
+ * lives in the route's existing parser, which throws on malformed input.
+ */
+export function validateCsvBuffer(buffer: Buffer): ValidationResult {
+  if (buffer.length === 0) {
+    return { ok: false, error: "CSV file is empty" };
+  }
+
+  const sample = buffer.subarray(0, Math.min(buffer.length, 1024));
+
+  if (sample.includes(0x00)) {
+    return { ok: false, error: "CSV file appears to contain binary data" };
+  }
+
+  let nonPrintable = 0;
+  for (const byte of sample) {
+    const isPrintable =
+      byte === 0x09 ||
+      byte === 0x0a ||
+      byte === 0x0d ||
+      (byte >= 0x20 && byte <= 0x7e) ||
+      byte >= 0x80;
+    if (!isPrintable) nonPrintable++;
+  }
+  if (nonPrintable / sample.length > 0.1) {
+    return { ok: false, error: "CSV file appears to contain binary data" };
+  }
+
+  try {
+    new TextDecoder("utf-8", { fatal: true }).decode(sample);
+  } catch {
+    return { ok: false, error: "CSV file is not valid UTF-8 text" };
+  }
+
+  return { ok: true };
 }
 
 /**

@@ -14,6 +14,7 @@ import {
 import { captureScreenshots, captureFromUpload, validateUrl } from "../services/screenshot.js";
 import { validateRequest } from "../middleware/validate.js";
 import { analyzeReference } from "../services/reference-analysis.js";
+import { validateUploadedBuffer } from "../services/fileValidation.js";
 import { requireRole } from "../middleware/auth.js";
 import multer from "multer";
 import { z } from "zod";
@@ -303,6 +304,17 @@ router.post("/creatives/:id/analyze-upload", upload.single("screenshot"), async 
 
   if (!file) {
     res.status(400).json({ error: "Screenshot file is required" });
+    return;
+  }
+
+  const validation = await validateUploadedBuffer(
+    file.buffer,
+    file.mimetype,
+    file.originalname,
+    ["image"],
+  );
+  if (!validation.ok) {
+    res.status(400).json({ error: validation.error });
     return;
   }
 

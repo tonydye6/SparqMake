@@ -5,6 +5,7 @@ import multer from "multer";
 import { parse as csvParseSync } from "csv-parse/sync";
 import { z } from "zod";
 import { validateRequest } from "../middleware/validate.js";
+import { validateCsvBuffer } from "../services/fileValidation.js";
 
 const UpdatePlanItemBody = z.object({
   title: z.string().min(1).max(500).optional(),
@@ -76,8 +77,21 @@ router.post("/content-plan/import", csvUpload.single("file"), async (req, res): 
     return;
   }
 
+  const contentCheck = validateCsvBuffer(file.buffer);
+  if (!contentCheck.ok) {
+    res.status(400).json({ error: contentCheck.error });
+    return;
+  }
+
   const csvText = file.buffer.toString("utf-8");
-  const rows = parseCSV(csvText);
+  let rows: Record<string, string>[];
+  try {
+    rows = parseCSV(csvText);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Invalid CSV";
+    res.status(400).json({ error: `CSV could not be parsed: ${message}` });
+    return;
+  }
 
   if (rows.length === 0) {
     res.status(400).json({ error: "CSV file is empty or has no data rows" });
