@@ -11,6 +11,7 @@ import { csrfProtection } from "./middleware/csrf";
 import authRouter from "./routes/auth";
 import healthRouter from "./routes/health";
 import router from "./routes";
+import { publicFilesRouter } from "./routes/upload";
 import { logger } from "./lib/logger";
 
 const app: Express = express();
@@ -96,6 +97,10 @@ const fileServingLimiter = rateLimit({
 });
 
 app.use("/api/files", fileServingLimiter);
+
+// Public read of generated media — Instagram/TikTok pull it server-side with
+// no session cookie. MUST be before requireAuth. Still rate-limited above.
+app.use("/api", publicFilesRouter);
 
 app.use("/api", requireAuth, requireEditorForWrites, router);
 

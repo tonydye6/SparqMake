@@ -149,21 +149,27 @@ function serveFile(baseDir: string, filename: string, res: any): void {
   res.sendFile(filePath);
 }
 
+// Public router — mounted BEFORE requireAuth in app.ts.
+// Instagram (image_url) and TikTok (PULL_FROM_URL) fetch generated media
+// server-side with no session cookie, so this route must be unauthenticated.
+// Filenames are unguessable UUIDs, the content is published publicly anyway,
+// and serveFile() still rejects path traversal + pins the directory.
+export const publicFilesRouter: IRouter = Router();
+
+publicFilesRouter.get("/files/generated/:filename", (req, res): void => {
+  const filename = Array.isArray(req.params.filename) ? req.params.filename[0] : req.params.filename;
+  serveFile(path.join(UPLOAD_DIR, "generated"), filename, res);
+});
+
+// Raw uploads + brand assets stay behind requireAuth (the browser sends the cookie).
 router.get("/files/:filename", (req, res): void => {
   const filename = Array.isArray(req.params.filename) ? req.params.filename[0] : req.params.filename;
   serveFile(UPLOAD_DIR, filename, res);
 });
 
-router.get("/files/generated/:filename", (req, res): void => {
-  const filename = Array.isArray(req.params.filename) ? req.params.filename[0] : req.params.filename;
-  const generatedDir = path.join(UPLOAD_DIR, "generated");
-  serveFile(generatedDir, filename, res);
-});
-
 router.get("/files/brand-assets/:filename", (req, res): void => {
   const filename = Array.isArray(req.params.filename) ? req.params.filename[0] : req.params.filename;
-  const brandAssetsDir = path.join(UPLOAD_DIR, "brand-assets");
-  serveFile(brandAssetsDir, filename, res);
+  serveFile(path.join(UPLOAD_DIR, "brand-assets"), filename, res);
 });
 
 export default router;

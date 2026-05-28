@@ -670,7 +670,7 @@ router.put("/creatives/:id/variants/:variantId/headline", validateRequest({ para
   res.json(updated);
 });
 
-router.post("/creatives/:id/variants/:variantId/regenerate", async (req: Request, res: Response): Promise<void> => {
+router.post("/creatives/:id/variants/:variantId/regenerate", generationLimiter, async (req: Request, res: Response): Promise<void> => {
   const { id: creativeId, variantId } = req.params;
   const { instruction } = req.body || {};
 
