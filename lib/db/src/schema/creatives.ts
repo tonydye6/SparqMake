@@ -132,7 +132,10 @@ export const costLogsTable = pgTable("cost_logs", {
   inputTokens: text("input_tokens"),
   outputTokens: text("output_tokens"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
-});
+}, (table) => [
+  index("cost_logs_created_at_idx").on(table.createdAt.desc()),
+  index("cost_logs_service_created_at_idx").on(table.service, table.createdAt.desc()),
+]);
 
 export const brandScheduleProfilesTable = pgTable("brand_schedule_profiles", {
   id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
