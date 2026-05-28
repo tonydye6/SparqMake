@@ -3,6 +3,20 @@ import { db, socialAccountsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { decryptToken, encryptToken } from "../services/token-encryption";
 import { logger } from "../lib/logger";
+import { requireRole } from "../middleware/auth";
+
+async function isDefinitiveTokenFailure(resp: Response): Promise<boolean> {
+  if (resp.status >= 400 && resp.status < 500) {
+    try {
+      const body = await resp.clone().text();
+      const lower = body.toLowerCase();
+      return lower.includes("invalid_grant") || lower.includes("invalid_token") || lower.includes("revoked");
+    } catch {
+      return resp.status === 400 || resp.status === 401;
+    }
+  }
+  return false;
+}
 import type {
   TwitterTokenResponse,
   LinkedInTokenResponse,
@@ -73,7 +87,7 @@ router.get("/social-accounts/platform/:platform", async (req, res) => {
   }
 });
 
-router.delete("/social-accounts/:id", async (req, res) => {
+router.delete("/social-accounts/:id", requireRole("admin"), async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -93,7 +107,7 @@ router.delete("/social-accounts/:id", async (req, res) => {
   }
 });
 
-router.post("/social-accounts/:id/refresh", async (req, res) => {
+router.post("/social-accounts/:id/refresh", requireRole("editor"), async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -123,10 +137,14 @@ router.post("/social-accounts/:id/refresh", async (req, res) => {
       });
 
       if (!tokenResponse.ok) {
-        await db
-          .update(socialAccountsTable)
-          .set({ status: "expired", updatedAt: new Date() })
-          .where(eq(socialAccountsTable.id, id));
+        if (await isDefinitiveTokenFailure(tokenResponse as unknown as Response)) {
+          await db
+            .update(socialAccountsTable)
+            .set({ status: "expired", updatedAt: new Date() })
+            .where(eq(socialAccountsTable.id, id));
+        } else {
+          logger.warn({ id, status: tokenResponse.status }, "Transient token refresh failure; not marking expired");
+        }
         return res.status(400).json({ error: "Token refresh failed" });
       }
 
@@ -166,10 +184,14 @@ router.post("/social-accounts/:id/refresh", async (req, res) => {
       });
 
       if (!tokenResponse.ok) {
-        await db
-          .update(socialAccountsTable)
-          .set({ status: "expired", updatedAt: new Date() })
-          .where(eq(socialAccountsTable.id, id));
+        if (await isDefinitiveTokenFailure(tokenResponse as unknown as Response)) {
+          await db
+            .update(socialAccountsTable)
+            .set({ status: "expired", updatedAt: new Date() })
+            .where(eq(socialAccountsTable.id, id));
+        } else {
+          logger.warn({ id, status: tokenResponse.status }, "Transient token refresh failure; not marking expired");
+        }
         return res.status(400).json({ error: "Token refresh failed" });
       }
 
@@ -209,10 +231,14 @@ router.post("/social-accounts/:id/refresh", async (req, res) => {
       });
 
       if (!tokenResponse.ok) {
-        await db
-          .update(socialAccountsTable)
-          .set({ status: "expired", updatedAt: new Date() })
-          .where(eq(socialAccountsTable.id, id));
+        if (await isDefinitiveTokenFailure(tokenResponse as unknown as Response)) {
+          await db
+            .update(socialAccountsTable)
+            .set({ status: "expired", updatedAt: new Date() })
+            .where(eq(socialAccountsTable.id, id));
+        } else {
+          logger.warn({ id, status: tokenResponse.status }, "Transient token refresh failure; not marking expired");
+        }
         return res.status(400).json({ error: "Token refresh failed" });
       }
 
@@ -249,10 +275,14 @@ router.post("/social-accounts/:id/refresh", async (req, res) => {
       const tokenResponse = await fetch(refreshUrl.toString());
 
       if (!tokenResponse.ok) {
-        await db
-          .update(socialAccountsTable)
-          .set({ status: "expired", updatedAt: new Date() })
-          .where(eq(socialAccountsTable.id, id));
+        if (await isDefinitiveTokenFailure(tokenResponse as unknown as Response)) {
+          await db
+            .update(socialAccountsTable)
+            .set({ status: "expired", updatedAt: new Date() })
+            .where(eq(socialAccountsTable.id, id));
+        } else {
+          logger.warn({ id, status: tokenResponse.status }, "Transient token refresh failure; not marking expired");
+        }
         return res.status(400).json({ error: "Token refresh failed" });
       }
 
@@ -289,10 +319,14 @@ router.post("/social-accounts/:id/refresh", async (req, res) => {
       });
 
       if (!tokenResponse.ok) {
-        await db
-          .update(socialAccountsTable)
-          .set({ status: "expired", updatedAt: new Date() })
-          .where(eq(socialAccountsTable.id, id));
+        if (await isDefinitiveTokenFailure(tokenResponse as unknown as Response)) {
+          await db
+            .update(socialAccountsTable)
+            .set({ status: "expired", updatedAt: new Date() })
+            .where(eq(socialAccountsTable.id, id));
+        } else {
+          logger.warn({ id, status: tokenResponse.status }, "Transient token refresh failure; not marking expired");
+        }
         return res.status(400).json({ error: "Token refresh failed" });
       }
 

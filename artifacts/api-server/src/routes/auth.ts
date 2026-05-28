@@ -6,8 +6,11 @@ const router: IRouter = Router();
 
 function sanitizeReturnTo(returnTo: string | undefined): string {
   if (!returnTo) return "/";
+  if (typeof returnTo !== "string") return "/";
   if (!returnTo.startsWith("/")) return "/";
   if (returnTo.startsWith("//")) return "/";
+  if (returnTo.startsWith("/\\")) return "/";
+  if (returnTo.includes("\\")) return "/";
   if (returnTo.includes("://")) return "/";
   return returnTo;
 }
@@ -81,7 +84,7 @@ router.post("/auth/logout", (req, res): void => {
         res.status(500).json({ error: "Session destruction failed" });
         return;
       }
-      res.clearCookie("connect.sid");
+      res.clearCookie("sparqmake.sid");
       res.json({ success: true });
     });
   });

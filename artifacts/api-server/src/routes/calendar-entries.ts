@@ -65,7 +65,8 @@ router.get("/calendar-entries", async (req, res): Promise<void> => {
     query = query.where(and(...conditions));
   }
 
-  const limit = Math.min(Math.max(1, parseInt(req.query.limit as string, 10) || 200), 1000);
+  const rawLimit = parseInt(req.query.limit as string, 10);
+  const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(1, rawLimit), 500) : 200;
   const offset = Math.max(0, parseInt(req.query.offset as string, 10) || 0);
 
   const entries = await query.orderBy(calendarEntriesTable.scheduledAt).limit(limit).offset(offset);
@@ -74,6 +75,33 @@ router.get("/calendar-entries", async (req, res): Promise<void> => {
 
 router.post("/calendar-entries", validateRequest({ body: CreateCalendarEntryBody }), async (req, res): Promise<void> => {
   const { creativeId, variantId, platform, scheduledAt, socialAccountId } = req.body;
+
+  const [creative] = await db.select({ id: creativesTable.id, brandId: creativesTable.brandId })
+    .from(creativesTable).where(eq(creativesTable.id, creativeId));
+  if (!creative) {
+    res.status(400).json({ error: "Creative not found" });
+    return;
+  }
+
+  const [variant] = await db.select({ id: creativeVariantsTable.id, creativeId: creativeVariantsTable.creativeId })
+    .from(creativeVariantsTable).where(eq(creativeVariantsTable.id, variantId));
+  if (!variant || variant.creativeId !== creativeId) {
+    res.status(400).json({ error: "Variant does not belong to the specified creative" });
+    return;
+  }
+
+  if (socialAccountId) {
+    const [account] = await db.select({ id: socialAccountsTable.id, brandId: socialAccountsTable.brandId, platform: socialAccountsTable.platform })
+      .from(socialAccountsTable).where(eq(socialAccountsTable.id, socialAccountId));
+    if (!account) {
+      res.status(400).json({ error: "Social account not found" });
+      return;
+    }
+    if (account.brandId && account.brandId !== creative.brandId) {
+      res.status(400).json({ error: "Social account belongs to a different brand than the creative" });
+      return;
+    }
+  }
 
   const [entry] = await db.insert(calendarEntriesTable).values({
     creativeId,

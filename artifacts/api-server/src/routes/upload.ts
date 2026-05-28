@@ -103,8 +103,13 @@ function serveFile(baseDir: string, filename: string, res: any): void {
     ".pdf": "application/pdf",
   };
 
-  res.setHeader("Content-Type", mimeTypes[ext] || "application/octet-stream");
+  const contentType = mimeTypes[ext] || "application/octet-stream";
+  res.setHeader("Content-Type", contentType);
+  res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Cache-Control", "public, max-age=86400");
+  if (!contentType.startsWith("image/") && !contentType.startsWith("video/") && !contentType.startsWith("audio/")) {
+    res.setHeader("Content-Disposition", `attachment; filename="${path.basename(filename)}"`);
+  }
   res.sendFile(filePath);
 }
 

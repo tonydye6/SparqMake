@@ -3,6 +3,30 @@ import { eq, and, or, sql, SQL, ilike } from "drizzle-orm";
 import { db, socialContentPlanItemsTable, brandsTable, templatesTable, creativesTable, type PlanItem } from "@workspace/db";
 import multer from "multer";
 import { parse as csvParseSync } from "csv-parse/sync";
+import { z } from "zod";
+import { validateRequest } from "../middleware/validate.js";
+
+const UpdatePlanItemBody = z.object({
+  title: z.string().min(1).max(500).optional(),
+  campaignName: z.string().max(500).nullable().optional(),
+  primaryPlatform: z.string().min(1).max(50).optional(),
+  secondaryPlatforms: z.array(z.string()).optional(),
+  templateName: z.string().max(500).nullable().optional(),
+  pillar: z.string().max(200).nullable().optional(),
+  audience: z.string().max(500).nullable().optional(),
+  brandLayer: z.string().max(200).nullable().optional(),
+  objective: z.string().max(500).nullable().optional(),
+  contentType: z.string().max(200).nullable().optional(),
+  assetPacketType: z.string().max(200).nullable().optional(),
+  coreMessage: z.string().max(5000).nullable().optional(),
+  cta: z.string().max(500).nullable().optional(),
+  requiredAssetRoles: z.array(z.string()).optional(),
+  plannedWeek: z.string().max(50).nullable().optional(),
+  plannedDate: z.string().max(50).nullable().optional(),
+  notes: z.string().max(5000).nullable().optional(),
+  status: z.enum(["planned", "in_progress", "completed", "cancelled"]).optional(),
+  linkedCreativeId: z.string().nullable().optional(),
+}).strict();
 
 interface AuthenticatedUser {
   id: string;
@@ -218,20 +242,13 @@ router.post("/content-plan", async (req, res): Promise<void> => {
   res.status(201).json(item);
 });
 
-router.put("/content-plan/:id", async (req, res): Promise<void> => {
-  const body = req.body;
+router.put("/content-plan/:id", validateRequest({ body: UpdatePlanItemBody }), async (req, res): Promise<void> => {
+  const updateFields = req.body as Record<string, unknown>;
 
-  if (body.primaryPlatform && !isValidPlatform(body.primaryPlatform)) {
-    res.status(400).json({ error: `Invalid platform: "${body.primaryPlatform}"` });
+  if (updateFields.primaryPlatform && !isValidPlatform(updateFields.primaryPlatform as string)) {
+    res.status(400).json({ error: `Invalid platform: "${updateFields.primaryPlatform}"` });
     return;
   }
-
-  if (body.status && !VALID_STATUSES.has(body.status)) {
-    res.status(400).json({ error: "Invalid status value" });
-    return;
-  }
-
-  const { id: _id, createdAt: _ca, ...updateFields } = body;
 
   const [item] = await db.update(socialContentPlanItemsTable)
     .set({ ...updateFields, updatedAt: new Date() })

@@ -47,8 +47,12 @@ export async function mergeAudioVideo(options: MergeOptions): Promise<Buffer> {
       ]);
     } else if (options.mode === "mix" && options.audioBuffer) {
       await fs.promises.writeFile(audioPath, options.audioBuffer);
-      const vidVol = options.videoVolume ?? 0.3;
-      const audVol = options.audioVolume ?? 1.0;
+      const clamp = (v: number | undefined, fallback: number): number => {
+        const n = typeof v === "number" && Number.isFinite(v) ? v : fallback;
+        return Math.max(0, Math.min(10, n));
+      };
+      const vidVol = clamp(options.videoVolume, 0.3);
+      const audVol = clamp(options.audioVolume, 1.0);
       await execFileAsync("ffmpeg", [
         "-i", videoPath,
         "-i", audioPath,

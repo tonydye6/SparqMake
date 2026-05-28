@@ -9,6 +9,13 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import multer from "multer";
+import { generationLimiter } from "../lib/rate-limit.js";
+
+function clampVolume(v: unknown, fallback: number): number {
+  const n = typeof v === "number" ? v : parseFloat(String(v ?? ""));
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(0, Math.min(10, n));
+}
 
 const router: IRouter = Router();
 const UPLOADS_DIR = path.resolve(process.cwd(), "uploads", "generated");
@@ -32,7 +39,7 @@ const audioUpload = multer({
   },
 });
 
-router.post("/creatives/:id/generate-video", async (req: Request, res: Response): Promise<void> => {
+router.post("/creatives/:id/generate-video", generationLimiter, async (req: Request, res: Response): Promise<void> => {
   const creativeId = req.params.id;
   const { orientations } = req.body;
 
@@ -175,7 +182,7 @@ router.post("/creatives/:id/generate-video", async (req: Request, res: Response)
   }
 });
 
-router.post("/creatives/:id/variants/:variantId/audio", async (req: Request, res: Response): Promise<void> => {
+router.post("/creatives/:id/variants/:variantId/audio", generationLimiter, async (req: Request, res: Response): Promise<void> => {
   const { id: creativeId, variantId } = req.params;
   const { type, prompt, mode, audioVolume, videoVolume } = req.body;
 
@@ -257,8 +264,8 @@ router.post("/creatives/:id/variants/:variantId/audio", async (req: Request, res
       videoBuffer,
       audioBuffer,
       mode: mergeMode,
-      audioVolume: audioVolume ?? 1.0,
-      videoVolume: videoVolume ?? 0.3,
+      audioVolume: clampVolume(audioVolume, 1.0),
+      videoVolume: clampVolume(videoVolume, 0.3),
     });
 
     const mergedFilename = `${creativeId}_${variantId}_merged_${Date.now()}.mp4`;
@@ -283,7 +290,7 @@ router.post("/creatives/:id/variants/:variantId/audio", async (req: Request, res
   }
 });
 
-router.post("/creatives/:id/variants/:variantId/audio-upload", audioUpload.single("audio"), async (req: Request, res: Response): Promise<void> => {
+router.post("/creatives/:id/variants/:variantId/audio-upload", generationLimiter, audioUpload.single("audio"), async (req: Request, res: Response): Promise<void> => {
   const { id: creativeId, variantId } = req.params;
   const mode = (req.body?.mode || "replace") as MergeMode;
 

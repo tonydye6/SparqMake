@@ -1,5 +1,5 @@
 import { eq, and, lte, or } from "drizzle-orm";
-import { db, calendarEntriesTable, creativeVariantsTable, socialAccountsTable } from "@workspace/db";
+import { db, calendarEntriesTable, creativeVariantsTable, creativesTable, socialAccountsTable } from "@workspace/db";
 import { publishToTwitter } from "./publish-twitter";
 import { publishToInstagram } from "./publish-instagram";
 import { publishToLinkedIn } from "./publish-linkedin";
@@ -142,6 +142,44 @@ async function publishEntry(entryId: string): Promise<void> {
           publishStatus: "failed",
           publishError: "Creative variant not found",
           retryCount: (entry.retryCount || 0) + 1,
+          updatedAt: new Date(),
+        })
+        .where(eq(calendarEntriesTable.id, entryId));
+      return null;
+    }
+
+    if (variant.creativeId !== entry.creativeId) {
+      await tx.update(calendarEntriesTable)
+        .set({
+          publishStatus: "failed",
+          publishError: "Variant does not belong to the entry's creative",
+          retryCount: MAX_RETRIES,
+          updatedAt: new Date(),
+        })
+        .where(eq(calendarEntriesTable.id, entryId));
+      return null;
+    }
+
+    const [creative] = await tx.select({ id: creativesTable.id, brandId: creativesTable.brandId })
+      .from(creativesTable).where(eq(creativesTable.id, entry.creativeId));
+    if (!creative) {
+      await tx.update(calendarEntriesTable)
+        .set({
+          publishStatus: "failed",
+          publishError: "Parent creative not found",
+          retryCount: MAX_RETRIES,
+          updatedAt: new Date(),
+        })
+        .where(eq(calendarEntriesTable.id, entryId));
+      return null;
+    }
+
+    if (socialAccount.brandId && socialAccount.brandId !== creative.brandId) {
+      await tx.update(calendarEntriesTable)
+        .set({
+          publishStatus: "failed",
+          publishError: `Brand mismatch: account belongs to brand ${socialAccount.brandId} but creative belongs to brand ${creative.brandId}`,
+          retryCount: MAX_RETRIES,
           updatedAt: new Date(),
         })
         .where(eq(calendarEntriesTable.id, entryId));

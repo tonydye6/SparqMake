@@ -66,6 +66,36 @@ if (!GOOGLE_CALLBACK_URL.startsWith("http")) {
   logger.warn("Google OAuth callback URL is relative — set APP_URL or GOOGLE_CALLBACK_URL for reliable behavior behind proxies");
 }
 
+function isEmailAllowed(email: string): boolean {
+  const domains = (process.env.ALLOWED_EMAIL_DOMAINS || "")
+    .split(",")
+    .map((d) => d.trim().toLowerCase())
+    .filter(Boolean);
+  const emails = (process.env.ALLOWED_EMAILS || "")
+    .split(",")
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
+  if (domains.length === 0 && emails.length === 0) {
+    logger.error("ALLOWED_EMAIL_DOMAINS and ALLOWED_EMAILS are both unset — rejecting all sign-ins for safety");
+    return false;
+  }
+  const lower = email.toLowerCase();
+  if (emails.includes(lower)) return true;
+  const domain = lower.split("@")[1] ?? "";
+  return domains.includes(domain);
+}
+
+const ADMIN_EMAILS = new Set(
+  (process.env.ADMIN_EMAILS || "")
+    .split(",")
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean),
+);
+
+function resolveInitialRole(email: string): "viewer" | "editor" | "admin" {
+  return ADMIN_EMAILS.has(email.toLowerCase()) ? "admin" : "viewer";
+}
+
 if (GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET) {
   passport.use(
     new GoogleStrategy(
@@ -76,9 +106,23 @@ if (GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET) {
       },
       async (_accessToken, _refreshToken, profile, done) => {
         try {
-          const email = profile.emails?.[0]?.value;
+          const emailEntry = profile.emails?.[0];
+          const email = emailEntry?.value;
           if (!email) {
             done(new Error("No email found in Google profile"));
+            return;
+          }
+
+          const emailVerified = (emailEntry as { verified?: boolean | string } | undefined)?.verified;
+          if (emailVerified === false || emailVerified === "false") {
+            logger.warn({ email }, "Rejected login: email not verified by Google");
+            done(null, false);
+            return;
+          }
+
+          if (!isEmailAllowed(email)) {
+            logger.warn({ email }, "Rejected login: email not in allow-list");
+            done(null, false);
             return;
           }
 
@@ -111,7 +155,7 @@ if (GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET) {
               email,
               name: profile.displayName || email,
               image: profile.photos?.[0]?.value || null,
-              role: "editor",
+              role: resolveInitialRole(email),
             })
             .returning();
 

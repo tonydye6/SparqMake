@@ -13,6 +13,8 @@ import {
   DeleteBrandResponse,
 } from "@workspace/api-zod";
 import { validateRequest } from "../middleware/validate.js";
+import { requireRole } from "../middleware/auth.js";
+import { z } from "zod";
 import multer from "multer";
 import * as fs from "fs";
 import * as path from "path";
@@ -79,14 +81,18 @@ router.put("/brands/:id", validateRequest({ params: UpdateBrandParams, body: Upd
   res.json(UpdateBrandResponse.parse(brand));
 });
 
-router.delete("/brands/:id", validateRequest({ params: DeleteBrandParams }), async (req, res): Promise<void> => {
-  const [brand] = await db.delete(brandsTable).where(eq(brandsTable.id, req.params.id)).returning();
+router.delete("/brands/:id", requireRole("admin"), validateRequest({ params: DeleteBrandParams }), async (req, res): Promise<void> => {
+  const [brand] = await db
+    .update(brandsTable)
+    .set({ isActive: false, updatedAt: new Date() })
+    .where(eq(brandsTable.id, req.params.id))
+    .returning();
   if (!brand) {
     res.status(404).json({ error: "Brand not found" });
     return;
   }
 
-  res.json(DeleteBrandResponse.parse({ message: "Brand deleted" }));
+  res.json(DeleteBrandResponse.parse({ message: "Brand archived" }));
 });
 
 router.get("/brands/:id/logos", async (req, res): Promise<void> => {
@@ -111,10 +117,10 @@ router.post("/brands/:id/logos", upload.single("file"), async (req, res): Promis
     return;
   }
 
-  const allowedImageMimes = ["image/png", "image/jpeg", "image/jpg", "image/svg+xml", "image/webp", "image/gif"];
+  const allowedImageMimes = ["image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif"];
   if (!allowedImageMimes.includes(file.mimetype)) {
     fs.unlinkSync(file.path);
-    res.status(400).json({ error: `Invalid image format. Allowed: PNG, JPEG, SVG, WebP, GIF` });
+    res.status(400).json({ error: `Invalid image format. Allowed: PNG, JPEG, WebP, GIF` });
     return;
   }
 
@@ -289,14 +295,24 @@ router.delete("/brands/:id/fonts/:assetId", async (req, res): Promise<void> => {
   res.json({ message: "Font deleted" });
 });
 
+const AssetConfigSchema = z.object({
+  primaryLogoAssetId: z.string().uuid().optional(),
+  secondaryLogoAssetId: z.string().uuid().optional(),
+  primaryFontAssetId: z.string().uuid().optional(),
+  secondaryFontAssetId: z.string().uuid().optional(),
+  brandColors: z.array(z.string().regex(/^#[0-9a-fA-F]{3,8}$/)).max(20).optional(),
+  iconAssetIds: z.array(z.string().uuid()).max(50).optional(),
+  templateOverrides: z.record(z.string(), z.unknown()).optional(),
+}).strict();
+
 router.put("/brands/:id/asset-config", async (req, res): Promise<void> => {
   const brandId = req.params.id;
-  const config = req.body;
-
-  if (!config || typeof config !== "object" || Array.isArray(config)) {
-    res.status(400).json({ error: "Config must be a JSON object" });
+  const parsed = AssetConfigSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Invalid asset config", details: parsed.error.issues });
     return;
   }
+  const config = parsed.data;
 
   const [brand] = await db.update(brandsTable)
     .set({ brandAssetConfig: config, updatedAt: new Date() })

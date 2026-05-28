@@ -98,3 +98,27 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
 
   res.status(401).json({ error: "Authentication required" });
 }
+
+const ROLE_RANK: Record<string, number> = { viewer: 0, editor: 1, admin: 2 };
+
+export type AppRole = "viewer" | "editor" | "admin";
+
+export function requireRole(min: AppRole) {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const role = (req.user as Express.User | undefined)?.role ?? "viewer";
+    if ((ROLE_RANK[role] ?? 0) >= ROLE_RANK[min]) {
+      next();
+      return;
+    }
+    res.status(403).json({ error: "Insufficient permissions" });
+  };
+}
+
+export function requireEditorForWrites(req: Request, res: Response, next: NextFunction): void {
+  const method = req.method.toUpperCase();
+  if (method === "GET" || method === "HEAD" || method === "OPTIONS") {
+    next();
+    return;
+  }
+  requireRole("editor")(req, res, next);
+}

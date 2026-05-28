@@ -15,6 +15,7 @@ import {
 } from "@workspace/api-zod";
 import { analyzeTemplate } from "../services/refinement-analysis.js";
 import { validateRequest } from "../middleware/validate.js";
+import { requireRole } from "../middleware/auth.js";
 
 const router: IRouter = Router();
 
@@ -92,7 +93,7 @@ router.put("/templates/:id", validateRequest({ params: UpdateTemplateParams, bod
   res.json(UpdateTemplateResponse.parse(template));
 });
 
-router.delete("/templates/:id", validateRequest({ params: DeleteTemplateParams }), async (req, res): Promise<void> => {
+router.delete("/templates/:id", requireRole("admin"), validateRequest({ params: DeleteTemplateParams }), async (req, res): Promise<void> => {
   const [template] = await db.delete(templatesTable).where(eq(templatesTable.id, req.params.id)).returning();
   if (!template) {
     res.status(404).json({ error: "Template not found" });

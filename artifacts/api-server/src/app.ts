@@ -1,12 +1,12 @@
-import express, { type Express, type Request, type Response } from "express";
+import express, { type Express, type NextFunction, type Request, type Response } from "express";
 import cors from "cors";
+import helmet from "helmet";
 import pinoHttp from "pino-http";
 import rateLimit from "express-rate-limit";
-import path from "path";
 import { sessionMiddleware } from "./lib/session";
 import passport from "./lib/passport";
 import { getAllowedOriginStrings } from "./lib/allowed-origins";
-import { devBypassMiddleware, requireAuth } from "./middleware/auth";
+import { devBypassMiddleware, requireAuth, requireEditorForWrites } from "./middleware/auth";
 import { csrfProtection } from "./middleware/csrf";
 import authRouter from "./routes/auth";
 import healthRouter from "./routes/health";
@@ -16,6 +16,12 @@ import { logger } from "./lib/logger";
 const app: Express = express();
 
 app.set("trust proxy", 1);
+
+app.use(helmet({
+  contentSecurityPolicy: false,
+  crossOriginResourcePolicy: { policy: "cross-origin" },
+  crossOriginEmbedderPolicy: false,
+}));
 
 app.use(
   pinoHttp({
@@ -61,13 +67,7 @@ const globalLimiter = rateLimit({
   message: { error: "Too many requests, please try again later." },
 });
 
-const generationLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 5,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: "Too many generation requests, please wait before trying again." },
-});
+export { generationLimiter } from "./lib/rate-limit";
 
 app.use(globalLimiter);
 
@@ -87,8 +87,6 @@ app.use((req, _res, next) => {
 app.use("/api", healthRouter);
 app.use("/api", authRouter);
 
-const UPLOAD_DIR = path.join(process.cwd(), "uploads");
-
 const fileServingLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 60,
@@ -97,29 +95,25 @@ const fileServingLimiter = rateLimit({
   message: { error: "Too many file requests, please try again later." },
 });
 
-app.get("/api/files/generated/:filename", fileServingLimiter, (req, res) => {
-  const filename = Array.isArray(req.params.filename) ? req.params.filename[0] : req.params.filename;
-  if (!filename || filename.includes("..") || filename.includes("/") || filename.includes("\\")) {
-    res.status(400).json({ error: "Invalid filename" });
-    return;
-  }
-  const filePath = path.join(UPLOAD_DIR, "generated", filename);
-  res.sendFile(filePath, (err) => {
-    if (err) {
-      res.status(404).json({ error: "File not found" });
-    }
-  });
-});
+app.use("/api/files", fileServingLimiter);
 
-app.use("/api/creatives/:id/generate", generationLimiter);
-app.use("/api/creatives/:id/generate-video", generationLimiter);
-app.use("/api/creatives/:id/variants/:variantId/audio", generationLimiter);
-app.use("/api/creatives/:id/variants/:variantId/audio-upload", generationLimiter);
-
-app.use("/api", requireAuth, router);
+app.use("/api", requireAuth, requireEditorForWrites, router);
 
 app.all("/api/{*path}", (_req: Request, res: Response) => {
   res.status(404).json({ error: "API endpoint not found" });
+});
+
+app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
+  const status = (err as { status?: number; statusCode?: number })?.status
+    ?? (err as { statusCode?: number })?.statusCode
+    ?? 500;
+  const message = err instanceof Error ? err.message : "Internal server error";
+  logger.error({ err, path: req.path, method: req.method, status }, "Unhandled error");
+  if (res.headersSent) return;
+  const body = process.env.NODE_ENV === "production"
+    ? { error: status >= 500 ? "Internal server error" : message }
+    : { error: message };
+  res.status(status).json(body);
 });
 
 export default app;

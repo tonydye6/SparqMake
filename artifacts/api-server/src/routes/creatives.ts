@@ -14,7 +14,16 @@ import {
 import { captureScreenshots, captureFromUpload, validateUrl } from "../services/screenshot.js";
 import { validateRequest } from "../middleware/validate.js";
 import { analyzeReference } from "../services/reference-analysis.js";
+import { requireRole } from "../middleware/auth.js";
 import multer from "multer";
+import { z } from "zod";
+
+const CREATIVE_STATUSES = ["draft", "generating", "in_review", "approved", "rejected", "scheduled", "published", "archived"] as const;
+
+const ReviewBody = z.object({
+  status: z.enum(["approved", "rejected", "in_review"]),
+  reviewComment: z.string().max(2000).optional(),
+});
 
 const router: IRouter = Router();
 const ALLOWED_IMAGE_MIMES = ["image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif"];
@@ -111,9 +120,50 @@ router.get("/creatives/:id", validateRequest({ params: GetCreativeParams }), asy
 });
 
 router.put("/creatives/:id", validateRequest({ params: UpdateCreativeParams, body: UpdateCreativeBody }), async (req, res): Promise<void> => {
+  const { reviewedBy: _rb, reviewComment: _rc, reviewedAt: _ra, ...safeUpdates } = req.body as Record<string, unknown>;
+
+  if (safeUpdates.status !== undefined && !CREATIVE_STATUSES.includes(safeUpdates.status as typeof CREATIVE_STATUSES[number])) {
+    res.status(400).json({ error: `Invalid status. Allowed: ${CREATIVE_STATUSES.join(", ")}` });
+    return;
+  }
+
+  if (safeUpdates.status === "approved" || safeUpdates.status === "rejected") {
+    res.status(400).json({ error: "Use POST /creatives/:id/review to set approved/rejected status" });
+    return;
+  }
+
   const [campaign] = await db
     .update(creativesTable)
-    .set({ ...req.body, updatedAt: new Date() })
+    .set({ ...safeUpdates, updatedAt: new Date() })
+    .where(eq(creativesTable.id, req.params.id))
+    .returning();
+
+  if (!campaign) {
+    res.status(404).json({ error: "Creative not found" });
+    return;
+  }
+
+  res.json(UpdateCreativeResponse.parse(campaign));
+});
+
+router.post("/creatives/:id/review", requireRole("editor"), validateRequest({ params: UpdateCreativeParams, body: ReviewBody }), async (req, res): Promise<void> => {
+  const reviewer = (req.user as { id?: string } | undefined)?.id;
+  if (!reviewer) {
+    res.status(401).json({ error: "Reviewer identity required" });
+    return;
+  }
+
+  const { status, reviewComment } = req.body as { status: string; reviewComment?: string };
+
+  const [campaign] = await db
+    .update(creativesTable)
+    .set({
+      status,
+      reviewedBy: reviewer,
+      reviewComment: reviewComment ?? null,
+      reviewedAt: new Date(),
+      updatedAt: new Date(),
+    } as Record<string, unknown>)
     .where(eq(creativesTable.id, req.params.id))
     .returning();
 

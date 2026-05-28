@@ -32,6 +32,7 @@ async function ensureSessionTable() {
 ensureSessionTable();
 
 export const sessionMiddleware = session({
+  name: "sparqmake.sid",
   store: new PgSession({
     pool: pool as any,
     tableName: "session",
@@ -39,6 +40,7 @@ export const sessionMiddleware = session({
   }),
   secret: SESSION_SECRET,
   resave: false,
+  rolling: true,
   saveUninitialized: false,
   cookie: {
     secure: process.env.NODE_ENV === "production",

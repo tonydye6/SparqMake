@@ -14,6 +14,8 @@ import * as path from "path";
 import * as os from "os";
 import { z } from "zod";
 import { validateRequest } from "../middleware/validate.js";
+import { generationLimiter } from "../lib/rate-limit.js";
+import { logger } from "../lib/logger.js";
 
 interface AuthenticatedUser {
   id: string;
@@ -47,7 +49,8 @@ function resolveLocalFilePath(fileUrl: string): string | null {
   if (!fileUrl || fileUrl.startsWith("http")) return null;
   const resolved = path.resolve(process.cwd(), fileUrl.replace(/^\/api\/files\//, "uploads/"));
   const uploadsRoot = path.resolve(process.cwd(), "uploads");
-  if (!resolved.startsWith(uploadsRoot)) return null;
+  const prefix = uploadsRoot.endsWith(path.sep) ? uploadsRoot : uploadsRoot + path.sep;
+  if (resolved !== uploadsRoot && !resolved.startsWith(prefix)) return null;
   return resolved;
 }
 
@@ -84,7 +87,7 @@ async function fetchLogoBuffer(brandId: string): Promise<Buffer | null> {
       }
     }
   } catch (err) {
-    console.error("Failed to fetch logo buffer:", err instanceof Error ? err.message : err);
+    logger.error({ err, brandId }, "Failed to fetch logo buffer");
   }
   return null;
 }
@@ -97,7 +100,7 @@ async function fetchBrandFontFamily(brandId: string): Promise<string | undefined
       return fonts[0].name;
     }
   } catch (err) {
-    console.error("Failed to fetch brand font:", err instanceof Error ? err.message : err);
+    logger.error({ err, brandId }, "Failed to fetch brand font");
   }
   return undefined;
 }
@@ -131,7 +134,7 @@ async function buildReferenceImages(packet: Awaited<ReturnType<typeof buildGener
   return refs;
 }
 
-router.post("/creatives/:id/generate", async (req: Request, res: Response): Promise<void> => {
+router.post("/creatives/:id/generate", generationLimiter, async (req: Request, res: Response): Promise<void> => {
   const creativeId = req.params.id;
 
   const [campaign] = await db.select().from(creativesTable).where(eq(creativesTable.id, creativeId));

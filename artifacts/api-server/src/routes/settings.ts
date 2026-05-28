@@ -1,27 +1,41 @@
 import { Router, type IRouter } from "express";
-import { eq, sql } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import { db, appSettingsTable, costLogsTable } from "@workspace/db";
 import { z } from "zod";
 import { validateRequest } from "../middleware/validate.js";
+import { requireRole } from "../middleware/auth.js";
 
-const UpdateSettingsBody = z.record(z.string(), z.string());
+const ALLOWED_SETTING_KEYS = [
+  "dailyCostThreshold",
+  "monthlyCostThreshold",
+  "costAlertEmail",
+  "defaultTimezone",
+  "defaultPublishLeadMinutes",
+] as const;
+type AllowedKey = typeof ALLOWED_SETTING_KEYS[number];
+const ALLOWED_SET = new Set<string>(ALLOWED_SETTING_KEYS);
+
+const UpdateSettingsBody = z.object(
+  Object.fromEntries(ALLOWED_SETTING_KEYS.map(k => [k, z.string().max(500).optional()])) as Record<AllowedKey, z.ZodOptional<z.ZodString>>,
+).strict();
 
 const router: IRouter = Router();
 
 router.get("/settings", async (_req, res): Promise<void> => {
-  const rows = await db.select().from(appSettingsTable);
+  const rows = await db.select().from(appSettingsTable).where(inArray(appSettingsTable.key, [...ALLOWED_SETTING_KEYS]));
   const settings: Record<string, string> = {};
   for (const row of rows) {
-    settings[row.key] = row.value;
+    if (ALLOWED_SET.has(row.key)) settings[row.key] = row.value;
   }
   res.json(settings);
 });
 
-router.put("/settings", validateRequest({ body: UpdateSettingsBody }), async (req, res): Promise<void> => {
-  const updates = req.body;
+router.put("/settings", requireRole("admin"), validateRequest({ body: UpdateSettingsBody }), async (req, res): Promise<void> => {
+  const updates = req.body as Record<string, unknown>;
 
   for (const [key, value] of Object.entries(updates)) {
     if (typeof value !== "string") continue;
+    if (!ALLOWED_SET.has(key)) continue;
     await db
       .insert(appSettingsTable)
       .values({ key, value, updatedAt: new Date() })
@@ -31,10 +45,10 @@ router.put("/settings", validateRequest({ body: UpdateSettingsBody }), async (re
       });
   }
 
-  const rows = await db.select().from(appSettingsTable);
+  const rows = await db.select().from(appSettingsTable).where(inArray(appSettingsTable.key, [...ALLOWED_SETTING_KEYS]));
   const settings: Record<string, string> = {};
   for (const row of rows) {
-    settings[row.key] = row.value;
+    if (ALLOWED_SET.has(row.key)) settings[row.key] = row.value;
   }
   res.json(settings);
 });
