@@ -1,3 +1,32 @@
 uploads = []
 generated = []
-outputs = []
+
+[[outputs]]
+id = "P2tC6BqQzczvUhF3ZotHY"
+uri = "file://artifacts/api-server/uploads/generated/e96398c7-bdcf-4bbf-b6b7-581c3b0a0c5a_instagram_feed_composited.png"
+type = "image"
+title = "Instagram Feed (composited)"
+
+[[outputs]]
+id = "y79RpdbkwvplxEFzh6zYj"
+uri = "file://artifacts/api-server/uploads/generated/e96398c7-bdcf-4bbf-b6b7-581c3b0a0c5a_instagram_story_composited.png"
+type = "image"
+title = "Instagram Story (composited)"
+
+[[outputs]]
+id = "ssUbon4nOXWTirQVm4mxc"
+uri = "file://artifacts/api-server/uploads/generated/e96398c7-bdcf-4bbf-b6b7-581c3b0a0c5a_tiktok_composited.png"
+type = "image"
+title = "TikTok (composited)"
+
+[[outputs]]
+id = "oHRkGtHz1b-zUGJysvBeu"
+uri = "file://artifacts/api-server/uploads/generated/e96398c7-bdcf-4bbf-b6b7-581c3b0a0c5a_twitter_composited.png"
+type = "image"
+title = "Twitter (composited)"
+
+[[outputs]]
+id = "4DKaFwrvO3Qg9lJVDVkQh"
+uri = "file://artifacts/api-server/uploads/generated/e96398c7-bdcf-4bbf-b6b7-581c3b0a0c5a_linkedin_composited.png"
+type = "image"
+title = "LinkedIn (composited)"
