@@ -4,6 +4,7 @@ import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 import multer from "multer";
+import { validateUploadedFile, type FileCategory } from "../services/fileValidation.js";
 
 const router: IRouter = Router();
 
@@ -55,8 +56,25 @@ const upload = multer({
   },
 });
 
-router.post("/upload", (req, res, next) => {
-  upload.single("file")(req, res, (err) => {
+const MIME_TO_CATEGORY: Record<string, FileCategory> = {
+  "image/png": "image",
+  "image/jpeg": "image",
+  "image/webp": "image",
+  "image/gif": "image",
+  "video/mp4": "video",
+  "video/webm": "video",
+  "video/quicktime": "video",
+  "font/woff2": "font",
+  "font/ttf": "font",
+  "application/x-font-woff2": "font",
+  "application/x-font-ttf": "font",
+  "audio/mpeg": "audio",
+  "audio/wav": "audio",
+  "application/pdf": "pdf",
+};
+
+router.post("/upload", (req, res, _next) => {
+  upload.single("file")(req, res, async (err) => {
     if (err) {
       const message = err instanceof Error ? err.message : "Upload failed";
       res.status(400).json({ error: message });
@@ -65,6 +83,24 @@ router.post("/upload", (req, res, next) => {
 
     if (!req.file) {
       res.status(400).json({ error: "No file uploaded" });
+      return;
+    }
+
+    const category = MIME_TO_CATEGORY[req.file.mimetype];
+    if (!category) {
+      try { fs.unlinkSync(req.file.path); } catch { /* ignore */ }
+      res.status(400).json({ error: `File type ${req.file.mimetype} not allowed` });
+      return;
+    }
+
+    const validation = await validateUploadedFile(
+      req.file.path,
+      req.file.mimetype,
+      req.file.originalname,
+      [category],
+    );
+    if (!validation.ok) {
+      res.status(400).json({ error: validation.error });
       return;
     }
 

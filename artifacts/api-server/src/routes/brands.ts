@@ -18,6 +18,7 @@ import { z } from "zod";
 import multer from "multer";
 import * as fs from "fs";
 import * as path from "path";
+import { validateUploadedFile, validateFontFileBytes } from "../services/fileValidation.js";
 
 const router: IRouter = Router();
 
@@ -119,13 +120,20 @@ router.post("/brands/:id/logos", upload.single("file"), async (req, res): Promis
 
   const allowedImageMimes = ["image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif"];
   if (!allowedImageMimes.includes(file.mimetype)) {
-    fs.unlinkSync(file.path);
+    try { fs.unlinkSync(file.path); } catch { /* ignore */ }
     res.status(400).json({ error: `Invalid image format. Allowed: PNG, JPEG, WebP, GIF` });
+    return;
+  }
+
+  const validation = await validateUploadedFile(file.path, file.mimetype, file.originalname, ["image"]);
+  if (!validation.ok) {
+    res.status(400).json({ error: validation.error });
     return;
   }
 
   const [brand] = await db.select().from(brandsTable).where(eq(brandsTable.id, brandId));
   if (!brand) {
+    try { fs.unlinkSync(file.path); } catch { /* ignore */ }
     res.status(404).json({ error: "Brand not found" });
     return;
   }
@@ -218,8 +226,15 @@ router.post("/brands/:id/fonts", upload.single("file"), async (req, res): Promis
   const allowedExts = [".woff2", ".ttf", ".otf", ".woff"];
   const ext = path.extname(file.originalname).toLowerCase();
   if (!allowedExts.includes(ext)) {
-    fs.unlinkSync(file.path);
+    try { fs.unlinkSync(file.path); } catch { /* ignore */ }
     res.status(400).json({ error: `Invalid font format. Allowed: ${allowedExts.join(", ")}` });
+    return;
+  }
+
+  const fontValidation = await validateFontFileBytes(file.path, ext);
+  if (!fontValidation.ok) {
+    try { fs.unlinkSync(file.path); } catch { /* ignore */ }
+    res.status(400).json({ error: fontValidation.error });
     return;
   }
 

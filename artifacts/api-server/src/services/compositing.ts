@@ -1,5 +1,7 @@
 import sharp from "sharp";
 
+const SHARP_LIMITS = { limitInputPixels: 268_402_689, failOn: "error" } as const;
+
 export interface LayoutSpec {
   headline_zone?: {
     position?: string;
@@ -176,7 +178,7 @@ export async function compositeImage(input: CompositingInput): Promise<Compositi
 
   const resolved = resolveLayout(layoutSpec, `${width}:${height}`);
 
-  let image = sharp(rawImageBuffer).resize(width, height, { fit: "cover" });
+  let image = sharp(rawImageBuffer, SHARP_LIMITS).resize(width, height, { fit: "cover" });
 
   const overlays: sharp.OverlayOptions[] = [];
 
@@ -200,11 +202,11 @@ export async function compositeImage(input: CompositingInput): Promise<Compositi
     const offset = placement.offset_px || 24;
 
     try {
-      const resizedLogo = await sharp(logoBuffer)
+      const resizedLogo = await sharp(logoBuffer, SHARP_LIMITS)
         .resize({ height: maxH, withoutEnlargement: true })
         .toBuffer();
 
-      const logoMeta = await sharp(resizedLogo).metadata();
+      const logoMeta = await sharp(resizedLogo, SHARP_LIMITS).metadata();
       const logoW = logoMeta.width || maxH;
       const logoH = logoMeta.height || maxH;
 
