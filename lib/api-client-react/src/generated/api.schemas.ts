@@ -13,6 +13,125 @@ export interface MessageResponse {
   message: string;
 }
 
+export type TemplateClaudeCaptionInstruction = { [key: string]: unknown };
+
+export type TemplateLayoutSpec = { [key: string]: unknown } | null;
+
+export interface Template {
+  id: string;
+  brandId: string;
+  name: string;
+  description?: string | null;
+  version: number;
+  imagenPromptAddition: string;
+  imagenNegativeAddition: string;
+  claudeCaptionInstruction: TemplateClaudeCaptionInstruction;
+  claudeHeadlineInstruction?: string | null;
+  layoutSpec?: TemplateLayoutSpec;
+  recommendedAssetTypes: string[];
+  targetAspectRatios: string[];
+  totalGenerations: number;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TemplateListResponse {
+  data: Template[];
+  total?: number;
+  limit?: number;
+  offset?: number;
+}
+
+export interface Asset {
+  id: string;
+  brandId: string;
+  type: string;
+  subType?: string | null;
+  status: string;
+  name: string;
+  description?: string | null;
+  tags: string[];
+  fileUrl?: string | null;
+  thumbnailUrl?: string | null;
+  content?: string | null;
+  mimeType?: string | null;
+  fileSizeBytes?: number | null;
+  uploadedBy: string;
+  approvedBy?: string | null;
+  approvedAt?: string | null;
+  usageCount: number;
+  assetClass?: string | null;
+  generationRole?: string | null;
+  brandLayer?: string | null;
+  franchise?: string | null;
+  approvedChannels: string[];
+  approvedTemplates: string[];
+  subjectIdentityScore?: number | null;
+  styleStrengthScore?: number | null;
+  compositingOnly: boolean;
+  generationAllowed: boolean;
+  approvedForCompositing: boolean;
+  referencePriorityDefault?: number | null;
+  conflictTags: string[];
+  freshnessScore?: number | null;
+  characterIdentityNote?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AssetListResponse {
+  data: Asset[];
+  total?: number;
+  limit?: number;
+  offset?: number;
+}
+
+export interface HashtagSet {
+  id: string;
+  brandId: string;
+  name: string;
+  hashtags: string[];
+  category: string;
+  usageCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface HashtagSetListResponse {
+  data: HashtagSet[];
+  total?: number;
+  limit?: number;
+  offset?: number;
+}
+
+export type CreativeSelectedAssetsItem = { [key: string]: unknown };
+
+export interface Creative {
+  id: string;
+  brandId: string;
+  templateId?: string | null;
+  name: string;
+  status: string;
+  briefText?: string | null;
+  referenceUrl?: string | null;
+  selectedAssets: CreativeSelectedAssetsItem[];
+  selectedHashtagSets?: string[] | null;
+  sourceCreativeId?: string | null;
+  createdBy: string;
+  reviewedBy?: string | null;
+  reviewComment?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreativeListResponse {
+  data: Creative[];
+  total?: number;
+  limit?: number;
+  offset?: number;
+}
+
 export interface UploadResponse {
   url: string;
   thumbnailUrl?: string;
@@ -75,29 +194,6 @@ export interface CreateBrandInput {
   brandFonts?: CreateBrandInputBrandFontsItem[] | null;
 }
 
-export type TemplateClaudeCaptionInstruction = { [key: string]: unknown };
-
-export type TemplateLayoutSpec = { [key: string]: unknown } | null;
-
-export interface Template {
-  id: string;
-  brandId: string;
-  name: string;
-  description?: string | null;
-  version: number;
-  imagenPromptAddition: string;
-  imagenNegativeAddition: string;
-  claudeCaptionInstruction: TemplateClaudeCaptionInstruction;
-  claudeHeadlineInstruction?: string | null;
-  layoutSpec?: TemplateLayoutSpec;
-  recommendedAssetTypes: string[];
-  targetAspectRatios: string[];
-  totalGenerations: number;
-  isActive: boolean;
-  createdAt: string;
-  updatedAt: string;
-}
-
 export type CreateTemplateInputClaudeCaptionInstruction = {
   [key: string]: unknown;
 };
@@ -115,43 +211,6 @@ export interface CreateTemplateInput {
   layoutSpec?: CreateTemplateInputLayoutSpec;
   recommendedAssetTypes: string[];
   targetAspectRatios: string[];
-}
-
-export interface Asset {
-  id: string;
-  brandId: string;
-  type: string;
-  subType?: string | null;
-  status: string;
-  name: string;
-  description?: string | null;
-  tags: string[];
-  fileUrl?: string | null;
-  thumbnailUrl?: string | null;
-  content?: string | null;
-  mimeType?: string | null;
-  fileSizeBytes?: number | null;
-  uploadedBy: string;
-  approvedBy?: string | null;
-  approvedAt?: string | null;
-  usageCount: number;
-  assetClass?: string | null;
-  generationRole?: string | null;
-  brandLayer?: string | null;
-  franchise?: string | null;
-  approvedChannels: string[];
-  approvedTemplates: string[];
-  subjectIdentityScore?: number | null;
-  styleStrengthScore?: number | null;
-  compositingOnly: boolean;
-  generationAllowed: boolean;
-  approvedForCompositing: boolean;
-  referencePriorityDefault?: number | null;
-  conflictTags: string[];
-  freshnessScore?: number | null;
-  characterIdentityNote?: string;
-  createdAt: string;
-  updatedAt: string;
 }
 
 export interface CreateAssetInput {
@@ -198,42 +257,11 @@ export interface UpdateAssetInput {
   characterIdentityNote?: string;
 }
 
-export interface HashtagSet {
-  id: string;
-  brandId: string;
-  name: string;
-  hashtags: string[];
-  category: string;
-  usageCount: number;
-  createdAt: string;
-  updatedAt: string;
-}
-
 export interface CreateHashtagSetInput {
   brandId: string;
   name: string;
   hashtags: string[];
   category: string;
-}
-
-export type CreativeSelectedAssetsItem = { [key: string]: unknown };
-
-export interface Creative {
-  id: string;
-  brandId: string;
-  templateId?: string | null;
-  name: string;
-  status: string;
-  briefText?: string | null;
-  referenceUrl?: string | null;
-  selectedAssets: CreativeSelectedAssetsItem[];
-  selectedHashtagSets?: string[] | null;
-  sourceCreativeId?: string | null;
-  createdBy: string;
-  reviewedBy?: string | null;
-  reviewComment?: string | null;
-  createdAt: string;
-  updatedAt: string;
 }
 
 export type CreateCreativeInputSelectedAssetsItem = { [key: string]: unknown };

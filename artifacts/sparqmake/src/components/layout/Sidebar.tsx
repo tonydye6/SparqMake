@@ -17,7 +17,7 @@ import {
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn, apiFetch } from "@/lib/utils";
-import { useGetCreatives, type Creative } from "@workspace/api-client-react";
+import { useGetCreatives } from "@workspace/api-client-react";
 import { useAuth } from "@/hooks/useAuth";
 
 type SidebarMode = "mobile" | "tablet" | "desktop";
@@ -53,7 +53,7 @@ export function Sidebar({ mobileOpen, onMobileClose }: SidebarProps) {
   const mode = useResponsiveMode();
   const [desktopCollapsed, setDesktopCollapsed] = useState(false);
   const [tabletExpanded, setTabletExpanded] = useState(false);
-  const { data: creatives } = useGetCreatives() as unknown as { data?: { data?: Creative[] } };
+  const { data: creatives } = useGetCreatives();
   const [calendarCount, setCalendarCount] = useState(0);
   const [pendingAssetCount, setPendingAssetCount] = useState(0);
   const { user, logout } = useAuth();

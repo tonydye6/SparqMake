@@ -18,6 +18,7 @@ import type {
 
 import type {
   Asset,
+  AssetListResponse,
   AudioGenerateInput,
   Brand,
   CostLogEntry,
@@ -28,6 +29,7 @@ import type {
   CreateHashtagSetInput,
   CreateTemplateInput,
   Creative,
+  CreativeListResponse,
   CreativeVariant,
   GenerateVideoBody,
   GetAssetsParams,
@@ -37,6 +39,7 @@ import type {
   GetHashtagSetsParams,
   GetTemplatesParams,
   HashtagSet,
+  HashtagSetListResponse,
   HealthStatus,
   MessageResponse,
   RecommendationActionInput,
@@ -44,6 +47,7 @@ import type {
   SocialAccountDeleteResponse,
   SocialAccountRefreshResponse,
   Template,
+  TemplateListResponse,
   TemplateRecommendation,
   TemplateStats,
   TemplateVersion,
@@ -567,8 +571,8 @@ export const getGetTemplatesUrl = (params?: GetTemplatesParams) => {
 export const getTemplates = async (
   params?: GetTemplatesParams,
   options?: RequestInit,
-): Promise<Template[]> => {
-  return customFetch<Template[]>(getGetTemplatesUrl(params), {
+): Promise<TemplateListResponse> => {
+  return customFetch<TemplateListResponse>(getGetTemplatesUrl(params), {
     ...options,
     method: "GET",
   });
@@ -1005,8 +1009,8 @@ export const getGetAssetsUrl = (params?: GetAssetsParams) => {
 export const getAssets = async (
   params?: GetAssetsParams,
   options?: RequestInit,
-): Promise<Asset[]> => {
-  return customFetch<Asset[]>(getGetAssetsUrl(params), {
+): Promise<AssetListResponse> => {
+  return customFetch<AssetListResponse>(getGetAssetsUrl(params), {
     ...options,
     method: "GET",
   });
@@ -1441,8 +1445,8 @@ export const getGetHashtagSetsUrl = (params?: GetHashtagSetsParams) => {
 export const getHashtagSets = async (
   params?: GetHashtagSetsParams,
   options?: RequestInit,
-): Promise<HashtagSet[]> => {
-  return customFetch<HashtagSet[]>(getGetHashtagSetsUrl(params), {
+): Promise<HashtagSetListResponse> => {
+  return customFetch<HashtagSetListResponse>(getGetHashtagSetsUrl(params), {
     ...options,
     method: "GET",
   });
@@ -1792,8 +1796,8 @@ export const getGetCreativesUrl = (params?: GetCreativesParams) => {
 export const getCreatives = async (
   params?: GetCreativesParams,
   options?: RequestInit,
-): Promise<Creative[]> => {
-  return customFetch<Creative[]>(getGetCreativesUrl(params), {
+): Promise<CreativeListResponse> => {
+  return customFetch<CreativeListResponse>(getGetCreativesUrl(params), {
     ...options,
     method: "GET",
   });

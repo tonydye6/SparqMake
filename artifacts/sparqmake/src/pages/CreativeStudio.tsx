@@ -35,11 +35,11 @@ export default function CreativeStudio() {
   const { data: brands } = useGetBrands();
   const [selectedBrand, setSelectedBrand] = useState<string>("");
   
-  const { data: templates } = useGetTemplates({ brandId: selectedBrand || undefined }, { query: { enabled: !!selectedBrand, queryKey: getGetTemplatesQueryKey({ brandId: selectedBrand || undefined }) } }) as unknown as { data?: { data?: Template[] } };
+  const { data: templates } = useGetTemplates({ brandId: selectedBrand || undefined }, { query: { enabled: !!selectedBrand, queryKey: getGetTemplatesQueryKey({ brandId: selectedBrand || undefined }) } });
   const [selectedTemplate, setSelectedTemplate] = useState<string>("");
 
-  const { data: approvedAssets } = useGetAssets({ brandId: selectedBrand || undefined, status: "approved" }, { query: { enabled: !!selectedBrand, queryKey: getGetAssetsQueryKey({ brandId: selectedBrand || undefined, status: "approved" }) } }) as unknown as { data?: { data?: Asset[] } };
-  const { data: briefs } = useGetAssets({ brandId: selectedBrand || undefined, type: "context" }, { query: { enabled: !!selectedBrand, queryKey: getGetAssetsQueryKey({ brandId: selectedBrand || undefined, type: "context" }) } }) as unknown as { data?: { data?: Asset[] } };
+  const { data: approvedAssets } = useGetAssets({ brandId: selectedBrand || undefined, status: "approved" }, { query: { enabled: !!selectedBrand, queryKey: getGetAssetsQueryKey({ brandId: selectedBrand || undefined, status: "approved" }) } });
+  const { data: briefs } = useGetAssets({ brandId: selectedBrand || undefined, type: "context" }, { query: { enabled: !!selectedBrand, queryKey: getGetAssetsQueryKey({ brandId: selectedBrand || undefined, type: "context" }) } });
 
   const [creativeName, setCreativeName] = useState("");
   const [selectedAssets, setSelectedAssets] = useState<string[]>([]);

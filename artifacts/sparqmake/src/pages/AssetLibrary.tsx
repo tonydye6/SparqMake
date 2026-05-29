@@ -80,17 +80,17 @@ export default function AssetLibrary() {
     status: statusFilter !== "all" ? statusFilter : undefined,
     search: searchQuery || undefined,
     limit: 200
-  }) as unknown as { data?: { data?: Asset[] }; isLoading: boolean };
+  });
   
   const { data: briefs, isLoading: briefsLoading } = useGetAssets({ 
     type: "context",
     brandId: selectedBrand !== "all" ? selectedBrand : undefined,
     limit: 200
-  }) as unknown as { data?: { data?: Asset[] }; isLoading: boolean };
+  });
 
   const { data: hashtagSets } = useGetHashtagSets({
     brandId: selectedBrand !== "all" ? selectedBrand : undefined,
-  }) as unknown as { data?: { data?: HashtagSet[] } };
+  });
 
   interface UploadItem {
     id: string;

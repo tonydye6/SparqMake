@@ -163,25 +163,31 @@ export const GetTemplatesQueryParams = zod.object({
   brandId: zod.coerce.string().optional(),
 });
 
-export const GetTemplatesResponseItem = zod.object({
-  id: zod.string(),
-  brandId: zod.string(),
-  name: zod.string(),
-  description: zod.string().nullish(),
-  version: zod.number(),
-  imagenPromptAddition: zod.string(),
-  imagenNegativeAddition: zod.string(),
-  claudeCaptionInstruction: zod.record(zod.string(), zod.unknown()),
-  claudeHeadlineInstruction: zod.string().nullish(),
-  layoutSpec: zod.record(zod.string(), zod.unknown()).nullish(),
-  recommendedAssetTypes: zod.array(zod.string()),
-  targetAspectRatios: zod.array(zod.string()),
-  totalGenerations: zod.number(),
-  isActive: zod.boolean(),
-  createdAt: zod.date(),
-  updatedAt: zod.date(),
+export const GetTemplatesResponse = zod.object({
+  data: zod.array(
+    zod.object({
+      id: zod.string(),
+      brandId: zod.string(),
+      name: zod.string(),
+      description: zod.string().nullish(),
+      version: zod.number(),
+      imagenPromptAddition: zod.string(),
+      imagenNegativeAddition: zod.string(),
+      claudeCaptionInstruction: zod.record(zod.string(), zod.unknown()),
+      claudeHeadlineInstruction: zod.string().nullish(),
+      layoutSpec: zod.record(zod.string(), zod.unknown()).nullish(),
+      recommendedAssetTypes: zod.array(zod.string()),
+      targetAspectRatios: zod.array(zod.string()),
+      totalGenerations: zod.number(),
+      isActive: zod.boolean(),
+      createdAt: zod.date(),
+      updatedAt: zod.date(),
+    }),
+  ),
+  total: zod.number().optional(),
+  limit: zod.number().optional(),
+  offset: zod.number().optional(),
 });
-export const GetTemplatesResponse = zod.array(GetTemplatesResponseItem);
 
 /**
  * @summary Create a template
@@ -287,43 +293,49 @@ export const GetAssetsQueryParams = zod.object({
   offset: zod.coerce.number().optional(),
 });
 
-export const GetAssetsResponseItem = zod.object({
-  id: zod.string(),
-  brandId: zod.string(),
-  type: zod.string(),
-  subType: zod.string().nullish(),
-  status: zod.string(),
-  name: zod.string(),
-  description: zod.string().nullish(),
-  tags: zod.array(zod.string()),
-  fileUrl: zod.string().nullish(),
-  thumbnailUrl: zod.string().nullish(),
-  content: zod.string().nullish(),
-  mimeType: zod.string().nullish(),
-  fileSizeBytes: zod.number().nullish(),
-  uploadedBy: zod.string(),
-  approvedBy: zod.string().nullish(),
-  approvedAt: zod.date().nullish(),
-  usageCount: zod.number(),
-  assetClass: zod.string().nullish(),
-  generationRole: zod.string().nullish(),
-  brandLayer: zod.string().nullish(),
-  franchise: zod.string().nullish(),
-  approvedChannels: zod.array(zod.string()),
-  approvedTemplates: zod.array(zod.string()),
-  subjectIdentityScore: zod.number().nullish(),
-  styleStrengthScore: zod.number().nullish(),
-  compositingOnly: zod.boolean(),
-  generationAllowed: zod.boolean(),
-  approvedForCompositing: zod.boolean(),
-  referencePriorityDefault: zod.number().nullish(),
-  conflictTags: zod.array(zod.string()),
-  freshnessScore: zod.number().nullish(),
-  characterIdentityNote: zod.string().optional(),
-  createdAt: zod.date(),
-  updatedAt: zod.date(),
+export const GetAssetsResponse = zod.object({
+  data: zod.array(
+    zod.object({
+      id: zod.string(),
+      brandId: zod.string(),
+      type: zod.string(),
+      subType: zod.string().nullish(),
+      status: zod.string(),
+      name: zod.string(),
+      description: zod.string().nullish(),
+      tags: zod.array(zod.string()),
+      fileUrl: zod.string().nullish(),
+      thumbnailUrl: zod.string().nullish(),
+      content: zod.string().nullish(),
+      mimeType: zod.string().nullish(),
+      fileSizeBytes: zod.number().nullish(),
+      uploadedBy: zod.string(),
+      approvedBy: zod.string().nullish(),
+      approvedAt: zod.date().nullish(),
+      usageCount: zod.number(),
+      assetClass: zod.string().nullish(),
+      generationRole: zod.string().nullish(),
+      brandLayer: zod.string().nullish(),
+      franchise: zod.string().nullish(),
+      approvedChannels: zod.array(zod.string()),
+      approvedTemplates: zod.array(zod.string()),
+      subjectIdentityScore: zod.number().nullish(),
+      styleStrengthScore: zod.number().nullish(),
+      compositingOnly: zod.boolean(),
+      generationAllowed: zod.boolean(),
+      approvedForCompositing: zod.boolean(),
+      referencePriorityDefault: zod.number().nullish(),
+      conflictTags: zod.array(zod.string()),
+      freshnessScore: zod.number().nullish(),
+      characterIdentityNote: zod.string().optional(),
+      createdAt: zod.date(),
+      updatedAt: zod.date(),
+    }),
+  ),
+  total: zod.number().optional(),
+  limit: zod.number().optional(),
+  offset: zod.number().optional(),
 });
-export const GetAssetsResponse = zod.array(GetAssetsResponseItem);
 
 /**
  * @summary Create an asset record
@@ -479,17 +491,23 @@ export const GetHashtagSetsQueryParams = zod.object({
   category: zod.coerce.string().optional(),
 });
 
-export const GetHashtagSetsResponseItem = zod.object({
-  id: zod.string(),
-  brandId: zod.string(),
-  name: zod.string(),
-  hashtags: zod.array(zod.string()),
-  category: zod.string(),
-  usageCount: zod.number(),
-  createdAt: zod.date(),
-  updatedAt: zod.date(),
+export const GetHashtagSetsResponse = zod.object({
+  data: zod.array(
+    zod.object({
+      id: zod.string(),
+      brandId: zod.string(),
+      name: zod.string(),
+      hashtags: zod.array(zod.string()),
+      category: zod.string(),
+      usageCount: zod.number(),
+      createdAt: zod.date(),
+      updatedAt: zod.date(),
+    }),
+  ),
+  total: zod.number().optional(),
+  limit: zod.number().optional(),
+  offset: zod.number().optional(),
 });
-export const GetHashtagSetsResponse = zod.array(GetHashtagSetsResponseItem);
 
 /**
  * @summary Create a hashtag set
@@ -545,24 +563,30 @@ export const GetCreativesQueryParams = zod.object({
   status: zod.coerce.string().optional(),
 });
 
-export const GetCreativesResponseItem = zod.object({
-  id: zod.string(),
-  brandId: zod.string(),
-  templateId: zod.string().nullish(),
-  name: zod.string(),
-  status: zod.string(),
-  briefText: zod.string().nullish(),
-  referenceUrl: zod.string().nullish(),
-  selectedAssets: zod.array(zod.record(zod.string(), zod.unknown())),
-  selectedHashtagSets: zod.array(zod.string()).nullish(),
-  sourceCreativeId: zod.string().nullish(),
-  createdBy: zod.string(),
-  reviewedBy: zod.string().nullish(),
-  reviewComment: zod.string().nullish(),
-  createdAt: zod.date(),
-  updatedAt: zod.date(),
+export const GetCreativesResponse = zod.object({
+  data: zod.array(
+    zod.object({
+      id: zod.string(),
+      brandId: zod.string(),
+      templateId: zod.string().nullish(),
+      name: zod.string(),
+      status: zod.string(),
+      briefText: zod.string().nullish(),
+      referenceUrl: zod.string().nullish(),
+      selectedAssets: zod.array(zod.record(zod.string(), zod.unknown())),
+      selectedHashtagSets: zod.array(zod.string()).nullish(),
+      sourceCreativeId: zod.string().nullish(),
+      createdBy: zod.string(),
+      reviewedBy: zod.string().nullish(),
+      reviewComment: zod.string().nullish(),
+      createdAt: zod.date(),
+      updatedAt: zod.date(),
+    }),
+  ),
+  total: zod.number().optional(),
+  limit: zod.number().optional(),
+  offset: zod.number().optional(),
 });
-export const GetCreativesResponse = zod.array(GetCreativesResponseItem);
 
 /**
  * @summary Create a creative

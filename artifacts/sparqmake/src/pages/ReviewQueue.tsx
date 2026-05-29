@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { useGetBrands, useGetCreatives, useUpdateCreative, type Creative } from "@workspace/api-client-react";
+import { useGetBrands, useGetCreatives, useUpdateCreative } from "@workspace/api-client-react";
 import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
 import { PlatformIcon } from "@/components/ui/platform-icon";
@@ -66,7 +66,7 @@ function getCategoryLabel(slug: string): string {
 
 export default function ReviewQueue() {
   const { data: brands } = useGetBrands();
-  const { data: creatives, isLoading } = useGetCreatives() as unknown as { data?: { data?: Creative[] }; isLoading: boolean };
+  const { data: creatives, isLoading } = useGetCreatives();
   const updateCreative = useUpdateCreative();
   const { toast } = useToast();
   const queryClient = useQueryClient();

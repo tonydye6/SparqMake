@@ -920,7 +920,7 @@ const BRAND_ASSET_GROUPS = [
 ];
 
 function BrandAssetGroups({ brandId }: { brandId: string }) {
-  const { data: allAssets } = useGetAssets({ brandId, limit: 200 }) as unknown as { data?: { data?: Asset[] } };
+  const { data: allAssets } = useGetAssets({ brandId, limit: 200 });
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const updateMutation = useUpdateAsset();
@@ -1069,7 +1069,7 @@ function BrandAssetGroups({ brandId }: { brandId: string }) {
 
 function BrandFontManagement({ brandId }: { brandId: string }) {
   const apiBase = import.meta.env.VITE_API_URL || "";
-  const { data: allAssets } = useGetAssets({ brandId, type: "font" }) as unknown as { data?: { data?: Asset[] } };
+  const { data: allAssets } = useGetAssets({ brandId, type: "font" });
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const uploadMutation = useUploadFile();
@@ -1266,7 +1266,7 @@ function BrandTemplates({ brandId, brandColors, brandLogoUrl }: {
   brandColors?: { primary: string; secondary: string; accent: string; background: string };
   brandLogoUrl?: string | null;
 }) {
-  const { data: templates } = useGetTemplates({ brandId }) as unknown as { data?: { data?: Template[] } };
+  const { data: templates } = useGetTemplates({ brandId });
   const [isAddOpen, setIsAddOpen] = useState(false);
   const queryClient = useQueryClient();
   const { toast } = useToast();

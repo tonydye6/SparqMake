@@ -146,9 +146,7 @@ paths:
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Template"
+                $ref: "#/components/schemas/TemplateListResponse"
     post:
       operationId: createTemplate
       tags: [templates]
@@ -262,9 +260,7 @@ paths:
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Asset"
+                $ref: "#/components/schemas/AssetListResponse"
     post:
       operationId: createAsset
       tags: [assets]
@@ -362,9 +358,7 @@ paths:
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/HashtagSet"
+                $ref: "#/components/schemas/HashtagSetListResponse"
     post:
       operationId: createHashtagSet
       tags: [hashtags]
@@ -445,9 +439,7 @@ paths:
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Creative"
+                $ref: "#/components/schemas/CreativeListResponse"
     post:
       operationId: createCreative
       tags: [creatives]
@@ -903,6 +895,70 @@ components:
           type: string
       required:
         - message
+
+    TemplateListResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Template"
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+      required:
+        - data
+
+    AssetListResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Asset"
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+      required:
+        - data
+
+    HashtagSetListResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/HashtagSet"
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+      required:
+        - data
+
+    CreativeListResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Creative"
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+      required:
+        - data
 
     UploadResponse:
       type: object
