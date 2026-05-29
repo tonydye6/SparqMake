@@ -145,6 +145,31 @@ export const costLogsTable = pgTable("cost_logs", {
   index("cost_logs_service_created_at_idx").on(table.service, table.createdAt.desc()),
 ]);
 
+// Monthly rollups of archived cost_logs rows. The archival job (see
+// scripts/src/archive-cost-logs.ts) rolls up whole calendar months that are
+// entirely older than the retention window into this table and deletes the raw
+// rows, keeping cost_logs lean while preserving lifetime totals. Archival is
+// whole-month aligned, so this table and cost_logs never cover the same month,
+// which lets the analytics endpoint combine them without double counting.
+export const costLogMonthlySummaryTable = pgTable("cost_log_monthly_summary", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  // First day of the rolled-up calendar month, at 00:00:00 UTC.
+  month: timestamp("month").notNull(),
+  service: text("service").notNull(),
+  operation: text("operation").notNull(),
+  totalCostUsd: numeric("total_cost_usd", { precision: 14, scale: 4, mode: "number" }).notNull().default(0),
+  entryCount: integer("entry_count").notNull().default(0),
+  inputTokens: integer("input_tokens"),
+  outputTokens: integer("output_tokens"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("cost_log_monthly_summary_unique_idx").on(table.month, table.service, table.operation),
+  index("cost_log_monthly_summary_month_idx").on(table.month.desc()),
+]);
+
+export type CostLogMonthlySummary = typeof costLogMonthlySummaryTable.$inferSelect;
+
 export const brandScheduleProfilesTable = pgTable("brand_schedule_profiles", {
   id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
   brandId: text("brand_id").notNull().references(() => brandsTable.id, { onDelete: "cascade" }),

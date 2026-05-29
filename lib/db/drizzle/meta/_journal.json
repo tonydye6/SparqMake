@@ -15,6 +15,13 @@
       "when": 1780020170433,
       "tag": "0001_data_model_fixes",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1780024484554,
+      "tag": "0002_opposite_morbius",
+      "breakpoints": true
     }
   ]
 }
