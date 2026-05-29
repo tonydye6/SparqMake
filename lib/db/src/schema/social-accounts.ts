@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, jsonb, index } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, jsonb, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { brandsTable } from "./brands";
@@ -14,7 +14,7 @@ export const socialAccountsTable = pgTable("social_accounts", {
   profileImageUrl: text("profile_image_url"),
   avatarUrl: text("avatar_url"),
   platformMetadata: jsonb("platform_metadata"),
-  brandId: text("brand_id").references(() => brandsTable.id, { onDelete: "set null" }),
+  brandId: text("brand_id").notNull().references(() => brandsTable.id, { onDelete: "cascade" }),
   status: text("status").notNull().default("connected"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
@@ -22,6 +22,7 @@ export const socialAccountsTable = pgTable("social_accounts", {
   index("social_accounts_platform_idx").on(table.platform),
   index("social_accounts_brand_idx").on(table.brandId),
   index("social_accounts_status_idx").on(table.status),
+  uniqueIndex("social_accounts_platform_account_unique").on(table.platform, table.accountId),
 ]);
 
 export const insertSocialAccountSchema = createInsertSchema(socialAccountsTable).omit({

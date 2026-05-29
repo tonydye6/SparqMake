@@ -1,4 +1,5 @@
-import { pgTable, text, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, check } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -10,7 +11,9 @@ export const usersTable = pgTable("users", {
   role: text("role").notNull().default("viewer"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
-});
+}, (table) => [
+  check("users_role_check", sql`${table.role} in ('viewer', 'editor', 'admin')`),
+]);
 
 export const insertUserSchema = createInsertSchema(usersTable).omit({
   id: true,

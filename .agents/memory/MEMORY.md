@@ -1,1 +1,2 @@
 - [GitHub push refspec](github-push.md) — local branch is `master` but GitHub default is `main`; push with `git push github master:main` and verify via `ls-remote`.
+- [Typecheck baseline is red](typecheck-baseline.md) — repo-wide `pnpm run typecheck` fails at baseline (api-zod codegen + integration libs missing @types/node → TS6305/TS2305 cascade); validate per-package, grep for your files.

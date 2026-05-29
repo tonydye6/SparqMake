@@ -10,7 +10,16 @@ if (!process.env.DATABASE_URL) {
   );
 }
 
-export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+// Bounded pool so a single always-on server (Reserved VM) can't exhaust Postgres
+// connections under load. Override DB_POOL_MAX per environment if needed.
+const poolMax = Number(process.env.DB_POOL_MAX) || 10;
+
+export const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  max: poolMax,
+  idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: 10_000,
+});
 export const db = drizzle(pool, { schema });
 
 export * from "./schema";

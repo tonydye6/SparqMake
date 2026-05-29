@@ -84,6 +84,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useSearch } from "wouter";
 import { useDropzone } from "react-dropzone";
 import { cn, apiFetch } from "@/lib/utils";
@@ -301,7 +302,15 @@ function ConnectedAccountsTab() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const { data: accounts, isLoading } = useGetSocialAccounts();
+  const { data: brands } = useGetBrands();
+  const [connectBrandId, setConnectBrandId] = useState<string>("");
   const baseUrl = import.meta.env.VITE_API_URL || "";
+
+  useEffect(() => {
+    if (brands && brands.length > 0 && !connectBrandId) {
+      setConnectBrandId(brands[0].id);
+    }
+  }, [brands, connectBrandId]);
 
   const deleteMutation = useDeleteSocialAccount({
     mutation: {
@@ -330,10 +339,17 @@ function ConnectedAccountsTab() {
   });
 
   const handleConnect = (platform: string) => {
-    window.location.href = `${baseUrl}/api/auth/${platform}`;
+    if (!connectBrandId) {
+      toast({ variant: "destructive", title: "Select a brand", description: "Choose which brand to connect this account to." });
+      return;
+    }
+    window.location.href = `${baseUrl}/api/auth/${platform}?brandId=${encodeURIComponent(connectBrandId)}`;
   };
 
-  const connectedPlatforms = new Set(accounts?.map(a => a.platform) || []);
+  const brandNameById = new Map((brands || []).map(b => [b.id, b.name]));
+  const connectedPlatforms = new Set(
+    (accounts || []).filter(a => a.brandId === connectBrandId).map(a => a.platform),
+  );
 
   if (isLoading) {
     return (
@@ -379,6 +395,9 @@ function ConnectedAccountsTab() {
                       <div className="flex items-center gap-2">
                         <span className="font-semibold">{account.accountName}</span>
                         <Badge variant="outline" className="text-xs">{config.label}</Badge>
+                        {account.brandId && brandNameById.has(account.brandId) && (
+                          <Badge variant="secondary" className="text-xs">{brandNameById.get(account.brandId)}</Badge>
+                        )}
                         {subscriberCount && (
                           <span className="text-xs text-muted-foreground">
                             {Number(subscriberCount).toLocaleString()} subscribers
@@ -447,9 +466,24 @@ function ConnectedAccountsTab() {
       )}
 
       <section className="bg-card border border-border rounded-xl p-6 shadow-sm">
-        <div className="flex items-center gap-2 mb-6 border-b border-border pb-4">
-          <Plus className="text-primary" size={20} />
-          <h2 className="text-xl font-bold">Connect a Platform</h2>
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-6 border-b border-border pb-4">
+          <div className="flex items-center gap-2">
+            <Plus className="text-primary" size={20} />
+            <h2 className="text-xl font-bold">Connect a Platform</h2>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-muted-foreground">Connect to brand:</span>
+            <Select value={connectBrandId} onValueChange={setConnectBrandId}>
+              <SelectTrigger className="w-[200px]" data-testid="select-connect-brand">
+                <SelectValue placeholder="Select a brand" />
+              </SelectTrigger>
+              <SelectContent>
+                {(brands || []).map(brand => (
+                  <SelectItem key={brand.id} value={brand.id}>{brand.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {AVAILABLE_PLATFORMS.map(platform => {

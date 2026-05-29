@@ -1,4 +1,4 @@
-import { eq, and, lte, or } from "drizzle-orm";
+import { eq, and, lte, lt, or, isNotNull } from "drizzle-orm";
 import { db, calendarEntriesTable, creativeVariantsTable, creativesTable, socialAccountsTable } from "@workspace/db";
 import { publishToTwitter } from "./publish-twitter";
 import { publishToInstagram } from "./publish-instagram";
@@ -338,11 +338,13 @@ async function pollAndPublish(): Promise<void> {
 
     const failedEntries = await db.select()
       .from(calendarEntriesTable)
-      .where(eq(calendarEntriesTable.publishStatus, "failed"));
+      .where(and(
+        eq(calendarEntriesTable.publishStatus, "failed"),
+        lt(calendarEntriesTable.retryCount, MAX_RETRIES),
+        isNotNull(calendarEntriesTable.socialAccountId)
+      ));
 
     const retriableEntries = failedEntries.filter(entry => {
-      if ((entry.retryCount || 0) >= MAX_RETRIES) return false;
-      if (!entry.socialAccountId) return false;
       const backoffMs = getBackoffMs(entry.retryCount || 0);
       const lastAttempt = entry.updatedAt || entry.createdAt;
       return (now.getTime() - lastAttempt.getTime()) >= backoffMs;

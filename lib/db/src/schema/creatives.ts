@@ -1,9 +1,11 @@
-import { pgTable, text, timestamp, json, index, real, integer, foreignKey, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, json, index, real, integer, numeric, foreignKey, uniqueIndex, check } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { brandsTable } from "./brands";
 import { templatesTable } from "./templates";
 import { socialAccountsTable } from "./social-accounts";
+import { usersTable } from "./users";
 
 export const creativesTable = pgTable("creatives", {
   id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
@@ -19,19 +21,19 @@ export const creativesTable = pgTable("creatives", {
   selectedHashtagSets: json("selected_hashtag_sets"),
   sourceCreativeId: text("source_creative_id"),
   estimatedCost: real("estimated_cost"),
-  createdBy: text("created_by").notNull(),
-  reviewedBy: text("reviewed_by"),
+  createdBy: text("created_by").notNull().references(() => usersTable.id, { onDelete: "restrict" }),
+  reviewedBy: text("reviewed_by").references(() => usersTable.id, { onDelete: "set null" }),
   reviewComment: text("review_comment"),
   reviewedAt: timestamp("reviewed_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (table) => [
-  index("campaigns_brand_status_idx").on(table.brandId, table.status),
-  index("campaigns_template_created_idx").on(table.templateId, table.createdAt),
+  index("creatives_brand_status_idx").on(table.brandId, table.status),
+  index("creatives_template_created_idx").on(table.templateId, table.createdAt),
   foreignKey({
     columns: [table.sourceCreativeId],
     foreignColumns: [table.id],
-    name: "campaigns_source_campaign_id_campaigns_id_fk",
+    name: "creatives_source_creative_id_creatives_id_fk",
   }).onDelete("set null"),
 ]);
 
@@ -60,11 +62,13 @@ export const creativeVariantsTable = pgTable("creative_variants", {
   headlineText: text("headline_text"),
   originalHeadline: text("original_headline"),
   status: text("status").notNull().default("generated"),
+  // Stores the failure reason (text) when image compositing failed for this
+  // variant; NULL means compositing succeeded or was not attempted.
   compositingFailed: text("compositing_failed"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (table) => [
-  index("campaign_variants_campaign_idx").on(table.creativeId),
+  index("creative_variants_creative_idx").on(table.creativeId),
 ]);
 
 export const calendarEntriesTable = pgTable("calendar_entries", {
@@ -84,7 +88,11 @@ export const calendarEntriesTable = pgTable("calendar_entries", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (table) => [
-  index("calendar_entries_schedule_idx").on(table.scheduledAt, table.publishStatus),
+  index("calendar_entries_status_scheduled_idx").on(table.publishStatus, table.scheduledAt),
+  check(
+    "calendar_entries_publish_status_check",
+    sql`${table.publishStatus} in ('scheduled', 'publishing', 'published', 'failed')`,
+  ),
 ]);
 
 export const smartScheduleProposalsTable = pgTable("smart_schedule_proposals", {
@@ -116,7 +124,7 @@ export const refinementLogsTable = pgTable("refinement_logs", {
   originalValue: text("original_value"),
   newValue: text("new_value"),
   refinementPrompt: text("refinement_prompt"),
-  userId: text("user_id").notNull(),
+  userId: text("user_id").notNull().references(() => usersTable.id, { onDelete: "restrict" }),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 }, (table) => [
   index("refinement_logs_template_idx").on(table.templateId, table.editType),
@@ -128,9 +136,9 @@ export const costLogsTable = pgTable("cost_logs", {
   service: text("service").notNull(),
   operation: text("operation").notNull(),
   model: text("model"),
-  costUsd: real("cost_usd").notNull(),
-  inputTokens: text("input_tokens"),
-  outputTokens: text("output_tokens"),
+  costUsd: numeric("cost_usd", { precision: 12, scale: 4, mode: "number" }).notNull(),
+  inputTokens: integer("input_tokens"),
+  outputTokens: integer("output_tokens"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 }, (table) => [
   index("cost_logs_created_at_idx").on(table.createdAt.desc()),

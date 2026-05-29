@@ -1,7 +1,7 @@
 import { Router } from "express";
 import crypto from "crypto";
-import { db, socialAccountsTable } from "@workspace/db";
-import { eq, and } from "drizzle-orm";
+import { db, socialAccountsTable, brandsTable } from "@workspace/db";
+import { eq, sql } from "drizzle-orm";
 import { encryptToken } from "../services/token-encryption";
 import { logger } from "../lib/logger";
 import type {
@@ -59,8 +59,8 @@ function getSettingsRedirectUrl(): string {
 
 const STATE_TTL_MS = 10 * 60 * 1000;
 
-const pkceStore = new Map<string, { verifier: string; userId: string; expiresAt: number }>();
-const oauthStateStore = new Map<string, { userId: string; expiresAt: number }>();
+const pkceStore = new Map<string, { verifier: string; userId: string; brandId: string; expiresAt: number }>();
+const oauthStateStore = new Map<string, { userId: string; brandId: string; expiresAt: number }>();
 
 // Periodic sweep so abandoned OAuth flows don't leak memory. Single-instance only
 // (a Reserved VM runs exactly one process); defer a shared Redis store for multi-instance.
@@ -77,50 +77,67 @@ function generatePKCE() {
   return { verifier, challenge };
 }
 
-function createOAuthState(userId: string): string {
+function createOAuthState(userId: string, brandId: string): string {
   const state = crypto.randomBytes(16).toString("hex");
-  oauthStateStore.set(state, { userId, expiresAt: Date.now() + STATE_TTL_MS });
+  oauthStateStore.set(state, { userId, brandId, expiresAt: Date.now() + STATE_TTL_MS });
   return state;
 }
 
-function validateOAuthState(state: string | undefined, userId: string | undefined): boolean {
-  if (!state || typeof state !== "string" || !userId) return false;
+// Consumes the state (single-use) and returns the stored entry only when it is
+// valid for this user, so callers can read the brandId captured at connect time.
+function consumeOAuthState(
+  state: string | undefined,
+  userId: string | undefined,
+): { userId: string; brandId: string } | null {
+  if (!state || typeof state !== "string" || !userId) return null;
   const data = oauthStateStore.get(state);
   if (!data || data.expiresAt < Date.now()) {
     if (data) oauthStateStore.delete(state);
-    return false;
+    return null;
   }
   oauthStateStore.delete(state);
-  return data.userId === userId;
+  if (data.userId !== userId) return null;
+  return { userId: data.userId, brandId: data.brandId };
 }
 
-// Re-connecting an already-linked account updates it in place rather than inserting a
-// duplicate row (no DB unique constraint exists on platform+accountId).
+// Resolve the brand a social account is being connected for. Social accounts are
+// brand-scoped, so connect requests must carry a valid brandId query param.
+async function resolveConnectBrandId(brandId: unknown): Promise<string | null> {
+  if (typeof brandId !== "string" || !brandId) return null;
+  const [brand] = await db
+    .select({ id: brandsTable.id })
+    .from(brandsTable)
+    .where(eq(brandsTable.id, brandId));
+  return brand ? brand.id : null;
+}
+
+// Re-connecting an already-linked account updates it in place rather than inserting
+// a duplicate row. Atomic via the unique index on (platform, account_id) so two
+// concurrent callbacks can't race into two rows. A null incoming refresh token keeps
+// the existing one (some providers only return a refresh token on first consent);
+// likewise a null profile image keeps the stored value.
 async function upsertSocialAccount(values: typeof socialAccountsTable.$inferInsert): Promise<void> {
-  const [existing] = await db
-    .select({ id: socialAccountsTable.id })
-    .from(socialAccountsTable)
-    .where(and(
-      eq(socialAccountsTable.platform, values.platform),
-      eq(socialAccountsTable.accountId, values.accountId),
-    ));
-
-  if (existing) {
-    const { refreshToken, ...rest } = values;
-    await db
-      .update(socialAccountsTable)
-      .set({
-        ...rest,
-        ...(refreshToken ? { refreshToken } : {}),
+  await db
+    .insert(socialAccountsTable)
+    .values(values)
+    .onConflictDoUpdate({
+      target: [socialAccountsTable.platform, socialAccountsTable.accountId],
+      set: {
+        accountName: sql`excluded.account_name`,
+        accessToken: sql`excluded.access_token`,
+        refreshToken: sql`coalesce(excluded.refresh_token, ${socialAccountsTable.refreshToken})`,
+        tokenExpiry: sql`excluded.token_expiry`,
+        profileImageUrl: sql`coalesce(excluded.profile_image_url, ${socialAccountsTable.profileImageUrl})`,
+        avatarUrl: sql`coalesce(excluded.avatar_url, ${socialAccountsTable.avatarUrl})`,
+        platformMetadata: sql`coalesce(excluded.platform_metadata, ${socialAccountsTable.platformMetadata})`,
+        brandId: sql`excluded.brand_id`,
+        status: sql`excluded.status`,
         updatedAt: new Date(),
-      })
-      .where(eq(socialAccountsTable.id, existing.id));
-  } else {
-    await db.insert(socialAccountsTable).values(values);
-  }
+      },
+    });
 }
 
-router.get("/auth/twitter", (req, res) => {
+router.get("/auth/twitter", async (req, res) => {
   const clientId = process.env.X_SparqMake_X_API_Key;
   if (!clientId) {
     return res.status(500).json({ error: "Twitter API key not configured" });
@@ -131,10 +148,15 @@ router.get("/auth/twitter", (req, res) => {
     return res.status(401).json({ error: "Not authenticated" });
   }
 
+  const brandId = await resolveConnectBrandId(req.query.brandId);
+  if (!brandId) {
+    return res.redirect(`${getSettingsRedirectUrl()}&error=invalid_brand`);
+  }
+
   const { verifier, challenge } = generatePKCE();
   const state = crypto.randomBytes(16).toString("hex");
 
-  pkceStore.set(state, { verifier, userId, expiresAt: Date.now() + STATE_TTL_MS });
+  pkceStore.set(state, { verifier, userId, brandId, expiresAt: Date.now() + STATE_TTL_MS });
 
   const callbackUrl = `${getCallbackBaseUrl()}/api/auth/twitter/callback`;
   const scopes = ["tweet.read", "tweet.write", "users.read", "offline.access"].join(" ");
@@ -215,6 +237,7 @@ router.get("/auth/twitter/callback", async (req, res) => {
       accessToken: encryptToken(tokenData.access_token),
       refreshToken: tokenData.refresh_token ? encryptToken(tokenData.refresh_token) : null,
       tokenExpiry: expiresAt,
+      brandId: pkceData.brandId,
       status: "connected",
     });
 
@@ -225,7 +248,7 @@ router.get("/auth/twitter/callback", async (req, res) => {
   }
 });
 
-router.get("/auth/instagram", (req, res) => {
+router.get("/auth/instagram", async (req, res) => {
   const appId = process.env.SparqMake_Instagram_App_ID;
   if (!appId) {
     return res.status(500).json({ error: "Instagram App ID not configured" });
@@ -236,7 +259,12 @@ router.get("/auth/instagram", (req, res) => {
     return res.status(401).json({ error: "Not authenticated" });
   }
 
-  const state = createOAuthState(userId);
+  const brandId = await resolveConnectBrandId(req.query.brandId);
+  if (!brandId) {
+    return res.redirect(`${getSettingsRedirectUrl()}&error=invalid_brand`);
+  }
+
+  const state = createOAuthState(userId, brandId);
   const callbackUrl = `${getCallbackBaseUrl()}/api/auth/instagram/callback`;
   const scopes = ["instagram_basic", "instagram_content_publish", "pages_show_list"].join(",");
 
@@ -255,7 +283,8 @@ router.get("/auth/instagram/callback", async (req, res) => {
   try {
     const { code, state } = req.query;
 
-    if (!validateOAuthState(state as string | undefined, req.user?.id)) {
+    const stateData = consumeOAuthState(state as string | undefined, req.user?.id);
+    if (!stateData) {
       return res.redirect(`${getSettingsRedirectUrl()}&error=invalid_state`);
     }
 
@@ -337,6 +366,7 @@ router.get("/auth/instagram/callback", async (req, res) => {
       accessToken: encryptToken(accessToken),
       refreshToken: null,
       tokenExpiry: new Date(Date.now() + expiresIn * 1000),
+      brandId: stateData.brandId,
       status: "connected",
     });
 
@@ -347,7 +377,7 @@ router.get("/auth/instagram/callback", async (req, res) => {
   }
 });
 
-router.get("/auth/linkedin", (req, res) => {
+router.get("/auth/linkedin", async (req, res) => {
   const clientId = process.env.SparqMake_LinkedIn_Client_ID;
   if (!clientId) {
     return res.status(500).json({ error: "LinkedIn Client ID not configured" });
@@ -358,7 +388,12 @@ router.get("/auth/linkedin", (req, res) => {
     return res.status(401).json({ error: "Not authenticated" });
   }
 
-  const state = createOAuthState(userId);
+  const brandId = await resolveConnectBrandId(req.query.brandId);
+  if (!brandId) {
+    return res.redirect(`${getSettingsRedirectUrl()}&error=invalid_brand`);
+  }
+
+  const state = createOAuthState(userId, brandId);
   const callbackUrl = `${getCallbackBaseUrl()}/api/auth/linkedin/callback`;
   const scopes = ["openid", "profile", "w_member_social", "offline_access"].join(" ");
 
@@ -377,7 +412,8 @@ router.get("/auth/linkedin/callback", async (req, res) => {
   try {
     const { code, state } = req.query;
 
-    if (!validateOAuthState(state as string | undefined, req.user?.id)) {
+    const stateData = consumeOAuthState(state as string | undefined, req.user?.id);
+    if (!stateData) {
       return res.redirect(`${getSettingsRedirectUrl()}&error=invalid_state`);
     }
 
@@ -440,6 +476,7 @@ router.get("/auth/linkedin/callback", async (req, res) => {
       accessToken: encryptToken(tokenData.access_token),
       refreshToken: tokenData.refresh_token ? encryptToken(tokenData.refresh_token) : null,
       tokenExpiry: expiresAt,
+      brandId: stateData.brandId,
       status: "connected",
     });
 
@@ -450,7 +487,7 @@ router.get("/auth/linkedin/callback", async (req, res) => {
   }
 });
 
-router.get("/auth/tiktok", (req, res) => {
+router.get("/auth/tiktok", async (req, res) => {
   const clientKey = process.env[TIKTOK_ENV_VARS.clientId];
   if (!clientKey) {
     return res.status(500).json({ error: "TikTok Client Key not configured" });
@@ -461,10 +498,15 @@ router.get("/auth/tiktok", (req, res) => {
     return res.status(401).json({ error: "Not authenticated" });
   }
 
+  const brandId = await resolveConnectBrandId(req.query.brandId);
+  if (!brandId) {
+    return res.redirect(`${getSettingsRedirectUrl()}&error=invalid_brand`);
+  }
+
   const { verifier, challenge } = generatePKCE();
   const state = crypto.randomBytes(16).toString("hex");
 
-  pkceStore.set(state, { verifier, userId, expiresAt: Date.now() + STATE_TTL_MS });
+  pkceStore.set(state, { verifier, userId, brandId, expiresAt: Date.now() + STATE_TTL_MS });
 
   const callbackUrl = `${getCallbackBaseUrl()}/api/auth/tiktok/callback`;
   const scopes = ["user.info.basic", "video.publish", "video.upload"].join(",");
@@ -569,6 +611,7 @@ router.get("/auth/tiktok/callback", async (req, res) => {
       refreshToken: tokenData.refresh_token ? encryptToken(tokenData.refresh_token) : null,
       tokenExpiry: expiresAt,
       profileImageUrl,
+      brandId: pkceData.brandId,
       status: "connected",
     });
 
@@ -579,7 +622,7 @@ router.get("/auth/tiktok/callback", async (req, res) => {
   }
 });
 
-router.get("/auth/youtube", (req, res) => {
+router.get("/auth/youtube", async (req, res) => {
   const clientId = process.env.SparqForge_Google_Client_ID;
   if (!clientId) {
     return res.status(500).json({ error: "Google Client ID not configured" });
@@ -590,7 +633,12 @@ router.get("/auth/youtube", (req, res) => {
     return res.status(401).json({ error: "Not authenticated" });
   }
 
-  const state = createOAuthState(userId);
+  const brandId = await resolveConnectBrandId(req.query.brandId);
+  if (!brandId) {
+    return res.redirect(`${getSettingsRedirectUrl()}&error=invalid_brand`);
+  }
+
+  const state = createOAuthState(userId, brandId);
   const callbackUrl = `${getCallbackBaseUrl()}/api/auth/youtube/callback`;
   const scopes = [
     "https://www.googleapis.com/auth/youtube.upload",
@@ -614,7 +662,8 @@ router.get("/auth/youtube/callback", async (req, res) => {
   try {
     const { code, state } = req.query;
 
-    if (!validateOAuthState(state as string | undefined, req.user?.id)) {
+    const stateData = consumeOAuthState(state as string | undefined, req.user?.id);
+    if (!stateData) {
       return res.redirect(`${getSettingsRedirectUrl()}&error=invalid_state`);
     }
 
@@ -674,39 +723,18 @@ router.get("/auth/youtube/callback", async (req, res) => {
       ? new Date(Date.now() + tokenData.expires_in * 1000)
       : new Date(Date.now() + 3600 * 1000);
 
-    const [existing] = await db.select({ id: socialAccountsTable.id })
-      .from(socialAccountsTable)
-      .where(and(
-        eq(socialAccountsTable.platform, "youtube"),
-        eq(socialAccountsTable.accountId, accountId),
-      ));
-
-    if (existing) {
-      await db.update(socialAccountsTable)
-        .set({
-          accountName,
-          accessToken: encryptToken(tokenData.access_token),
-          refreshToken: tokenData.refresh_token ? encryptToken(tokenData.refresh_token) : undefined,
-          tokenExpiry: expiresAt,
-          avatarUrl,
-          platformMetadata: subscriberCount ? { subscriberCount } : null,
-          status: "connected",
-          updatedAt: new Date(),
-        })
-        .where(eq(socialAccountsTable.id, existing.id));
-    } else {
-      await db.insert(socialAccountsTable).values({
-        platform: "youtube",
-        accountName,
-        accountId,
-        accessToken: encryptToken(tokenData.access_token),
-        refreshToken: tokenData.refresh_token ? encryptToken(tokenData.refresh_token) : null,
-        tokenExpiry: expiresAt,
-        avatarUrl,
-        platformMetadata: subscriberCount ? { subscriberCount } : null,
-        status: "connected",
-      });
-    }
+    await upsertSocialAccount({
+      platform: "youtube",
+      accountName,
+      accountId,
+      accessToken: encryptToken(tokenData.access_token),
+      refreshToken: tokenData.refresh_token ? encryptToken(tokenData.refresh_token) : null,
+      tokenExpiry: expiresAt,
+      avatarUrl,
+      platformMetadata: subscriberCount ? { subscriberCount } : null,
+      brandId: stateData.brandId,
+      status: "connected",
+    });
 
     res.redirect(`${getSettingsRedirectUrl()}&success=youtube`);
   } catch (err) {
