@@ -47,3 +47,11 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Local runtime uploads (never commit user/generated media)
+uploads/

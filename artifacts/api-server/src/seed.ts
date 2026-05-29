@@ -211,6 +211,11 @@ const TEMPLATES_BY_BRAND: Record<string, Array<{
 };
 
 export async function seedDatabase() {
+  if (process.env.SEED_DEMO_DATA !== "true") {
+    console.log("SEED_DEMO_DATA not set; skipping demo seed.");
+    return;
+  }
+
   const existingBrands = await db.select({ id: brandsTable.id }).from(brandsTable);
   if (existingBrands.length > 0) {
     console.log(`Database already has ${existingBrands.length} brands, skipping seed.`);
