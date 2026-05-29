@@ -25,7 +25,7 @@ export function validateRequest(schemas: ValidationSchemas) {
       if (!result.success) {
         errors.push({ location: "query", issues: result.error.issues });
       } else {
-        (req as Record<string, unknown>).query = result.data;
+        (req as unknown as Record<string, unknown>).query = result.data;
       }
     }
 
@@ -34,7 +34,7 @@ export function validateRequest(schemas: ValidationSchemas) {
       if (!result.success) {
         errors.push({ location: "params", issues: result.error.issues });
       } else {
-        (req as Record<string, unknown>).params = result.data;
+        (req as unknown as Record<string, unknown>).params = result.data;
       }
     }
 

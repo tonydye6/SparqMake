@@ -1,3 +1,4 @@
+import { str } from "../lib/http-params.js";
 import { Router, type IRouter } from "express";
 import { eq, and, gte, lte, ne, sql } from "drizzle-orm";
 import {
@@ -238,7 +239,7 @@ router.post(
 
     const creativeMap = new Map(creatives.map((c: { id: string; name: string; brandId: string; status: string }) => [c.id, c]));
 
-    const notFound = creativeIds.filter((id) => !creativeMap.has(id));
+    const notFound = creativeIds.filter((id: string) => !creativeMap.has(id));
     if (notFound.length > 0) {
       res.status(400).json({ error: `Creatives not found: ${notFound.join(", ")}` });
       return;
@@ -408,7 +409,7 @@ router.post(
   "/creatives/:creativeId/smart-schedule",
   validateRequest({ params: z.object({ creativeId: z.string().min(1) }) }),
   async (req, res): Promise<void> => {
-    const { creativeId } = req.params;
+    const creativeId = str(req.params.creativeId);
 
     const creative = await db
       .select()
@@ -560,7 +561,7 @@ router.get(
   "/smart-schedule/proposals/:creativeId",
   validateRequest({ params: z.object({ creativeId: z.string().min(1) }) }),
   async (req, res): Promise<void> => {
-    const { creativeId } = req.params;
+    const creativeId = str(req.params.creativeId);
 
     const proposals = await db
       .select()

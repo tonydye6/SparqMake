@@ -1,3 +1,4 @@
+import { str } from "../lib/http-params.js";
 import { Router, type IRouter } from "express";
 import { eq, and, ilike, or, inArray, desc, sql, arrayContains } from "drizzle-orm";
 import { db, assetsTable, creativesTable } from "@workspace/db";
@@ -194,7 +195,7 @@ router.get("/assets/recommended", async (req, res): Promise<void> => {
 });
 
 router.get("/assets/:id", validateRequest({ params: GetAssetParams }), async (req, res): Promise<void> => {
-  const [asset] = await db.select().from(assetsTable).where(eq(assetsTable.id, req.params.id));
+  const [asset] = await db.select().from(assetsTable).where(eq(assetsTable.id, str(req.params.id)));
   if (!asset) {
     res.status(404).json({ error: "Asset not found" });
     return;
@@ -213,7 +214,7 @@ router.put("/assets/:id", validateRequest({ params: UpdateAssetParams, body: Upd
   const [asset] = await db
     .update(assetsTable)
     .set(updateData)
-    .where(eq(assetsTable.id, req.params.id))
+    .where(eq(assetsTable.id, str(req.params.id)))
     .returning();
 
   if (!asset) {
@@ -225,7 +226,7 @@ router.put("/assets/:id", validateRequest({ params: UpdateAssetParams, body: Upd
 });
 
 router.put("/assets/:id/metadata", async (req, res): Promise<void> => {
-  const assetId = req.params.id;
+  const assetId = str(req.params.id);
   const {
     assetClass,
     generationRole,
@@ -297,7 +298,7 @@ router.put("/assets/:id/metadata", async (req, res): Promise<void> => {
 });
 
 router.delete("/assets/:id", validateRequest({ params: DeleteAssetParams }), async (req, res): Promise<void> => {
-  const [asset] = await db.delete(assetsTable).where(eq(assetsTable.id, req.params.id)).returning();
+  const [asset] = await db.delete(assetsTable).where(eq(assetsTable.id, str(req.params.id))).returning();
   if (!asset) {
     res.status(404).json({ error: "Asset not found" });
     return;
@@ -307,7 +308,7 @@ router.delete("/assets/:id", validateRequest({ params: DeleteAssetParams }), asy
 });
 
 router.get("/assets/:id/usage", async (req, res): Promise<void> => {
-  const assetId = req.params.id;
+  const assetId = str(req.params.id);
 
   const [asset] = await db.select().from(assetsTable).where(eq(assetsTable.id, assetId));
   if (!asset) {

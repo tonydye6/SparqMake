@@ -1,3 +1,4 @@
+import { str } from "../lib/http-params.js";
 import { Router, type IRouter } from "express";
 import { eq, and, gte, sql } from "drizzle-orm";
 import { db, creativesTable, creativeVariantsTable, calendarEntriesTable } from "@workspace/db";
@@ -111,7 +112,7 @@ router.post("/creatives", validateRequest({ body: CreateCreativeBody }), async (
 });
 
 router.get("/creatives/:id", validateRequest({ params: GetCreativeParams }), async (req, res): Promise<void> => {
-  const [campaign] = await db.select().from(creativesTable).where(eq(creativesTable.id, req.params.id));
+  const [campaign] = await db.select().from(creativesTable).where(eq(creativesTable.id, str(req.params.id)));
   if (!campaign) {
     res.status(404).json({ error: "Creative not found" });
     return;
@@ -136,7 +137,7 @@ router.put("/creatives/:id", validateRequest({ params: UpdateCreativeParams, bod
   const [campaign] = await db
     .update(creativesTable)
     .set({ ...safeUpdates, updatedAt: new Date() })
-    .where(eq(creativesTable.id, req.params.id))
+    .where(eq(creativesTable.id, str(req.params.id)))
     .returning();
 
   if (!campaign) {
@@ -165,7 +166,7 @@ router.post("/creatives/:id/review", requireRole("editor"), validateRequest({ pa
       reviewedAt: new Date(),
       updatedAt: new Date(),
     } as Record<string, unknown>)
-    .where(eq(creativesTable.id, req.params.id))
+    .where(eq(creativesTable.id, str(req.params.id)))
     .returning();
 
   if (!campaign) {
@@ -177,7 +178,7 @@ router.post("/creatives/:id/review", requireRole("editor"), validateRequest({ pa
 });
 
 router.post("/creatives/:id/schedule", async (req, res): Promise<void> => {
-  const creativeId = req.params.id;
+  const creativeId = str(req.params.id);
   const { scheduledAt, perPlatform, socialAccounts: socialAccountsMap } = req.body as {
     scheduledAt?: string;
     perPlatform?: Record<string, string>;
@@ -228,7 +229,7 @@ router.post("/creatives/:id/schedule", async (req, res): Promise<void> => {
 });
 
 router.post("/creatives/:id/analyze-url", async (req, res): Promise<void> => {
-  const creativeId = req.params.id;
+  const creativeId = str(req.params.id);
   const { url } = req.body as { url?: string };
 
   if (!url) {
@@ -299,7 +300,7 @@ router.post("/creatives/:id/analyze-url", async (req, res): Promise<void> => {
 });
 
 router.post("/creatives/:id/analyze-upload", upload.single("screenshot"), async (req, res): Promise<void> => {
-  const creativeId = req.params.id;
+  const creativeId = str(req.params.id);
   const file = req.file;
 
   if (!file) {
@@ -372,7 +373,7 @@ router.post("/creatives/:id/analyze-upload", upload.single("screenshot"), async 
 });
 
 router.delete("/creatives/:id/reference", async (req, res): Promise<void> => {
-  const creativeId = req.params.id;
+  const creativeId = str(req.params.id);
 
   const [campaign] = await db.select().from(creativesTable).where(eq(creativesTable.id, creativeId));
   if (!campaign) {

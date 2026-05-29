@@ -1,3 +1,4 @@
+import { str } from "../lib/http-params.js";
 import { Router, type IRouter } from "express";
 import { eq, and, or, sql, SQL, ilike } from "drizzle-orm";
 import { db, socialContentPlanItemsTable, brandsTable, templatesTable, creativesTable, type PlanItem } from "@workspace/db";
@@ -205,7 +206,7 @@ router.get("/content-plan", async (req, res): Promise<void> => {
 
 router.get("/content-plan/:id", async (req, res): Promise<void> => {
   const [item] = await db.select().from(socialContentPlanItemsTable)
-    .where(eq(socialContentPlanItemsTable.id, req.params.id));
+    .where(eq(socialContentPlanItemsTable.id, str(req.params.id)));
 
   if (!item) {
     res.status(404).json({ error: "Plan item not found" });
@@ -266,7 +267,7 @@ router.put("/content-plan/:id", validateRequest({ body: UpdatePlanItemBody }), a
 
   const [item] = await db.update(socialContentPlanItemsTable)
     .set({ ...updateFields, updatedAt: new Date() })
-    .where(eq(socialContentPlanItemsTable.id, req.params.id))
+    .where(eq(socialContentPlanItemsTable.id, str(req.params.id)))
     .returning();
 
   if (!item) {
@@ -279,7 +280,7 @@ router.put("/content-plan/:id", validateRequest({ body: UpdatePlanItemBody }), a
 
 router.delete("/content-plan/:id", async (req, res): Promise<void> => {
   const [item] = await db.delete(socialContentPlanItemsTable)
-    .where(eq(socialContentPlanItemsTable.id, req.params.id))
+    .where(eq(socialContentPlanItemsTable.id, str(req.params.id)))
     .returning();
 
   if (!item) {
@@ -292,7 +293,7 @@ router.delete("/content-plan/:id", async (req, res): Promise<void> => {
 
 router.post("/content-plan/:id/create-creative", async (req, res): Promise<void> => {
   const [planItem] = await db.select().from(socialContentPlanItemsTable)
-    .where(eq(socialContentPlanItemsTable.id, req.params.id));
+    .where(eq(socialContentPlanItemsTable.id, str(req.params.id)));
 
   if (!planItem) {
     res.status(404).json({ error: "Plan item not found" });

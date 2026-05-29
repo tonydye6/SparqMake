@@ -1,3 +1,4 @@
+import { str } from "../lib/http-params.js";
 import { Router, type IRouter } from "express";
 import { eq, and } from "drizzle-orm";
 import { db, brandsTable, brandScheduleProfilesTable, costLogsTable } from "@workspace/db";
@@ -28,7 +29,7 @@ const PLATFORM_BASELINES: Record<string, string> = {
 };
 
 router.get("/brands/:brandId/schedule-profile", async (req, res): Promise<void> => {
-  const { brandId } = req.params;
+  const brandId = str(req.params.brandId);
 
   const [brand] = await db.select().from(brandsTable).where(eq(brandsTable.id, brandId));
   if (!brand) {
@@ -70,7 +71,7 @@ function validateSlot(slot: { platform?: string; day?: number; hour?: number; sc
 }
 
 router.put("/brands/:brandId/schedule-profile", async (req, res): Promise<void> => {
-  const { brandId } = req.params;
+  const brandId = str(req.params.brandId);
   const { slots } = req.body as { slots: Array<{ platform: string; day: number; hour: number; score: number; status: string }> };
 
   if (!Array.isArray(slots)) {
@@ -131,7 +132,7 @@ router.put("/brands/:brandId/schedule-profile", async (req, res): Promise<void> 
 });
 
 router.post("/brands/:brandId/schedule-profile/generate", generationLimiter, async (req, res): Promise<void> => {
-  const { brandId } = req.params;
+  const brandId = str(req.params.brandId);
   const { platform } = req.body as { platform?: string };
 
   const [brand] = await db.select().from(brandsTable).where(eq(brandsTable.id, brandId));

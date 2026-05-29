@@ -1,3 +1,4 @@
+import { str } from "../lib/http-params.js";
 import { Router, type IRouter, type Request, type Response } from "express";
 import { eq, and, inArray } from "drizzle-orm";
 import { db, creativesTable, creativeVariantsTable, costLogsTable, refinementLogsTable, templatesTable, appSettingsTable, assetsTable, assetPairingsTable, brandsTable, generationPacketLogsTable } from "@workspace/db";
@@ -135,7 +136,7 @@ async function buildReferenceImages(packet: Awaited<ReturnType<typeof buildGener
 }
 
 router.post("/creatives/:id/generate", generationLimiter, async (req: Request, res: Response): Promise<void> => {
-  const creativeId = req.params.id;
+  const creativeId = str(req.params.id);
 
   const [campaign] = await db.select().from(creativesTable).where(eq(creativesTable.id, creativeId));
   if (!campaign) {
@@ -204,7 +205,7 @@ router.post("/creatives/:id/generate", generationLimiter, async (req: Request, r
       }
 
       await tx.insert(costLogsTable).values({
-        id: reservationId,
+        id: reservationId!,
         creativeId,
         service: "system",
         operation: "budget_reservation",
@@ -341,7 +342,7 @@ router.post("/creatives/:id/generate", generationLimiter, async (req: Request, r
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `sparqmake-gen-${creativeId}-`));
     const stagedFiles: Array<{ tmpPath: string; finalPath: string }> = [];
 
-    const variantRecords = [];
+    const variantRecords: (typeof creativeVariantsTable.$inferInsert)[] = [];
 
     for (const img of images) {
       const platformKey = img.platform as keyof typeof captions;
@@ -554,7 +555,7 @@ router.post("/creatives/:id/generate", generationLimiter, async (req: Request, r
 });
 
 router.put("/creatives/:id/variants/:variantId/caption", validateRequest({ params: CreativeVariantParams, body: UpdateCaptionBody }), async (req: Request, res: Response): Promise<void> => {
-  const { id: creativeId, variantId } = req.params;
+  const creativeId = str(req.params.id), variantId = str(req.params.variantId);
   const { caption } = req.body;
 
   const [variant] = await db.select().from(creativeVariantsTable)
@@ -589,7 +590,7 @@ router.put("/creatives/:id/variants/:variantId/caption", validateRequest({ param
 });
 
 router.put("/creatives/:id/variants/:variantId/headline", validateRequest({ params: CreativeVariantParams, body: UpdateHeadlineBody }), async (req: Request, res: Response): Promise<void> => {
-  const { id: creativeId, variantId } = req.params;
+  const creativeId = str(req.params.id), variantId = str(req.params.variantId);
   const { headline } = req.body;
 
   const [variant] = await db.select().from(creativeVariantsTable)
@@ -671,7 +672,7 @@ router.put("/creatives/:id/variants/:variantId/headline", validateRequest({ para
 });
 
 router.post("/creatives/:id/variants/:variantId/regenerate", generationLimiter, async (req: Request, res: Response): Promise<void> => {
-  const { id: creativeId, variantId } = req.params;
+  const creativeId = str(req.params.id), variantId = str(req.params.variantId);
   const { instruction } = req.body || {};
 
   const [campaign] = await db.select().from(creativesTable).where(eq(creativesTable.id, creativeId));
@@ -720,7 +721,7 @@ router.post("/creatives/:id/variants/:variantId/regenerate", generationLimiter, 
       }
 
       await tx.insert(costLogsTable).values({
-        id: reservationId,
+        id: reservationId!,
         creativeId,
         service: "system",
         operation: "budget_reservation",

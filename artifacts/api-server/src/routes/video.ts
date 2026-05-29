@@ -1,3 +1,4 @@
+import { str } from "../lib/http-params.js";
 import { Router, type IRouter, type Request, type Response } from "express";
 import { eq } from "drizzle-orm";
 import { db, creativesTable, creativeVariantsTable, costLogsTable } from "@workspace/db";
@@ -41,7 +42,7 @@ const audioUpload = multer({
 });
 
 router.post("/creatives/:id/generate-video", generationLimiter, async (req: Request, res: Response): Promise<void> => {
-  const creativeId = req.params.id;
+  const creativeId = str(req.params.id);
   const { orientations } = req.body;
 
   const [campaign] = await db.select().from(creativesTable).where(eq(creativesTable.id, creativeId));
@@ -184,7 +185,7 @@ router.post("/creatives/:id/generate-video", generationLimiter, async (req: Requ
 });
 
 router.post("/creatives/:id/variants/:variantId/audio", generationLimiter, async (req: Request, res: Response): Promise<void> => {
-  const { id: creativeId, variantId } = req.params;
+  const creativeId = str(req.params.id), variantId = str(req.params.variantId);
   const { type, prompt, mode, audioVolume, videoVolume } = req.body;
 
   const [variant] = await db.select().from(creativeVariantsTable)
@@ -292,7 +293,7 @@ router.post("/creatives/:id/variants/:variantId/audio", generationLimiter, async
 });
 
 router.post("/creatives/:id/variants/:variantId/audio-upload", generationLimiter, audioUpload.single("audio"), async (req: Request, res: Response): Promise<void> => {
-  const { id: creativeId, variantId } = req.params;
+  const creativeId = str(req.params.id), variantId = str(req.params.variantId);
   const mode = (req.body?.mode || "replace") as MergeMode;
 
   const [variant] = await db.select().from(creativeVariantsTable)

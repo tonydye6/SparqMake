@@ -84,7 +84,7 @@ async function refreshTwitterToken(account: SocialAccountRecord): Promise<void> 
     throw new Error(`Twitter refresh failed: ${response.status}`);
   }
 
-  const data: TwitterTokenResponse = await response.json();
+  const data = (await response.json()) as TwitterTokenResponse;
   const expiresAt = data.expires_in ? new Date(Date.now() + data.expires_in * 1000) : null;
 
   await db
@@ -121,7 +121,7 @@ async function refreshLinkedInToken(account: SocialAccountRecord): Promise<void>
     throw new Error(`LinkedIn refresh failed: ${response.status}`);
   }
 
-  const data: LinkedInTokenResponse = await response.json();
+  const data = (await response.json()) as LinkedInTokenResponse;
   const expiresAt = data.expires_in
     ? new Date(Date.now() + data.expires_in * 1000)
     : new Date(Date.now() + 60 * 24 * 60 * 60 * 1000);
@@ -160,7 +160,7 @@ async function refreshTikTokToken(account: SocialAccountRecord): Promise<void> {
     throw new Error(`TikTok refresh failed: ${response.status}`);
   }
 
-  const data: TikTokTokenResponse = await response.json();
+  const data = (await response.json()) as TikTokTokenResponse;
   const expiresAt = data.expires_in ? new Date(Date.now() + data.expires_in * 1000) : null;
 
   await db
@@ -197,7 +197,7 @@ async function refreshYouTubeToken(account: SocialAccountRecord): Promise<void> 
     throw new Error(`YouTube refresh failed: ${response.status}`);
   }
 
-  const data: GoogleTokenResponse = await response.json();
+  const data = (await response.json()) as GoogleTokenResponse;
   const expiresAt = data.expires_in
     ? new Date(Date.now() + data.expires_in * 1000)
     : new Date(Date.now() + 3600 * 1000);
@@ -233,7 +233,7 @@ async function refreshInstagramToken(account: SocialAccountRecord): Promise<void
     throw new Error(`Instagram refresh failed: ${response.status}`);
   }
 
-  const data: FacebookTokenResponse = await response.json();
+  const data = (await response.json()) as FacebookTokenResponse;
   const expiresIn = data.expires_in || 5184000;
 
   await db

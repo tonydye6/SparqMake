@@ -52,14 +52,12 @@ export async function generateVideo(
 
   const operation = await ai.models.generateVideos({
     model: AI_MODELS.VEO_VIDEO,
-    request: {
-      prompt: fullPrompt,
-      config: {
-        aspectRatio: config.aspectRatio,
-        numberOfVideos: 1,
-        durationSeconds: 6,
-        personGeneration: "dont_allow",
-      },
+    prompt: fullPrompt,
+    config: {
+      aspectRatio: config.aspectRatio,
+      numberOfVideos: 1,
+      durationSeconds: 6,
+      personGeneration: "dont_allow",
     },
   });
 

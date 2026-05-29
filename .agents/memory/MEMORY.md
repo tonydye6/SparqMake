@@ -1,2 +1,3 @@
 - [GitHub push refspec](github-push.md) — local branch is `master` but GitHub default is `main`; push with `git push github master:main` and verify via `ls-remote`.
-- [Typecheck baseline is red](typecheck-baseline.md) — repo-wide `pnpm run typecheck` fails at baseline (api-zod codegen + integration libs missing @types/node → TS6305/TS2305 cascade); validate per-package, grep for your files.
+- [Typecheck baseline now green](typecheck-baseline.md) — repo-wide `pnpm run typecheck` now exits 0 (fixed api-zod codegen, integration lib @types/node, api-server + sparqmake errors); a red result now means a real regression.
+- [api-client data wrapper mismatch](api-client-data-wrapper.md) — generated react-query hooks type list endpoints as bare arrays, but server returns `{ data: [...] }`; keep `.data` access, cast hook result; deleting `.data` breaks runtime.

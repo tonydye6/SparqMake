@@ -380,7 +380,7 @@ export default function Calendar() {
         toastConfig.description = "Smart Schedule optimization may no longer apply to this post.";
       }
 
-      toast(toastConfig);
+      toast(toastConfig as Parameters<typeof toast>[0]);
     }
   }, [entries, toast, checkConflicts, fetchEntries]);
 

@@ -21,31 +21,31 @@ export function PlatformPreviewWrapper({
     case "tiktok":
       return (
         <div className="max-w-[180px]">
-          <TikTokPreviewFrame imageUrl={imageUrl} caption={caption} />
+          <TikTokPreviewFrame imageUrl={imageUrl ?? undefined} caption={caption ?? undefined} />
         </div>
       );
     case "instagram_feed":
       return (
         <div className="max-w-[280px]">
-          <InstagramFeedPreviewFrame imageUrl={imageUrl} caption={caption} />
+          <InstagramFeedPreviewFrame imageUrl={imageUrl ?? undefined} caption={caption ?? undefined} />
         </div>
       );
     case "instagram_story":
       return (
         <div className="max-w-[180px]">
-          <InstagramStoryPreviewFrame imageUrl={imageUrl} caption={caption} />
+          <InstagramStoryPreviewFrame imageUrl={imageUrl ?? undefined} caption={caption ?? undefined} />
         </div>
       );
     case "twitter":
       return (
         <div className="max-w-[320px]">
-          <TwitterPreviewFrame imageUrl={imageUrl} caption={caption} />
+          <TwitterPreviewFrame imageUrl={imageUrl ?? undefined} caption={caption ?? undefined} />
         </div>
       );
     case "linkedin":
       return (
         <div className="max-w-[320px]">
-          <LinkedInPreviewFrame imageUrl={imageUrl} caption={caption} />
+          <LinkedInPreviewFrame imageUrl={imageUrl ?? undefined} caption={caption ?? undefined} />
         </div>
       );
     default:

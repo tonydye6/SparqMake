@@ -73,7 +73,7 @@ async function initVideoUpload(
     return { error: `TikTok video init failed (${resp.status}): ${errBody}`, httpStatus: resp.status };
   }
 
-  const data: TikTokPublishInitResponse = await resp.json();
+  const data = (await resp.json()) as TikTokPublishInitResponse;
 
   if (data.error && data.error.code !== "ok") {
     return { error: `TikTok API error: ${data.error.message}`, httpStatus: resp.status };
@@ -139,7 +139,7 @@ async function initPhotoPost(
     return { error: `TikTok photo init failed (${resp.status}): ${errBody}`, httpStatus: resp.status };
   }
 
-  const data: TikTokPublishInitResponse = await resp.json();
+  const data = (await resp.json()) as TikTokPublishInitResponse;
 
   if (data.error && data.error.code !== "ok") {
     return { error: `TikTok API error: ${data.error.message}`, httpStatus: resp.status };
@@ -165,7 +165,7 @@ async function checkPublishStatus(
     return { status: "FAILED", error: `Status check failed (${resp.status})` };
   }
 
-  const data: TikTokPublishStatusResponse = await resp.json();
+  const data = (await resp.json()) as TikTokPublishStatusResponse;
 
   if (data.error && data.error.code !== "ok") {
     return { status: "FAILED", error: data.error.message };

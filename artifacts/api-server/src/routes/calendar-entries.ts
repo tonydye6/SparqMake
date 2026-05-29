@@ -1,3 +1,4 @@
+import { str } from "../lib/http-params.js";
 import { Router, type IRouter } from "express";
 import { eq, and, gte, lte, sql } from "drizzle-orm";
 import { db, calendarEntriesTable, creativesTable, creativeVariantsTable, brandsTable, socialAccountsTable } from "@workspace/db";
@@ -116,7 +117,7 @@ router.post("/calendar-entries", validateRequest({ body: CreateCalendarEntryBody
 });
 
 router.put("/calendar-entries/:id", validateRequest({ params: IdParams, body: UpdateCalendarEntryBody }), async (req, res): Promise<void> => {
-  const { id } = req.params;
+  const id = str(req.params.id);
   const updates: Record<string, unknown> = {};
 
   if (req.body.scheduledAt) {
@@ -149,7 +150,7 @@ router.put("/calendar-entries/:id", validateRequest({ params: IdParams, body: Up
 });
 
 router.post("/calendar-entries/:id/publish", validateRequest({ params: IdParams }), async (req, res): Promise<void> => {
-  const { id } = req.params;
+  const id = str(req.params.id);
 
   const [entry] = await db.select().from(calendarEntriesTable)
     .where(eq(calendarEntriesTable.id, id as string));
@@ -190,7 +191,7 @@ router.post("/calendar-entries/:id/publish", validateRequest({ params: IdParams 
 });
 
 router.post("/calendar-entries/:id/retry", validateRequest({ params: IdParams }), async (req, res): Promise<void> => {
-  const { id } = req.params;
+  const id = str(req.params.id);
 
   const [entry] = await db.select().from(calendarEntriesTable)
     .where(eq(calendarEntriesTable.id, id as string));
@@ -217,7 +218,7 @@ router.post("/calendar-entries/:id/retry", validateRequest({ params: IdParams })
 });
 
 router.delete("/calendar-entries/:id", validateRequest({ params: IdParams }), async (req, res): Promise<void> => {
-  const { id } = req.params;
+  const id = str(req.params.id);
 
   const [entry] = await db
     .delete(calendarEntriesTable)

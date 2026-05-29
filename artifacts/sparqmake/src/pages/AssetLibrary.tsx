@@ -9,7 +9,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { 
   useGetAssets, useUpdateAsset, useDeleteAsset, useCreateAsset,
   useGetBrands, useGetHashtagSets, useCreateHashtagSet, useUpdateHashtagSet, useDeleteHashtagSet,
-  type Asset
+  type Asset,
+  type HashtagSet,
+  type CreateAssetInput,
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
@@ -78,17 +80,17 @@ export default function AssetLibrary() {
     status: statusFilter !== "all" ? statusFilter : undefined,
     search: searchQuery || undefined,
     limit: 200
-  });
+  }) as unknown as { data?: { data?: Asset[] }; isLoading: boolean };
   
   const { data: briefs, isLoading: briefsLoading } = useGetAssets({ 
     type: "context",
     brandId: selectedBrand !== "all" ? selectedBrand : undefined,
     limit: 200
-  });
+  }) as unknown as { data?: { data?: Asset[] }; isLoading: boolean };
 
   const { data: hashtagSets } = useGetHashtagSets({
     brandId: selectedBrand !== "all" ? selectedBrand : undefined,
-  });
+  }) as unknown as { data?: { data?: HashtagSet[] } };
 
   interface UploadItem {
     id: string;
@@ -786,7 +788,7 @@ function BriefsTab({ briefs, brands, isLoading }: { briefs: Asset[], brands: any
         content: data.content,
         status: "approved",
         tags: data.tags ? data.tags.split(",").map((s:string) => s.trim()) : [],
-      }
+      } as unknown as CreateAssetInput
     });
   };
 
@@ -1026,7 +1028,7 @@ function IntelligenceEditor({ asset, onUpdate, isPending }: { asset: Asset; onUp
   );
 }
 
-function HashtagsTab({ sets, brands }: { sets: any[], brands: any[] }) {
+function HashtagsTab({ sets, brands }: { sets: HashtagSet[], brands: any[] }) {
   const [isAddOpen, setIsAddOpen] = useState(false);
   const { register, handleSubmit, reset } = useForm();
   const queryClient = useQueryClient();

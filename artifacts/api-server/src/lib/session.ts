@@ -25,7 +25,7 @@ async function ensureSessionTable() {
   try {
     await (pool as any).query(SESSION_TABLE_SQL);
   } catch (err) {
-    logger.error("Failed to create session table:", err);
+    logger.error({ err }, "Failed to create session table");
   }
 }
 

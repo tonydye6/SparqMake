@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { useGetBrands, useGetCreatives, useUpdateCreative } from "@workspace/api-client-react";
+import { useGetBrands, useGetCreatives, useUpdateCreative, type Creative } from "@workspace/api-client-react";
 import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
 import { PlatformIcon } from "@/components/ui/platform-icon";
@@ -66,7 +66,7 @@ function getCategoryLabel(slug: string): string {
 
 export default function ReviewQueue() {
   const { data: brands } = useGetBrands();
-  const { data: creatives, isLoading } = useGetCreatives();
+  const { data: creatives, isLoading } = useGetCreatives() as unknown as { data?: { data?: Creative[] }; isLoading: boolean };
   const updateCreative = useUpdateCreative();
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -102,7 +102,7 @@ export default function ReviewQueue() {
 
   const filteredCreatives = useMemo(() => {
     if (!creatives?.data) return [];
-    return creatives?.data.filter(c => {
+    return creatives.data.filter(c => {
       if (brandFilter !== "all" && c.brandId !== brandFilter) return false;
       return c.status !== "draft";
     });
@@ -120,7 +120,7 @@ export default function ReviewQueue() {
 
   const expandedCreative = useMemo(() => {
     if (!expandedCreativeId || !creatives?.data) return null;
-    return creatives?.data.find(c => c.id === expandedCreativeId) || null;
+    return creatives.data.find(c => c.id === expandedCreativeId) || null;
   }, [expandedCreativeId, creatives]);
 
   const fetchVariants = useCallback(async (creativeId: string) => {
@@ -603,8 +603,8 @@ export default function ReviewQueue() {
               ) : (
                 <>
                 {/* Variant approval progress bar */}
-                {expandedCreative?.variants && expandedCreative.variants.length > 0 && (() => {
-                  const variantList = expandedCreative.variants;
+                {(expandedCreative as any)?.variants && (expandedCreative as any).variants.length > 0 && (() => {
+                  const variantList = (expandedCreative as any).variants;
                   const total = variantList.length;
                   const approved = variantList.filter((v: any) => v.status === "approved").length;
                   const rejected = variantList.filter((v: any) => v.status === "rejected").length;

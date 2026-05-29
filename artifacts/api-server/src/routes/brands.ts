@@ -1,3 +1,4 @@
+import { str } from "../lib/http-params.js";
 import { Router, type IRouter } from "express";
 import { eq, and } from "drizzle-orm";
 import { db, brandsTable, assetsTable } from "@workspace/db";
@@ -68,7 +69,7 @@ router.post("/brands", validateRequest({ body: CreateBrandBody }), async (req, r
 });
 
 router.get("/brands/:id", validateRequest({ params: GetBrandParams }), async (req, res): Promise<void> => {
-  const [brand] = await db.select().from(brandsTable).where(eq(brandsTable.id, req.params.id));
+  const [brand] = await db.select().from(brandsTable).where(eq(brandsTable.id, str(req.params.id)));
   if (!brand) {
     res.status(404).json({ error: "Brand not found" });
     return;
@@ -81,7 +82,7 @@ router.put("/brands/:id", validateRequest({ params: UpdateBrandParams, body: Upd
   const [brand] = await db
     .update(brandsTable)
     .set({ ...req.body, updatedAt: new Date() })
-    .where(eq(brandsTable.id, req.params.id))
+    .where(eq(brandsTable.id, str(req.params.id)))
     .returning();
 
   if (!brand) {
@@ -96,7 +97,7 @@ router.delete("/brands/:id", requireRole("admin"), validateRequest({ params: Del
   const [brand] = await db
     .update(brandsTable)
     .set({ isActive: false, updatedAt: new Date() })
-    .where(eq(brandsTable.id, req.params.id))
+    .where(eq(brandsTable.id, str(req.params.id)))
     .returning();
   if (!brand) {
     res.status(404).json({ error: "Brand not found" });
@@ -107,7 +108,7 @@ router.delete("/brands/:id", requireRole("admin"), validateRequest({ params: Del
 });
 
 router.get("/brands/:id/logos", async (req, res): Promise<void> => {
-  const brandId = req.params.id;
+  const brandId = str(req.params.id);
 
   const logos = await db.select().from(assetsTable)
     .where(and(
@@ -120,7 +121,7 @@ router.get("/brands/:id/logos", async (req, res): Promise<void> => {
 });
 
 router.post("/brands/:id/logos", upload.single("file"), async (req, res): Promise<void> => {
-  const brandId = req.params.id;
+  const brandId = str(req.params.id);
   const file = (req as any).file;
 
   if (!file) {
@@ -187,7 +188,7 @@ router.post("/brands/:id/logos", upload.single("file"), async (req, res): Promis
 });
 
 router.delete("/brands/:id/logos/:assetId", async (req, res): Promise<void> => {
-  const { id: brandId, assetId } = req.params;
+  const brandId = str(req.params.id), assetId = str(req.params.assetId);
 
   const [asset] = await db.select().from(assetsTable)
     .where(and(
@@ -207,7 +208,7 @@ router.delete("/brands/:id/logos/:assetId", async (req, res): Promise<void> => {
 });
 
 router.get("/brands/:id/fonts", async (req, res): Promise<void> => {
-  const brandId = req.params.id;
+  const brandId = str(req.params.id);
 
   const fonts = await db.select().from(assetsTable)
     .where(and(
@@ -219,7 +220,7 @@ router.get("/brands/:id/fonts", async (req, res): Promise<void> => {
 });
 
 router.post("/brands/:id/fonts", upload.single("file"), async (req, res): Promise<void> => {
-  const brandId = req.params.id;
+  const brandId = str(req.params.id);
   const file = (req as any).file;
 
   if (!file) {
@@ -293,7 +294,7 @@ router.post("/brands/:id/fonts", upload.single("file"), async (req, res): Promis
 });
 
 router.delete("/brands/:id/fonts/:assetId", async (req, res): Promise<void> => {
-  const { id: brandId, assetId } = req.params;
+  const brandId = str(req.params.id), assetId = str(req.params.assetId);
 
   const [asset] = await db.select().from(assetsTable)
     .where(and(
@@ -331,7 +332,7 @@ const AssetConfigSchema = z.object({
 }).strict();
 
 router.put("/brands/:id/asset-config", async (req, res): Promise<void> => {
-  const brandId = req.params.id;
+  const brandId = str(req.params.id);
   const parsed = AssetConfigSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Invalid asset config", details: parsed.error.issues });

@@ -7,7 +7,11 @@ import {
   useGetTemplates,
   useGetAssets,
   useCreateCreative,
-  type Asset
+  getGetTemplatesQueryKey,
+  getGetAssetsQueryKey,
+  type Asset,
+  type Template,
+  type CreateCreativeInput,
 } from "@workspace/api-client-react";
 import { useToast } from "@/hooks/use-toast";
 import { ScheduleModal } from "@/components/ScheduleModal";
@@ -31,11 +35,11 @@ export default function CreativeStudio() {
   const { data: brands } = useGetBrands();
   const [selectedBrand, setSelectedBrand] = useState<string>("");
   
-  const { data: templates } = useGetTemplates({ brandId: selectedBrand || undefined }, { query: { enabled: !!selectedBrand } });
+  const { data: templates } = useGetTemplates({ brandId: selectedBrand || undefined }, { query: { enabled: !!selectedBrand, queryKey: getGetTemplatesQueryKey({ brandId: selectedBrand || undefined }) } }) as unknown as { data?: { data?: Template[] } };
   const [selectedTemplate, setSelectedTemplate] = useState<string>("");
 
-  const { data: approvedAssets } = useGetAssets({ brandId: selectedBrand || undefined, status: "approved" }, { query: { enabled: !!selectedBrand } });
-  const { data: briefs } = useGetAssets({ brandId: selectedBrand || undefined, type: "context" }, { query: { enabled: !!selectedBrand } });
+  const { data: approvedAssets } = useGetAssets({ brandId: selectedBrand || undefined, status: "approved" }, { query: { enabled: !!selectedBrand, queryKey: getGetAssetsQueryKey({ brandId: selectedBrand || undefined, status: "approved" }) } }) as unknown as { data?: { data?: Asset[] } };
+  const { data: briefs } = useGetAssets({ brandId: selectedBrand || undefined, type: "context" }, { query: { enabled: !!selectedBrand, queryKey: getGetAssetsQueryKey({ brandId: selectedBrand || undefined, type: "context" }) } }) as unknown as { data?: { data?: Asset[] } };
 
   const [creativeName, setCreativeName] = useState("");
   const [selectedAssets, setSelectedAssets] = useState<string[]>([]);
@@ -521,7 +525,7 @@ export default function CreativeStudio() {
         selectedAssets: selectedAssets.map((id, i) => ({ assetId: id, role: i === 0 ? "primary" : "supporting" })),
         sourceCreativeId: remixId || null,
         createdBy: "current_user",
-      }
+      } as CreateCreativeInput
     }, {
       onSuccess: (data) => {
         setCreativeId(data.id);
@@ -1115,7 +1119,7 @@ export default function CreativeStudio() {
         subjectAssetId={subjectAssetId}
         onSubjectAssetChange={setSubjectAssetId}
         recommendedSubjects={recommendedSubjects}
-        approvedVisualAssets={approvedAssets?.data?.filter(a => a.type === 'visual') || []}
+        approvedVisualAssets={approvedAssets?.data?.filter(a => a.type === "visual") || []}
         styleAssetIds={styleAssetIds}
         onToggleStyleAsset={toggleStyleAsset}
         recommendedStyles={recommendedStyles}

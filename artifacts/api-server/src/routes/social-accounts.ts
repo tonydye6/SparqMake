@@ -1,3 +1,4 @@
+import { str } from "../lib/http-params.js";
 import { Router } from "express";
 import { db, socialAccountsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
@@ -67,7 +68,7 @@ router.get("/social-accounts", async (_req, res) => {
 
 router.get("/social-accounts/platform/:platform", async (req, res) => {
   try {
-    const { platform } = req.params;
+    const platform = str(req.params.platform);
 
     const accounts = await db.select({
       id: socialAccountsTable.id,
@@ -89,7 +90,7 @@ router.get("/social-accounts/platform/:platform", async (req, res) => {
 
 router.delete("/social-accounts/:id", requireRole("admin"), async (req, res) => {
   try {
-    const { id } = req.params;
+    const id = str(req.params.id);
 
     const deleted = await db
       .delete(socialAccountsTable)
@@ -97,7 +98,8 @@ router.delete("/social-accounts/:id", requireRole("admin"), async (req, res) => 
       .returning();
 
     if (deleted.length === 0) {
-      return res.status(404).json({ error: "Social account not found" });
+      res.status(404).json({ error: "Social account not found" });
+      return;
     }
 
     res.json({ success: true });
@@ -109,7 +111,7 @@ router.delete("/social-accounts/:id", requireRole("admin"), async (req, res) => 
 
 router.post("/social-accounts/:id/refresh", requireRole("editor"), async (req, res) => {
   try {
-    const { id } = req.params;
+    const id = str(req.params.id);
 
     const accounts = await db
       .select()
@@ -117,7 +119,8 @@ router.post("/social-accounts/:id/refresh", requireRole("editor"), async (req, r
       .where(eq(socialAccountsTable.id, id));
 
     if (accounts.length === 0) {
-      return res.status(404).json({ error: "Social account not found" });
+      res.status(404).json({ error: "Social account not found" });
+      return;
     }
 
     const account = accounts[0];
@@ -145,10 +148,11 @@ router.post("/social-accounts/:id/refresh", requireRole("editor"), async (req, r
         } else {
           logger.warn({ id, status: tokenResponse.status }, "Transient token refresh failure; not marking expired");
         }
-        return res.status(400).json({ error: "Token refresh failed" });
+        res.status(400).json({ error: "Token refresh failed" });
+        return;
       }
 
-      const tokenData: TwitterTokenResponse = await tokenResponse.json();
+      const tokenData = (await tokenResponse.json()) as TwitterTokenResponse;
       const expiresAt = tokenData.expires_in
         ? new Date(Date.now() + tokenData.expires_in * 1000)
         : null;
@@ -164,7 +168,8 @@ router.post("/social-accounts/:id/refresh", requireRole("editor"), async (req, r
         })
         .where(eq(socialAccountsTable.id, id));
 
-      return res.json({ success: true, message: "Twitter token refreshed" });
+      res.json({ success: true, message: "Twitter token refreshed" });
+      return;
     }
 
     if (account.platform === "linkedin" && account.refreshToken) {
@@ -192,10 +197,11 @@ router.post("/social-accounts/:id/refresh", requireRole("editor"), async (req, r
         } else {
           logger.warn({ id, status: tokenResponse.status }, "Transient token refresh failure; not marking expired");
         }
-        return res.status(400).json({ error: "Token refresh failed" });
+        res.status(400).json({ error: "Token refresh failed" });
+        return;
       }
 
-      const tokenData: LinkedInTokenResponse = await tokenResponse.json();
+      const tokenData = (await tokenResponse.json()) as LinkedInTokenResponse;
       const expiresAt = tokenData.expires_in
         ? new Date(Date.now() + tokenData.expires_in * 1000)
         : new Date(Date.now() + 60 * 24 * 60 * 60 * 1000);
@@ -211,7 +217,8 @@ router.post("/social-accounts/:id/refresh", requireRole("editor"), async (req, r
         })
         .where(eq(socialAccountsTable.id, id));
 
-      return res.json({ success: true, message: "LinkedIn token refreshed" });
+      res.json({ success: true, message: "LinkedIn token refreshed" });
+      return;
     }
 
     if (account.platform === "youtube" && account.refreshToken) {
@@ -239,10 +246,11 @@ router.post("/social-accounts/:id/refresh", requireRole("editor"), async (req, r
         } else {
           logger.warn({ id, status: tokenResponse.status }, "Transient token refresh failure; not marking expired");
         }
-        return res.status(400).json({ error: "Token refresh failed" });
+        res.status(400).json({ error: "Token refresh failed" });
+        return;
       }
 
-      const tokenData: GoogleTokenResponse = await tokenResponse.json();
+      const tokenData = (await tokenResponse.json()) as GoogleTokenResponse;
       const expiresAt = tokenData.expires_in
         ? new Date(Date.now() + tokenData.expires_in * 1000)
         : new Date(Date.now() + 3600 * 1000);
@@ -258,7 +266,8 @@ router.post("/social-accounts/:id/refresh", requireRole("editor"), async (req, r
         })
         .where(eq(socialAccountsTable.id, id));
 
-      return res.json({ success: true, message: "YouTube token refreshed" });
+      res.json({ success: true, message: "YouTube token refreshed" });
+      return;
     }
 
     if (account.platform === "instagram") {
@@ -283,10 +292,11 @@ router.post("/social-accounts/:id/refresh", requireRole("editor"), async (req, r
         } else {
           logger.warn({ id, status: tokenResponse.status }, "Transient token refresh failure; not marking expired");
         }
-        return res.status(400).json({ error: "Token refresh failed" });
+        res.status(400).json({ error: "Token refresh failed" });
+        return;
       }
 
-      const tokenData: FacebookTokenResponse = await tokenResponse.json();
+      const tokenData = (await tokenResponse.json()) as FacebookTokenResponse;
       const expiresIn = tokenData.expires_in || 5184000;
 
       await db
@@ -299,7 +309,8 @@ router.post("/social-accounts/:id/refresh", requireRole("editor"), async (req, r
         })
         .where(eq(socialAccountsTable.id, id));
 
-      return res.json({ success: true, message: "Instagram token refreshed" });
+      res.json({ success: true, message: "Instagram token refreshed" });
+      return;
     }
 
     if (account.platform === "tiktok" && account.refreshToken) {
@@ -327,10 +338,11 @@ router.post("/social-accounts/:id/refresh", requireRole("editor"), async (req, r
         } else {
           logger.warn({ id, status: tokenResponse.status }, "Transient token refresh failure; not marking expired");
         }
-        return res.status(400).json({ error: "Token refresh failed" });
+        res.status(400).json({ error: "Token refresh failed" });
+        return;
       }
 
-      const tokenData: TikTokTokenResponse = await tokenResponse.json();
+      const tokenData = (await tokenResponse.json()) as TikTokTokenResponse;
       const expiresAt = tokenData.expires_in
         ? new Date(Date.now() + tokenData.expires_in * 1000)
         : null;
@@ -346,7 +358,8 @@ router.post("/social-accounts/:id/refresh", requireRole("editor"), async (req, r
         })
         .where(eq(socialAccountsTable.id, id));
 
-      return res.json({ success: true, message: "TikTok token refreshed" });
+      res.json({ success: true, message: "TikTok token refreshed" });
+      return;
     }
 
     res.status(400).json({ error: "No refresh mechanism available for this platform" });

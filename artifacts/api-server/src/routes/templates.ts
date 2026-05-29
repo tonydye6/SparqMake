@@ -1,3 +1,4 @@
+import { str } from "../lib/http-params.js";
 import { Router, type IRouter } from "express";
 import { eq, desc, and, sql } from "drizzle-orm";
 import { db, templatesTable, templateVersionsTable, templateRecommendationsTable, refinementLogsTable } from "@workspace/db";
@@ -51,7 +52,7 @@ router.post("/templates", validateRequest({ body: CreateTemplateBody }), async (
 });
 
 router.get("/templates/:id", validateRequest({ params: GetTemplateParams }), async (req, res): Promise<void> => {
-  const [template] = await db.select().from(templatesTable).where(eq(templatesTable.id, req.params.id));
+  const [template] = await db.select().from(templatesTable).where(eq(templatesTable.id, str(req.params.id)));
   if (!template) {
     res.status(404).json({ error: "Template not found" });
     return;
@@ -61,7 +62,7 @@ router.get("/templates/:id", validateRequest({ params: GetTemplateParams }), asy
 });
 
 router.put("/templates/:id", validateRequest({ params: UpdateTemplateParams, body: UpdateTemplateBody }), async (req, res): Promise<void> => {
-  const [existing] = await db.select().from(templatesTable).where(eq(templatesTable.id, req.params.id));
+  const [existing] = await db.select().from(templatesTable).where(eq(templatesTable.id, str(req.params.id)));
   if (!existing) {
     res.status(404).json({ error: "Template not found" });
     return;
@@ -87,14 +88,14 @@ router.put("/templates/:id", validateRequest({ params: UpdateTemplateParams, bod
   const [template] = await db
     .update(templatesTable)
     .set({ ...req.body, version: newVersion, updatedAt: new Date() })
-    .where(eq(templatesTable.id, req.params.id))
+    .where(eq(templatesTable.id, str(req.params.id)))
     .returning();
 
   res.json(UpdateTemplateResponse.parse(template));
 });
 
 router.delete("/templates/:id", requireRole("admin"), validateRequest({ params: DeleteTemplateParams }), async (req, res): Promise<void> => {
-  const [template] = await db.delete(templatesTable).where(eq(templatesTable.id, req.params.id)).returning();
+  const [template] = await db.delete(templatesTable).where(eq(templatesTable.id, str(req.params.id))).returning();
   if (!template) {
     res.status(404).json({ error: "Template not found" });
     return;
@@ -104,7 +105,7 @@ router.delete("/templates/:id", requireRole("admin"), validateRequest({ params: 
 });
 
 router.get("/templates/:id/versions", async (req, res): Promise<void> => {
-  const { id } = req.params;
+  const id = str(req.params.id);
   const versions = await db.select().from(templateVersionsTable)
     .where(eq(templateVersionsTable.templateId, id))
     .orderBy(desc(templateVersionsTable.version));
@@ -112,7 +113,7 @@ router.get("/templates/:id/versions", async (req, res): Promise<void> => {
 });
 
 router.post("/templates/:id/rollback/:versionId", async (req, res): Promise<void> => {
-  const { id, versionId } = req.params;
+  const id = str(req.params.id), versionId = str(req.params.versionId);
 
   const [current] = await db.select().from(templatesTable).where(eq(templatesTable.id, id));
   if (!current) {
@@ -150,7 +151,7 @@ router.post("/templates/:id/rollback/:versionId", async (req, res): Promise<void
 });
 
 router.get("/templates/:id/stats", async (req, res): Promise<void> => {
-  const { id } = req.params;
+  const id = str(req.params.id);
 
   const [template] = await db.select().from(templatesTable).where(eq(templatesTable.id, id));
   if (!template) {
@@ -202,7 +203,7 @@ router.get("/templates/:id/stats", async (req, res): Promise<void> => {
 });
 
 router.post("/templates/:id/analyze", async (req, res): Promise<void> => {
-  const { id } = req.params;
+  const id = str(req.params.id);
 
   const [template] = await db.select().from(templatesTable).where(eq(templatesTable.id, id));
   if (!template) {
@@ -220,7 +221,7 @@ router.post("/templates/:id/analyze", async (req, res): Promise<void> => {
 });
 
 router.get("/templates/:id/recommendations", async (req, res): Promise<void> => {
-  const { id } = req.params;
+  const id = str(req.params.id);
   const recommendations = await db.select().from(templateRecommendationsTable)
     .where(eq(templateRecommendationsTable.templateId, id))
     .orderBy(desc(templateRecommendationsTable.createdAt));
@@ -228,7 +229,7 @@ router.get("/templates/:id/recommendations", async (req, res): Promise<void> => 
 });
 
 router.put("/templates/:id/recommendations/:recId", async (req, res): Promise<void> => {
-  const { id, recId } = req.params;
+  const id = str(req.params.id), recId = str(req.params.recId);
   const { action, reviewerNotes } = req.body;
 
   if (!action || !["apply", "dismiss"].includes(action)) {

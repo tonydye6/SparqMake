@@ -1,10 +1,11 @@
+import { str } from "../lib/http-params.js";
 import { Router, type IRouter, type Request, type Response } from "express";
 import { eq } from "drizzle-orm";
 import { db, creativesTable, creativeVariantsTable, brandsTable, templatesTable } from "@workspace/db";
 import archiver from "archiver";
 import * as fs from "fs";
 import * as path from "path";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { validateRequest } from "../middleware/validate.js";
 
 const DownloadParams = z.object({ id: z.string().uuid() });
@@ -15,7 +16,7 @@ const router: IRouter = Router();
 const UPLOADS_DIR = path.resolve(process.cwd(), "uploads", "generated");
 
 router.get("/creatives/:id/download", validateRequest({ params: DownloadParams }), async (req: Request, res: Response): Promise<void> => {
-  const creativeId = req.params.id;
+  const creativeId = str(req.params.id);
 
   const [campaign] = await db.select().from(creativesTable).where(eq(creativesTable.id, creativeId));
   if (!campaign) {
@@ -154,7 +155,7 @@ router.get("/creatives/:id/download", validateRequest({ params: DownloadParams }
 });
 
 router.get("/creatives/:id/variants/:variantId/download", validateRequest({ params: VariantDownloadParams }), async (req: Request, res: Response): Promise<void> => {
-  const { id: creativeId, variantId } = req.params;
+  const creativeId = str(req.params.id), variantId = str(req.params.variantId);
 
   const [variant] = await db.select().from(creativeVariantsTable)
     .where(eq(creativeVariantsTable.id, variantId));

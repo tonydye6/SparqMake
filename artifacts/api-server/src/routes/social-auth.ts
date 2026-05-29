@@ -214,7 +214,7 @@ router.get("/auth/twitter/callback", async (req, res) => {
       return res.redirect(`${getSettingsRedirectUrl()}&error=token_exchange_failed`);
     }
 
-    const tokenData: TwitterTokenResponse = await tokenResponse.json();
+    const tokenData = (await tokenResponse.json()) as TwitterTokenResponse;
 
     const userResponse = await fetch("https://api.twitter.com/2/users/me", {
       headers: { Authorization: `Bearer ${tokenData.access_token}` },
@@ -224,7 +224,7 @@ router.get("/auth/twitter/callback", async (req, res) => {
       return res.redirect(`${getSettingsRedirectUrl()}&error=user_fetch_failed`);
     }
 
-    const userData: TwitterUserResponse = await userResponse.json();
+    const userData = (await userResponse.json()) as TwitterUserResponse;
 
     const expiresAt = tokenData.expires_in
       ? new Date(Date.now() + tokenData.expires_in * 1000)
@@ -310,7 +310,7 @@ router.get("/auth/instagram/callback", async (req, res) => {
       return res.redirect(`${getSettingsRedirectUrl()}&error=token_exchange_failed`);
     }
 
-    const tokenData: FacebookTokenResponse = await tokenResp.json();
+    const tokenData = (await tokenResp.json()) as FacebookTokenResponse;
 
     // Facebook's token exchange API requires fb_exchange_token as a GET query parameter.
     // This is a Facebook API requirement and cannot be sent as a POST body.
@@ -322,7 +322,7 @@ router.get("/auth/instagram/callback", async (req, res) => {
     longLivedUrl.searchParams.set("fb_exchange_token", tokenData.access_token);
 
     const longLivedResp = await fetch(longLivedUrl.toString());
-    const longLivedData: FacebookTokenResponse = await longLivedResp.json();
+    const longLivedData = (await longLivedResp.json()) as FacebookTokenResponse;
     const accessToken = longLivedData.access_token || tokenData.access_token;
     const expiresIn = longLivedData.expires_in || 5184000;
 
@@ -330,7 +330,7 @@ router.get("/auth/instagram/callback", async (req, res) => {
       "https://graph.facebook.com/v19.0/me/accounts",
       { headers: { Authorization: `Bearer ${accessToken}` } },
     );
-    const pagesData: FacebookPagesResponse = await pagesResp.json();
+    const pagesData = (await pagesResp.json()) as FacebookPagesResponse;
 
     let igAccountName = "Instagram Business";
     let igAccountId = "";
@@ -341,7 +341,7 @@ router.get("/auth/instagram/callback", async (req, res) => {
         `https://graph.facebook.com/v19.0/${page.id}?fields=instagram_business_account`,
         { headers: { Authorization: `Bearer ${accessToken}` } },
       );
-      const igData: FacebookPageIGResponse = await igResp.json();
+      const igData = (await igResp.json()) as FacebookPageIGResponse;
 
       if (igData.instagram_business_account) {
         igAccountId = igData.instagram_business_account.id;
@@ -349,7 +349,7 @@ router.get("/auth/instagram/callback", async (req, res) => {
           `https://graph.facebook.com/v19.0/${igAccountId}?fields=username`,
           { headers: { Authorization: `Bearer ${accessToken}` } },
         );
-        const igUserData: InstagramUserResponse = await igUserResp.json();
+        const igUserData = (await igUserResp.json()) as InstagramUserResponse;
         igAccountName = `@${igUserData.username || "instagram_user"}`;
       }
     }
@@ -443,7 +443,7 @@ router.get("/auth/linkedin/callback", async (req, res) => {
       return res.redirect(`${getSettingsRedirectUrl()}&error=token_exchange_failed`);
     }
 
-    const tokenData: LinkedInTokenResponse = await tokenResponse.json();
+    const tokenData = (await tokenResponse.json()) as LinkedInTokenResponse;
 
     const profileResponse = await fetch("https://api.linkedin.com/v2/userinfo", {
       headers: { Authorization: `Bearer ${tokenData.access_token}` },
@@ -453,7 +453,7 @@ router.get("/auth/linkedin/callback", async (req, res) => {
     let accountId = "";
 
     if (profileResponse.ok) {
-      const profileData: LinkedInProfileResponse = await profileResponse.json();
+      const profileData = (await profileResponse.json()) as LinkedInProfileResponse;
       accountName = profileData.name || `${profileData.given_name || ""} ${profileData.family_name || ""}`.trim() || "LinkedIn User";
       accountId = profileData.sub || "";
     }
@@ -572,7 +572,7 @@ router.get("/auth/tiktok/callback", async (req, res) => {
       return res.redirect(`${getSettingsRedirectUrl()}&error=token_exchange_failed`);
     }
 
-    const tokenData: TikTokTokenResponse = await tokenResponse.json();
+    const tokenData = (await tokenResponse.json()) as TikTokTokenResponse;
 
     if (!tokenData.access_token) {
       logger.error({ tokenData }, "TikTok token response missing access_token");
@@ -591,7 +591,7 @@ router.get("/auth/tiktok/callback", async (req, res) => {
     );
 
     if (userResponse.ok) {
-      const userData: TikTokUserInfoResponse = await userResponse.json();
+      const userData = (await userResponse.json()) as TikTokUserInfoResponse;
       if (userData.data?.user) {
         accountName = userData.data.user.display_name || "TikTok Creator";
         accountId = userData.data.user.open_id || accountId;
@@ -693,7 +693,7 @@ router.get("/auth/youtube/callback", async (req, res) => {
       return res.redirect(`${getSettingsRedirectUrl()}&error=token_exchange_failed`);
     }
 
-    const tokenData: GoogleTokenResponse = await tokenResponse.json();
+    const tokenData = (await tokenResponse.json()) as GoogleTokenResponse;
 
     const channelResponse = await fetch(
       "https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics&mine=true",
@@ -706,7 +706,7 @@ router.get("/auth/youtube/callback", async (req, res) => {
       return res.redirect(`${getSettingsRedirectUrl()}&error=channel_fetch_failed`);
     }
 
-    const channelData: YouTubeChannelResponse = await channelResponse.json();
+    const channelData = (await channelResponse.json()) as YouTubeChannelResponse;
 
     if (!channelData.items || channelData.items.length === 0) {
       logger.error("No YouTube channel found for authenticated user");

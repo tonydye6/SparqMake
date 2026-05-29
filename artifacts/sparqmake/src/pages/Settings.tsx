@@ -19,7 +19,10 @@ import {
   useCreateAsset,
   type Brand,
   type Asset,
-  type Template
+  type Template,
+  type CreateBrandInput,
+  type CreateAssetInput,
+  type UpdateAssetInput,
 } from "@workspace/api-client-react";
 
 interface TemplateStatsTopRefinementPromptsItem {
@@ -372,14 +375,14 @@ function ConnectedAccountsTab() {
             {accounts.map(account => {
               const config = PLATFORM_CONFIG[account.platform] || { label: account.platform, color: "#666", icon: "?" };
               const status = account.displayStatus || account.status;
-              const metadata = account.platformMetadata as Record<string, unknown> | null;
+              const metadata = (account as unknown as Record<string, unknown>).platformMetadata as Record<string, unknown> | null;
               const subscriberCount = metadata?.subscriberCount as string | undefined;
               return (
                 <div key={account.id} className="flex items-center justify-between p-4 border border-border bg-background rounded-lg">
                   <div className="flex items-center gap-4">
-                    {(account.profileImageUrl || account.avatarUrl) ? (
+                    {(account.profileImageUrl || (account as { avatarUrl?: string | null }).avatarUrl) ? (
                       <img
-                        src={account.profileImageUrl || account.avatarUrl}
+                        src={account.profileImageUrl || (account as { avatarUrl?: string | null }).avatarUrl || undefined}
                         alt={account.accountName}
                         className="w-10 h-10 rounded-lg object-cover"
                       />
@@ -586,7 +589,7 @@ function BrandEditor({ brand }: { brand: Brand }) {
     colorAccent: b.colorAccent,
     colorBackground: b.colorBackground,
     voiceDescription: b.voiceDescription || "",
-    timezone: ((b as Record<string, unknown>).timezone as string) || "America/New_York",
+    timezone: ((b as unknown as Record<string, unknown>).timezone as string) || "America/New_York",
     characterStyleRules: b.characterStyleRules || "",
     imagenPrefix: b.imagenPrefix || "",
     negativePrompt: b.negativePrompt || "",
@@ -651,7 +654,7 @@ function BrandEditor({ brand }: { brand: Brand }) {
           bannedTerms: bannedTermsArray,
           platformRules: parsedPlatformRules,
           hashtagStrategy: parsedHashtagStrategy,
-        }
+        } as CreateBrandInput
       });
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : "Unknown error";
@@ -917,7 +920,7 @@ const BRAND_ASSET_GROUPS = [
 ];
 
 function BrandAssetGroups({ brandId }: { brandId: string }) {
-  const { data: allAssets } = useGetAssets({ brandId, limit: 200 });
+  const { data: allAssets } = useGetAssets({ brandId, limit: 200 }) as unknown as { data?: { data?: Asset[] } };
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const updateMutation = useUpdateAsset();
@@ -1066,7 +1069,7 @@ function BrandAssetGroups({ brandId }: { brandId: string }) {
 
 function BrandFontManagement({ brandId }: { brandId: string }) {
   const apiBase = import.meta.env.VITE_API_URL || "";
-  const { data: allAssets } = useGetAssets({ brandId, type: "font" });
+  const { data: allAssets } = useGetAssets({ brandId, type: "font" }) as unknown as { data?: { data?: Asset[] } };
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const uploadMutation = useUploadFile();
@@ -1101,7 +1104,7 @@ function BrandFontManagement({ brandId }: { brandId: string }) {
               tags: [],
               fontName: file.name.replace(/\.[^.]+$/, ''),
               fontWeight: "400",
-            }
+            } as unknown as CreateAssetInput
           }, {
             onSuccess: () => {
               queryClient.invalidateQueries({ queryKey: ["/api/assets"] });
@@ -1123,7 +1126,7 @@ function BrandFontManagement({ brandId }: { brandId: string }) {
   });
 
   const saveFontEdit = (assetId: string) => {
-    updateMutation.mutate({ id: assetId, data: { name: fontNameEdit, fontName: fontNameEdit, fontWeight: fontWeightEdit } }, {
+    updateMutation.mutate({ id: assetId, data: { name: fontNameEdit, fontName: fontNameEdit, fontWeight: fontWeightEdit } as UpdateAssetInput }, {
       onSuccess: () => {
         queryClient.invalidateQueries({ queryKey: ["/api/assets"] });
         setEditingFont(null);
@@ -1197,9 +1200,9 @@ function BrandFontManagement({ brandId }: { brandId: string }) {
                     </div>
                   ) : (
                     <>
-                      <p className="font-semibold text-sm truncate">{font.fontName || font.name}</p>
+                      <p className="font-semibold text-sm truncate">{(font as any).fontName || font.name}</p>
                       <div className="flex items-center gap-2 mt-0.5">
-                        <Badge variant="outline" className="text-[10px]">Weight: {font.fontWeight || "400"}</Badge>
+                        <Badge variant="outline" className="text-[10px]">Weight: {(font as any).fontWeight || "400"}</Badge>
                         <span className="text-[10px] text-muted-foreground">{font.mimeType}</span>
                         {font.fileSizeBytes && (
                           <span className="text-[10px] text-muted-foreground">{(font.fileSizeBytes / 1024).toFixed(0)} KB</span>
@@ -1211,7 +1214,7 @@ function BrandFontManagement({ brandId }: { brandId: string }) {
                 </div>
                 {!isEditing && (
                   <div className="flex items-center gap-1 shrink-0">
-                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => { setEditingFont(font.id); setFontNameEdit(font.fontName || font.name); setFontWeightEdit(font.fontWeight || "400"); }}>
+                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => { setEditingFont(font.id); setFontNameEdit((font as any).fontName || font.name); setFontWeightEdit((font as any).fontWeight || "400"); }}>
                       <Edit2 size={14} />
                     </Button>
                     <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive" onClick={() => deleteFont(font.id)}>
@@ -1234,8 +1237,8 @@ interface ColorFieldProps {
   name: string;
   label: string;
   value: string;
-  register: ReturnType<typeof import("react-hook-form").useForm>["register"];
-  setValue: ReturnType<typeof import("react-hook-form").useForm>["setValue"];
+  register: import("react-hook-form").UseFormRegister<any>;
+  setValue: import("react-hook-form").UseFormSetValue<any>;
 }
 
 function ColorField({ name, label, value, register, setValue }: ColorFieldProps) {
@@ -1263,7 +1266,7 @@ function BrandTemplates({ brandId, brandColors, brandLogoUrl }: {
   brandColors?: { primary: string; secondary: string; accent: string; background: string };
   brandLogoUrl?: string | null;
 }) {
-  const { data: templates } = useGetTemplates({ brandId });
+  const { data: templates } = useGetTemplates({ brandId }) as unknown as { data?: { data?: Template[] } };
   const [isAddOpen, setIsAddOpen] = useState(false);
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -1536,7 +1539,7 @@ function TemplateCard({ template, onDelete }: { template: Template; onDelete: ()
             <div className="space-y-4">
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 <StatCard label="Generations" value={stats.totalGenerations} />
-                <StatCard label="Approval Rate" value={stats.approvalRate !== null ? `${(stats.approvalRate * 100).toFixed(0)}%` : "N/A"} />
+                <StatCard label="Approval Rate" value={stats.approvalRate != null ? `${(stats.approvalRate * 100).toFixed(0)}%` : "N/A"} />
                 <StatCard label="Caption Edits" value={stats.captionEdits} />
                 <StatCard label="Image Refinements" value={stats.imageRefinements} />
               </div>
@@ -1596,9 +1599,9 @@ function TemplateCard({ template, onDelete }: { template: Template; onDelete: ()
                         <span className="text-xs text-muted-foreground">{new Date(v.createdAt).toLocaleDateString()}</span>
                       </div>
                       {v.changeReason && <p className="text-xs text-muted-foreground mt-0.5">{v.changeReason}</p>}
-                      {v.changedFields?.length > 0 && (
+                      {(v.changedFields?.length ?? 0) > 0 && (
                         <div className="flex gap-1 mt-1">
-                          {v.changedFields.map((f: string) => <Badge key={f} variant="outline" className="text-[10px]">{f}</Badge>)}
+                          {v.changedFields?.map((f: string) => <Badge key={f} variant="outline" className="text-[10px]">{f}</Badge>)}
                         </div>
                       )}
                     </div>
