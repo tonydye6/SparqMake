@@ -4,6 +4,7 @@ import { db, calendarEntriesTable, creativesTable, creativeVariantsTable, brands
 import { publishEntry } from "../services/publish-scheduler";
 import { z } from "zod";
 import { validateRequest } from "../middleware/validate.js";
+import { logger } from "../lib/logger";
 
 const CreateCalendarEntryBody = z.object({
   creativeId: z.string().min(1),
@@ -182,7 +183,7 @@ router.post("/calendar-entries/:id/publish", validateRequest({ params: IdParams 
   }
 
   publishEntry(id).catch(err => {
-    console.error("Background publish failed:", err);
+    logger.error({ err, entryId: id }, "Background publish failed");
   });
 
   res.json({ message: "Publishing initiated", entryId: id });
@@ -209,7 +210,7 @@ router.post("/calendar-entries/:id/retry", validateRequest({ params: IdParams })
     .where(eq(calendarEntriesTable.id, id as string));
 
   publishEntry(id).catch(err => {
-    console.error("Background retry publish failed:", err);
+    logger.error({ err, entryId: id }, "Background retry publish failed");
   });
 
   res.json({ message: "Retry initiated", entryId: id });

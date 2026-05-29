@@ -105,13 +105,16 @@ export async function generateCaptions(ctx: AssembledContext): Promise<CaptionRe
   const systemPrompt = buildSystemPrompt(ctx);
   const userMessage = buildUserMessage(ctx);
 
-  const response = await anthropic.messages.create({
-    model: AI_MODELS.CLAUDE_SONNET,
-    max_tokens: 8192,
-    temperature: 0.7,
-    system: systemPrompt,
-    messages: [{ role: "user", content: userMessage }],
-  });
+  const response = await anthropic.messages.create(
+    {
+      model: AI_MODELS.CLAUDE_SONNET,
+      max_tokens: 8192,
+      temperature: 0.7,
+      system: systemPrompt,
+      messages: [{ role: "user", content: userMessage }],
+    },
+    { timeout: 120_000 },
+  );
 
   const textBlock = response.content.find(b => b.type === "text");
   if (!textBlock || textBlock.type !== "text") {

@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import passport from "../lib/passport";
 import { isDevBypass, isGoogleConfigured } from "../middleware/auth";
+import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
 
@@ -55,13 +56,13 @@ router.get(
     }
     passport.authenticate("google", (err: Error | null, user: Express.User | false) => {
       if (err || !user) {
-        console.error("Google OAuth callback error:", err?.message || "No user returned");
+        logger.error({ err }, "Google OAuth callback error");
         res.redirect("/login?error=auth_failed");
         return;
       }
       req.logIn(user, (loginErr) => {
         if (loginErr) {
-          console.error("Session login error:", loginErr.message);
+          logger.error({ err: loginErr }, "Session login error");
           res.redirect("/login?error=auth_failed");
           return;
         }

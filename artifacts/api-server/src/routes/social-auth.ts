@@ -57,8 +57,19 @@ function getSettingsRedirectUrl(): string {
   return `${resolveBaseUrl()}/settings?tab=accounts`;
 }
 
-const pkceStore = new Map<string, { verifier: string; expiresAt: number }>();
-const oauthStateStore = new Map<string, { expiresAt: number }>();
+const STATE_TTL_MS = 10 * 60 * 1000;
+
+const pkceStore = new Map<string, { verifier: string; userId: string; expiresAt: number }>();
+const oauthStateStore = new Map<string, { userId: string; expiresAt: number }>();
+
+// Periodic sweep so abandoned OAuth flows don't leak memory. Single-instance only
+// (a Reserved VM runs exactly one process); defer a shared Redis store for multi-instance.
+const stateSweep = setInterval(() => {
+  const now = Date.now();
+  for (const [key, val] of pkceStore) if (val.expiresAt < now) pkceStore.delete(key);
+  for (const [key, val] of oauthStateStore) if (val.expiresAt < now) oauthStateStore.delete(key);
+}, 5 * 60 * 1000);
+stateSweep.unref();
 
 function generatePKCE() {
   const verifier = crypto.randomBytes(32).toString("base64url");
@@ -66,33 +77,64 @@ function generatePKCE() {
   return { verifier, challenge };
 }
 
-function createOAuthState(): string {
+function createOAuthState(userId: string): string {
   const state = crypto.randomBytes(16).toString("hex");
-  oauthStateStore.set(state, { expiresAt: Date.now() + 10 * 60 * 1000 });
+  oauthStateStore.set(state, { userId, expiresAt: Date.now() + STATE_TTL_MS });
   return state;
 }
 
-function validateOAuthState(state: string | undefined): boolean {
-  if (!state || typeof state !== "string") return false;
+function validateOAuthState(state: string | undefined, userId: string | undefined): boolean {
+  if (!state || typeof state !== "string" || !userId) return false;
   const data = oauthStateStore.get(state);
   if (!data || data.expiresAt < Date.now()) {
-    oauthStateStore.delete(state as string);
+    if (data) oauthStateStore.delete(state);
     return false;
   }
   oauthStateStore.delete(state);
-  return true;
+  return data.userId === userId;
 }
 
-router.get("/auth/twitter", (_req, res) => {
+// Re-connecting an already-linked account updates it in place rather than inserting a
+// duplicate row (no DB unique constraint exists on platform+accountId).
+async function upsertSocialAccount(values: typeof socialAccountsTable.$inferInsert): Promise<void> {
+  const [existing] = await db
+    .select({ id: socialAccountsTable.id })
+    .from(socialAccountsTable)
+    .where(and(
+      eq(socialAccountsTable.platform, values.platform),
+      eq(socialAccountsTable.accountId, values.accountId),
+    ));
+
+  if (existing) {
+    const { refreshToken, ...rest } = values;
+    await db
+      .update(socialAccountsTable)
+      .set({
+        ...rest,
+        ...(refreshToken ? { refreshToken } : {}),
+        updatedAt: new Date(),
+      })
+      .where(eq(socialAccountsTable.id, existing.id));
+  } else {
+    await db.insert(socialAccountsTable).values(values);
+  }
+}
+
+router.get("/auth/twitter", (req, res) => {
   const clientId = process.env.X_SparqMake_X_API_Key;
   if (!clientId) {
     return res.status(500).json({ error: "Twitter API key not configured" });
   }
 
+  const userId = req.user?.id;
+  if (!userId) {
+    return res.status(401).json({ error: "Not authenticated" });
+  }
+
   const { verifier, challenge } = generatePKCE();
   const state = crypto.randomBytes(16).toString("hex");
 
-  pkceStore.set(state, { verifier, expiresAt: Date.now() + 10 * 60 * 1000 });
+  pkceStore.set(state, { verifier, userId, expiresAt: Date.now() + STATE_TTL_MS });
 
   const callbackUrl = `${getCallbackBaseUrl()}/api/auth/twitter/callback`;
   const scopes = ["tweet.read", "tweet.write", "users.read", "offline.access"].join(" ");
@@ -124,6 +166,10 @@ router.get("/auth/twitter/callback", async (req, res) => {
       return res.redirect(`${getSettingsRedirectUrl()}&error=invalid_state`);
     }
     pkceStore.delete(state);
+
+    if (pkceData.userId !== req.user?.id) {
+      return res.redirect(`${getSettingsRedirectUrl()}&error=invalid_state`);
+    }
 
     const clientId = process.env.X_SparqMake_X_API_Key;
     const callbackUrl = `${getCallbackBaseUrl()}/api/auth/twitter/callback`;
@@ -162,7 +208,7 @@ router.get("/auth/twitter/callback", async (req, res) => {
       ? new Date(Date.now() + tokenData.expires_in * 1000)
       : null;
 
-    await db.insert(socialAccountsTable).values({
+    await upsertSocialAccount({
       platform: "twitter",
       accountName: `@${userData.data.username}`,
       accountId: userData.data.id,
@@ -179,13 +225,18 @@ router.get("/auth/twitter/callback", async (req, res) => {
   }
 });
 
-router.get("/auth/instagram", (_req, res) => {
+router.get("/auth/instagram", (req, res) => {
   const appId = process.env.SparqMake_Instagram_App_ID;
   if (!appId) {
     return res.status(500).json({ error: "Instagram App ID not configured" });
   }
 
-  const state = createOAuthState();
+  const userId = req.user?.id;
+  if (!userId) {
+    return res.status(401).json({ error: "Not authenticated" });
+  }
+
+  const state = createOAuthState(userId);
   const callbackUrl = `${getCallbackBaseUrl()}/api/auth/instagram/callback`;
   const scopes = ["instagram_basic", "instagram_content_publish", "pages_show_list"].join(",");
 
@@ -204,7 +255,7 @@ router.get("/auth/instagram/callback", async (req, res) => {
   try {
     const { code, state } = req.query;
 
-    if (!validateOAuthState(state as string | undefined)) {
+    if (!validateOAuthState(state as string | undefined, req.user?.id)) {
       return res.redirect(`${getSettingsRedirectUrl()}&error=invalid_state`);
     }
 
@@ -279,7 +330,7 @@ router.get("/auth/instagram/callback", async (req, res) => {
       return res.redirect(`${getSettingsRedirectUrl()}&error=no_ig_business_account`);
     }
 
-    await db.insert(socialAccountsTable).values({
+    await upsertSocialAccount({
       platform: "instagram",
       accountName: igAccountName,
       accountId: igAccountId,
@@ -296,13 +347,18 @@ router.get("/auth/instagram/callback", async (req, res) => {
   }
 });
 
-router.get("/auth/linkedin", (_req, res) => {
+router.get("/auth/linkedin", (req, res) => {
   const clientId = process.env.SparqMake_LinkedIn_Client_ID;
   if (!clientId) {
     return res.status(500).json({ error: "LinkedIn Client ID not configured" });
   }
 
-  const state = createOAuthState();
+  const userId = req.user?.id;
+  if (!userId) {
+    return res.status(401).json({ error: "Not authenticated" });
+  }
+
+  const state = createOAuthState(userId);
   const callbackUrl = `${getCallbackBaseUrl()}/api/auth/linkedin/callback`;
   const scopes = ["openid", "profile", "w_member_social", "offline_access"].join(" ");
 
@@ -321,7 +377,7 @@ router.get("/auth/linkedin/callback", async (req, res) => {
   try {
     const { code, state } = req.query;
 
-    if (!validateOAuthState(state as string | undefined)) {
+    if (!validateOAuthState(state as string | undefined, req.user?.id)) {
       return res.redirect(`${getSettingsRedirectUrl()}&error=invalid_state`);
     }
 
@@ -377,7 +433,7 @@ router.get("/auth/linkedin/callback", async (req, res) => {
       ? new Date(Date.now() + tokenData.expires_in * 1000)
       : new Date(Date.now() + 60 * 24 * 60 * 60 * 1000);
 
-    await db.insert(socialAccountsTable).values({
+    await upsertSocialAccount({
       platform: "linkedin",
       accountName,
       accountId: fullAccountId,
@@ -394,16 +450,21 @@ router.get("/auth/linkedin/callback", async (req, res) => {
   }
 });
 
-router.get("/auth/tiktok", (_req, res) => {
+router.get("/auth/tiktok", (req, res) => {
   const clientKey = process.env[TIKTOK_ENV_VARS.clientId];
   if (!clientKey) {
     return res.status(500).json({ error: "TikTok Client Key not configured" });
   }
 
+  const userId = req.user?.id;
+  if (!userId) {
+    return res.status(401).json({ error: "Not authenticated" });
+  }
+
   const { verifier, challenge } = generatePKCE();
   const state = crypto.randomBytes(16).toString("hex");
 
-  pkceStore.set(state, { verifier, expiresAt: Date.now() + 10 * 60 * 1000 });
+  pkceStore.set(state, { verifier, userId, expiresAt: Date.now() + STATE_TTL_MS });
 
   const callbackUrl = `${getCallbackBaseUrl()}/api/auth/tiktok/callback`;
   const scopes = ["user.info.basic", "video.publish", "video.upload"].join(",");
@@ -435,6 +496,10 @@ router.get("/auth/tiktok/callback", async (req, res) => {
       return res.redirect(`${getSettingsRedirectUrl()}&error=invalid_state`);
     }
     pkceStore.delete(state);
+
+    if (pkceData.userId !== req.user?.id) {
+      return res.redirect(`${getSettingsRedirectUrl()}&error=invalid_state`);
+    }
 
     const clientKey = process.env[TIKTOK_ENV_VARS.clientId];
     const clientSecret = process.env[TIKTOK_ENV_VARS.clientSecret];
@@ -496,7 +561,7 @@ router.get("/auth/tiktok/callback", async (req, res) => {
       ? new Date(Date.now() + tokenData.expires_in * 1000)
       : null;
 
-    await db.insert(socialAccountsTable).values({
+    await upsertSocialAccount({
       platform: "tiktok",
       accountName,
       accountId,
@@ -514,13 +579,18 @@ router.get("/auth/tiktok/callback", async (req, res) => {
   }
 });
 
-router.get("/auth/youtube", (_req, res) => {
+router.get("/auth/youtube", (req, res) => {
   const clientId = process.env.SparqForge_Google_Client_ID;
   if (!clientId) {
     return res.status(500).json({ error: "Google Client ID not configured" });
   }
 
-  const state = createOAuthState();
+  const userId = req.user?.id;
+  if (!userId) {
+    return res.status(401).json({ error: "Not authenticated" });
+  }
+
+  const state = createOAuthState(userId);
   const callbackUrl = `${getCallbackBaseUrl()}/api/auth/youtube/callback`;
   const scopes = [
     "https://www.googleapis.com/auth/youtube.upload",
@@ -544,7 +614,7 @@ router.get("/auth/youtube/callback", async (req, res) => {
   try {
     const { code, state } = req.query;
 
-    if (!validateOAuthState(state as string | undefined)) {
+    if (!validateOAuthState(state as string | undefined, req.user?.id)) {
       return res.redirect(`${getSettingsRedirectUrl()}&error=invalid_state`);
     }
 

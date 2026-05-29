@@ -99,13 +99,21 @@ export async function generateImage(
 
   contentParts.push({ text: fullPrompt });
 
-  const response = await ai.models.generateContent({
-    model: AI_MODELS.GEMINI_FLASH_IMAGE,
-    contents: [{ role: "user", parts: contentParts }],
-    config: {
-      responseModalities: [Modality.TEXT, Modality.IMAGE],
-    },
-  });
+  const abortController = new AbortController();
+  const timeoutId = setTimeout(() => abortController.abort(), 120_000);
+  let response;
+  try {
+    response = await ai.models.generateContent({
+      model: AI_MODELS.GEMINI_FLASH_IMAGE,
+      contents: [{ role: "user", parts: contentParts }],
+      config: {
+        responseModalities: [Modality.TEXT, Modality.IMAGE],
+        abortSignal: abortController.signal,
+      },
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
   const candidate = response.candidates?.[0];
   const imagePart = candidate?.content?.parts?.find(

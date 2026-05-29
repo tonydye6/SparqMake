@@ -45,6 +45,16 @@ const upload = multer({
   limits: {
     fileSize: 10 * 1024 * 1024,
   },
+  fileFilter: (_req, file, cb) => {
+    if (
+      file.mimetype === "image/svg+xml" ||
+      path.extname(file.originalname).toLowerCase() === ".svg"
+    ) {
+      cb(new Error("SVG files are not allowed"));
+      return;
+    }
+    cb(null, true);
+  },
 });
 
 router.get("/brands", async (_req, res): Promise<void> => {
