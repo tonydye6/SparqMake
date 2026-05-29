@@ -1,0 +1,1 @@
+- [GitHub push refspec](github-push.md) — local branch is `master` but GitHub default is `main`; push with `git push github master:main` and verify via `ls-remote`.
