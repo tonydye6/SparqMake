@@ -939,6 +939,357 @@ export const UploadVariantAudioResponse = zod.object({
 });
 
 /**
+ * @summary Get calendar entries within a date range
+ */
+export const GetCalendarEntriesQueryParams = zod.object({
+  start: zod.date().optional(),
+  end: zod.date().optional(),
+  brandId: zod.coerce.string().optional(),
+  limit: zod.coerce.number().optional(),
+  offset: zod.coerce.number().optional(),
+});
+
+export const GetCalendarEntriesResponse = zod.object({
+  entries: zod.array(
+    zod.object({
+      id: zod.string(),
+      creativeId: zod.string(),
+      variantId: zod.string(),
+      platform: zod.string(),
+      socialAccountId: zod.string().nullish(),
+      scheduledAt: zod.date(),
+      publishedAt: zod.date().nullish(),
+      publishStatus: zod.string(),
+      publishError: zod.string().nullish(),
+      retryCount: zod.number(),
+      scheduleMethod: zod.string().nullish(),
+      smartScheduleRationale: zod.string().nullish(),
+      proposalId: zod.string().nullish(),
+      creativeName: zod.string(),
+      brandId: zod.string(),
+      brandName: zod.string(),
+      brandColor: zod.string(),
+      caption: zod.string(),
+      aspectRatio: zod.string(),
+      compositedImageUrl: zod.string().nullish(),
+    }),
+  ),
+  limit: zod.number().optional(),
+  offset: zod.number().optional(),
+});
+
+/**
+ * @summary Schedule a creative variant
+ */
+export const CreateCalendarEntryBody = zod.object({
+  creativeId: zod.string(),
+  variantId: zod.string(),
+  platform: zod.string(),
+  scheduledAt: zod.string(),
+  socialAccountId: zod.string().nullish(),
+});
+
+/**
+ * @summary Batch schedule multiple approved creatives
+ */
+export const BatchScheduleCalendarEntriesBody = zod.object({
+  entries: zod.array(
+    zod.object({
+      creativeId: zod.string(),
+      scheduledAt: zod.string(),
+      socialAccounts: zod.record(zod.string(), zod.string()).optional(),
+    }),
+  ),
+});
+
+/**
+ * @summary Update a calendar entry
+ */
+export const UpdateCalendarEntryParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const UpdateCalendarEntryBody = zod.object({
+  scheduledAt: zod.string().optional(),
+  publishStatus: zod.string().optional(),
+  socialAccountId: zod.string().nullish(),
+  scheduleMethod: zod.string().optional(),
+});
+
+export const UpdateCalendarEntryResponse = zod.object({
+  id: zod.string(),
+  creativeId: zod.string(),
+  variantId: zod.string(),
+  platform: zod.string(),
+  socialAccountId: zod.string().nullish(),
+  scheduledAt: zod.date(),
+  publishedAt: zod.date().nullish(),
+  publishStatus: zod.string(),
+  publishError: zod.string().nullish(),
+  retryCount: zod.number(),
+  scheduleMethod: zod.string(),
+  smartScheduleRationale: zod.string().nullish(),
+  proposalId: zod.string().nullish(),
+  createdAt: zod.date(),
+  updatedAt: zod.date(),
+});
+
+/**
+ * @summary Delete a calendar entry
+ */
+export const DeleteCalendarEntryParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const DeleteCalendarEntryResponse = zod.object({
+  message: zod.string(),
+});
+
+/**
+ * @summary Publish a calendar entry immediately
+ */
+export const PublishCalendarEntryParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const PublishCalendarEntryResponse = zod.object({
+  message: zod.string(),
+  entryId: zod.string(),
+});
+
+/**
+ * @summary Retry a failed calendar entry
+ */
+export const RetryCalendarEntryParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const RetryCalendarEntryResponse = zod.object({
+  message: zod.string(),
+  entryId: zod.string(),
+});
+
+/**
+ * @summary Get content plan items
+ */
+export const GetContentPlanQueryParams = zod.object({
+  pillar: zod.coerce.string().optional(),
+  platform: zod.coerce.string().optional(),
+  status: zod.coerce.string().optional(),
+  plannedWeek: zod.coerce.string().optional(),
+  brandLayer: zod.coerce.string().optional(),
+  limit: zod.coerce.number().optional(),
+  offset: zod.coerce.number().optional(),
+});
+
+export const GetContentPlanResponse = zod.object({
+  items: zod.array(
+    zod.object({
+      id: zod.string(),
+      title: zod.string(),
+      campaignName: zod.string().nullish(),
+      primaryPlatform: zod.string(),
+      secondaryPlatforms: zod.array(zod.string()),
+      templateName: zod.string().nullish(),
+      pillar: zod.string().nullish(),
+      audience: zod.string().nullish(),
+      brandLayer: zod.string().nullish(),
+      objective: zod.string().nullish(),
+      contentType: zod.string().nullish(),
+      assetPacketType: zod.string().nullish(),
+      coreMessage: zod.string().nullish(),
+      cta: zod.string().nullish(),
+      requiredAssetRoles: zod.array(zod.string()),
+      status: zod.string(),
+      plannedWeek: zod.string().nullish(),
+      plannedDate: zod.string().nullish(),
+      notes: zod.string().nullish(),
+      linkedCreativeId: zod.string().nullish(),
+      createdAt: zod.date(),
+      updatedAt: zod.date(),
+    }),
+  ),
+  total: zod.number().optional(),
+  limit: zod.number().optional(),
+  offset: zod.number().optional(),
+});
+
+/**
+ * @summary Create a content plan item
+ */
+export const CreatePlanItemBody = zod.object({
+  title: zod.string(),
+  campaignName: zod.string().nullish(),
+  primaryPlatform: zod.string(),
+  secondaryPlatforms: zod.array(zod.string()).optional(),
+  templateName: zod.string().nullish(),
+  pillar: zod.string().nullish(),
+  audience: zod.string().nullish(),
+  brandLayer: zod.string().nullish(),
+  objective: zod.string().nullish(),
+  contentType: zod.string().nullish(),
+  assetPacketType: zod.string().nullish(),
+  coreMessage: zod.string().nullish(),
+  cta: zod.string().nullish(),
+  requiredAssetRoles: zod.array(zod.string()).optional(),
+  status: zod.string().optional(),
+  plannedWeek: zod.string().nullish(),
+  plannedDate: zod.string().nullish(),
+  notes: zod.string().nullish(),
+  linkedCreativeId: zod.string().nullish(),
+});
+
+/**
+ * @summary Import content plan items from a CSV file
+ */
+export const ImportContentPlanBody = zod.object({
+  file: zod.instanceof(File),
+});
+
+export const ImportContentPlanResponse = zod.object({
+  imported: zod.number(),
+  rejected: zod.number(),
+  rejectedDetails: zod.array(
+    zod.object({
+      row: zod.number(),
+      reason: zod.string(),
+    }),
+  ),
+  items: zod.array(
+    zod.object({
+      id: zod.string(),
+      title: zod.string(),
+      campaignName: zod.string().nullish(),
+      primaryPlatform: zod.string(),
+      secondaryPlatforms: zod.array(zod.string()),
+      templateName: zod.string().nullish(),
+      pillar: zod.string().nullish(),
+      audience: zod.string().nullish(),
+      brandLayer: zod.string().nullish(),
+      objective: zod.string().nullish(),
+      contentType: zod.string().nullish(),
+      assetPacketType: zod.string().nullish(),
+      coreMessage: zod.string().nullish(),
+      cta: zod.string().nullish(),
+      requiredAssetRoles: zod.array(zod.string()),
+      status: zod.string(),
+      plannedWeek: zod.string().nullish(),
+      plannedDate: zod.string().nullish(),
+      notes: zod.string().nullish(),
+      linkedCreativeId: zod.string().nullish(),
+      createdAt: zod.date(),
+      updatedAt: zod.date(),
+    }),
+  ),
+});
+
+/**
+ * @summary Get a content plan item
+ */
+export const GetPlanItemParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const GetPlanItemResponse = zod.object({
+  id: zod.string(),
+  title: zod.string(),
+  campaignName: zod.string().nullish(),
+  primaryPlatform: zod.string(),
+  secondaryPlatforms: zod.array(zod.string()),
+  templateName: zod.string().nullish(),
+  pillar: zod.string().nullish(),
+  audience: zod.string().nullish(),
+  brandLayer: zod.string().nullish(),
+  objective: zod.string().nullish(),
+  contentType: zod.string().nullish(),
+  assetPacketType: zod.string().nullish(),
+  coreMessage: zod.string().nullish(),
+  cta: zod.string().nullish(),
+  requiredAssetRoles: zod.array(zod.string()),
+  status: zod.string(),
+  plannedWeek: zod.string().nullish(),
+  plannedDate: zod.string().nullish(),
+  notes: zod.string().nullish(),
+  linkedCreativeId: zod.string().nullish(),
+  createdAt: zod.date(),
+  updatedAt: zod.date(),
+});
+
+/**
+ * @summary Update a content plan item
+ */
+export const UpdatePlanItemParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const UpdatePlanItemBody = zod.object({
+  title: zod.string().optional(),
+  campaignName: zod.string().nullish(),
+  primaryPlatform: zod.string().optional(),
+  secondaryPlatforms: zod.array(zod.string()).optional(),
+  templateName: zod.string().nullish(),
+  pillar: zod.string().nullish(),
+  audience: zod.string().nullish(),
+  brandLayer: zod.string().nullish(),
+  objective: zod.string().nullish(),
+  contentType: zod.string().nullish(),
+  assetPacketType: zod.string().nullish(),
+  coreMessage: zod.string().nullish(),
+  cta: zod.string().nullish(),
+  requiredAssetRoles: zod.array(zod.string()).optional(),
+  status: zod
+    .enum(["planned", "in_progress", "completed", "cancelled"])
+    .optional(),
+  plannedWeek: zod.string().nullish(),
+  plannedDate: zod.string().nullish(),
+  notes: zod.string().nullish(),
+  linkedCreativeId: zod.string().nullish(),
+});
+
+export const UpdatePlanItemResponse = zod.object({
+  id: zod.string(),
+  title: zod.string(),
+  campaignName: zod.string().nullish(),
+  primaryPlatform: zod.string(),
+  secondaryPlatforms: zod.array(zod.string()),
+  templateName: zod.string().nullish(),
+  pillar: zod.string().nullish(),
+  audience: zod.string().nullish(),
+  brandLayer: zod.string().nullish(),
+  objective: zod.string().nullish(),
+  contentType: zod.string().nullish(),
+  assetPacketType: zod.string().nullish(),
+  coreMessage: zod.string().nullish(),
+  cta: zod.string().nullish(),
+  requiredAssetRoles: zod.array(zod.string()),
+  status: zod.string(),
+  plannedWeek: zod.string().nullish(),
+  plannedDate: zod.string().nullish(),
+  notes: zod.string().nullish(),
+  linkedCreativeId: zod.string().nullish(),
+  createdAt: zod.date(),
+  updatedAt: zod.date(),
+});
+
+/**
+ * @summary Delete a content plan item
+ */
+export const DeletePlanItemParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const DeletePlanItemResponse = zod.object({
+  deleted: zod.boolean(),
+});
+
+/**
+ * @summary Create a creative from a content plan item
+ */
+export const CreateCreativeFromPlanItemParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+/**
  * @summary Get cost log entries with optional filters
  */
 export const GetCostLogsQueryParams = zod.object({

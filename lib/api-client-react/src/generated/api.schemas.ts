@@ -132,6 +132,199 @@ export interface CreativeListResponse {
   offset?: number;
 }
 
+export interface CalendarEntry {
+  id: string;
+  creativeId: string;
+  variantId: string;
+  platform: string;
+  socialAccountId?: string | null;
+  scheduledAt: string;
+  publishedAt?: string | null;
+  publishStatus: string;
+  publishError?: string | null;
+  retryCount: number;
+  scheduleMethod?: string | null;
+  smartScheduleRationale?: string | null;
+  proposalId?: string | null;
+  creativeName: string;
+  brandId: string;
+  brandName: string;
+  brandColor: string;
+  caption: string;
+  aspectRatio: string;
+  compositedImageUrl?: string | null;
+}
+
+export interface CalendarEntryRow {
+  id: string;
+  creativeId: string;
+  variantId: string;
+  platform: string;
+  socialAccountId?: string | null;
+  scheduledAt: string;
+  publishedAt?: string | null;
+  publishStatus: string;
+  publishError?: string | null;
+  retryCount: number;
+  scheduleMethod: string;
+  smartScheduleRationale?: string | null;
+  proposalId?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CalendarEntryListResponse {
+  entries: CalendarEntry[];
+  limit?: number;
+  offset?: number;
+}
+
+export interface CalendarEntryActionResponse {
+  message: string;
+  entryId: string;
+}
+
+export interface CreateCalendarEntryInput {
+  creativeId: string;
+  variantId: string;
+  platform: string;
+  scheduledAt: string;
+  socialAccountId?: string | null;
+}
+
+export interface UpdateCalendarEntryInput {
+  scheduledAt?: string;
+  publishStatus?: string;
+  socialAccountId?: string | null;
+  scheduleMethod?: string;
+}
+
+export type BatchScheduleInputEntriesItemSocialAccounts = {
+  [key: string]: string;
+};
+
+export type BatchScheduleInputEntriesItem = {
+  creativeId: string;
+  scheduledAt: string;
+  socialAccounts?: BatchScheduleInputEntriesItemSocialAccounts;
+};
+
+export interface BatchScheduleInput {
+  entries: BatchScheduleInputEntriesItem[];
+}
+
+export interface BatchScheduleResponse {
+  created: CalendarEntryRow[];
+  creativesScheduled: string[];
+}
+
+export interface PlanItem {
+  id: string;
+  title: string;
+  campaignName?: string | null;
+  primaryPlatform: string;
+  secondaryPlatforms: string[];
+  templateName?: string | null;
+  pillar?: string | null;
+  audience?: string | null;
+  brandLayer?: string | null;
+  objective?: string | null;
+  contentType?: string | null;
+  assetPacketType?: string | null;
+  coreMessage?: string | null;
+  cta?: string | null;
+  requiredAssetRoles: string[];
+  status: string;
+  plannedWeek?: string | null;
+  plannedDate?: string | null;
+  notes?: string | null;
+  linkedCreativeId?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ContentPlanListResponse {
+  items: PlanItem[];
+  total?: number;
+  limit?: number;
+  offset?: number;
+}
+
+export interface CreatePlanItemInput {
+  title: string;
+  campaignName?: string | null;
+  primaryPlatform: string;
+  secondaryPlatforms?: string[];
+  templateName?: string | null;
+  pillar?: string | null;
+  audience?: string | null;
+  brandLayer?: string | null;
+  objective?: string | null;
+  contentType?: string | null;
+  assetPacketType?: string | null;
+  coreMessage?: string | null;
+  cta?: string | null;
+  requiredAssetRoles?: string[];
+  status?: string;
+  plannedWeek?: string | null;
+  plannedDate?: string | null;
+  notes?: string | null;
+  linkedCreativeId?: string | null;
+}
+
+export type UpdatePlanItemInputStatus =
+  (typeof UpdatePlanItemInputStatus)[keyof typeof UpdatePlanItemInputStatus];
+
+export const UpdatePlanItemInputStatus = {
+  planned: "planned",
+  in_progress: "in_progress",
+  completed: "completed",
+  cancelled: "cancelled",
+} as const;
+
+export interface UpdatePlanItemInput {
+  title?: string;
+  campaignName?: string | null;
+  primaryPlatform?: string;
+  secondaryPlatforms?: string[];
+  templateName?: string | null;
+  pillar?: string | null;
+  audience?: string | null;
+  brandLayer?: string | null;
+  objective?: string | null;
+  contentType?: string | null;
+  assetPacketType?: string | null;
+  coreMessage?: string | null;
+  cta?: string | null;
+  requiredAssetRoles?: string[];
+  status?: UpdatePlanItemInputStatus;
+  plannedWeek?: string | null;
+  plannedDate?: string | null;
+  notes?: string | null;
+  linkedCreativeId?: string | null;
+}
+
+export interface PlanItemDeleteResponse {
+  deleted: boolean;
+}
+
+export type ContentPlanImportResponseRejectedDetailsItem = {
+  row: number;
+  reason: string;
+};
+
+export interface ContentPlanImportResponse {
+  imported: number;
+  rejected: number;
+  rejectedDetails: ContentPlanImportResponseRejectedDetailsItem[];
+  items: PlanItem[];
+}
+
+export interface CreateCreativeFromPlanItemResponse {
+  creative: Creative;
+  planItem: PlanItem;
+}
+
 export interface UploadResponse {
   url: string;
   thumbnailUrl?: string;
@@ -513,6 +706,28 @@ export const UploadVariantAudioBodyMode = {
 export type UploadVariantAudioBody = {
   audio: Blob;
   mode?: UploadVariantAudioBodyMode;
+};
+
+export type GetCalendarEntriesParams = {
+  start?: string;
+  end?: string;
+  brandId?: string;
+  limit?: number;
+  offset?: number;
+};
+
+export type GetContentPlanParams = {
+  pillar?: string;
+  platform?: string;
+  status?: string;
+  plannedWeek?: string;
+  brandLayer?: string;
+  limit?: number;
+  offset?: number;
+};
+
+export type ImportContentPlanBody = {
+  file: Blob;
 };
 
 export type GetCostLogsParams = {

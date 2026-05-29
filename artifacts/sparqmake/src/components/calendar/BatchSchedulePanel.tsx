@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
+import { batchScheduleCalendarEntries, ApiError } from "@workspace/api-client-react";
 
 export interface BatchSchedulePanelProps {
   open: boolean;
@@ -143,26 +144,19 @@ export function BatchSchedulePanel({ open, onClose, onScheduled }: BatchSchedule
         return { creativeId, scheduledAt };
       });
 
-      const res = await apiFetch("/api/calendar-entries/batch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ entries }),
-      });
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: "Batch scheduling failed" }));
-        throw new Error(err.error || "Batch scheduling failed");
-      }
+      await batchScheduleCalendarEntries({ entries });
 
       toast({ title: `Scheduled ${entries.length} creative${entries.length > 1 ? "s" : ""}` });
       onScheduled();
       onClose();
-    } catch (err: any) {
+    } catch (err) {
+      const description = err instanceof ApiError
+        ? ((err.data as { error?: string } | null)?.error ?? err.message)
+        : err instanceof Error ? err.message : "Something went wrong";
       toast({
         variant: "destructive",
         title: "Scheduling failed",
-        description: err.message || "Something went wrong",
+        description: description || "Something went wrong",
       });
     } finally {
       setSubmitting(false);

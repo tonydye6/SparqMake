@@ -1,4 +1,3 @@
-import { apiFetch } from "@/lib/utils";
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { format } from "date-fns";
 import { ChevronLeft, ChevronRight, Filter, Clock, Send, RotateCcw, AlertCircle, CheckCircle2, Loader2, CalendarPlus, Sparkles, Edit3, AlertTriangle } from "lucide-react";
@@ -8,7 +7,15 @@ import { Badge } from "@/components/ui/badge";
 import { ToastAction } from "@/components/ui/toast";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { useGetBrands } from "@workspace/api-client-react";
+import {
+  useGetBrands,
+  getCalendarEntries,
+  publishCalendarEntry,
+  retryCalendarEntry,
+  updateCalendarEntry,
+  ApiError,
+  type CalendarEntry,
+} from "@workspace/api-client-react";
 import { PlatformIcon } from "@/components/ui/platform-icon";
 import { useLocation } from "wouter";
 import { useToast } from "@/hooks/use-toast";
@@ -16,27 +23,12 @@ import { BatchSchedulePanel } from "@/components/calendar/BatchSchedulePanel";
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
 
-interface CalendarEntry {
-  id: string;
-  creativeId: string;
-  variantId: string;
-  platform: string;
-  socialAccountId?: string | null;
-  scheduledAt: string;
-  publishedAt?: string | null;
-  publishStatus: string;
-  publishError?: string | null;
-  retryCount?: number;
-  creativeName: string;
-  brandId: string;
-  brandName: string;
-  brandColor: string;
-  caption: string;
-  aspectRatio: string;
-  compositedImageUrl?: string | null;
-  scheduleMethod?: string | null;
-  proposalId?: string | null;
-  smartScheduleRationale?: string | null;
+function getApiErrorMessage(err: unknown): string | undefined {
+  if (err instanceof ApiError) {
+    const data = err.data as { error?: string } | null;
+    return data?.error ?? err.message;
+  }
+  return err instanceof Error ? err.message : undefined;
 }
 
 
@@ -121,18 +113,13 @@ export default function Calendar() {
 
     if (!opts?.silent) setIsLoading(true);
 
-    const params = new URLSearchParams({
+    getCalendarEntries({
       start: start.toISOString(),
       end: end.toISOString(),
-    });
-    if (brandFilter !== "all") {
-      params.set("brandId", brandFilter);
-    }
-
-    apiFetch(`/api/calendar-entries?${params}`)
-      .then(res => res.json())
+      ...(brandFilter !== "all" ? { brandId: brandFilter } : {}),
+    })
       .then(data => {
-        setEntries(Array.isArray(data) ? data : (data?.entries ?? []));
+        setEntries(data.entries);
         setIsLoading(false);
       })
       .catch((err) => {
@@ -224,21 +211,13 @@ export default function Calendar() {
     e.stopPropagation();
     setPublishingIds(prev => new Set(prev).add(entryId));
     try {
-      const resp = await apiFetch(`${API_BASE}/api/calendar-entries/${entryId}/publish`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-      });
-      if (!resp.ok) {
-        const err = await resp.json().catch(() => ({ error: "Failed" }));
-        toast({ variant: "destructive", title: "Publish failed", description: err.error });
-      } else {
-        toast({ title: "Publishing initiated" });
-        setEntries(prev => prev.map(e =>
-          e.id === entryId ? { ...e, publishStatus: "publishing" } : e
-        ));
-      }
-    } catch {
-      toast({ variant: "destructive", title: "Publish failed" });
+      await publishCalendarEntry(entryId);
+      toast({ title: "Publishing initiated" });
+      setEntries(prev => prev.map(e =>
+        e.id === entryId ? { ...e, publishStatus: "publishing" } : e
+      ));
+    } catch (err) {
+      toast({ variant: "destructive", title: "Publish failed", description: getApiErrorMessage(err) });
     } finally {
       setPublishingIds(prev => {
         const next = new Set(prev);
@@ -252,21 +231,13 @@ export default function Calendar() {
     e.stopPropagation();
     setPublishingIds(prev => new Set(prev).add(entryId));
     try {
-      const resp = await apiFetch(`${API_BASE}/api/calendar-entries/${entryId}/retry`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-      });
-      if (!resp.ok) {
-        const err = await resp.json().catch(() => ({ error: "Failed" }));
-        toast({ variant: "destructive", title: "Retry failed", description: err.error });
-      } else {
-        toast({ title: "Retry initiated" });
-        setEntries(prev => prev.map(e =>
-          e.id === entryId ? { ...e, publishStatus: "publishing", publishError: null } : e
-        ));
-      }
-    } catch {
-      toast({ variant: "destructive", title: "Retry failed" });
+      await retryCalendarEntry(entryId);
+      toast({ title: "Retry initiated" });
+      setEntries(prev => prev.map(e =>
+        e.id === entryId ? { ...e, publishStatus: "publishing", publishError: null } : e
+      ));
+    } catch (err) {
+      toast({ variant: "destructive", title: "Retry failed", description: getApiErrorMessage(err) });
     } finally {
       setPublishingIds(prev => {
         const next = new Set(prev);
@@ -309,18 +280,14 @@ export default function Calendar() {
       } : e
     ));
 
-    const body: Record<string, string> = { scheduledAt: newDate.toISOString() };
+    const body: { scheduledAt: string; scheduleMethod?: string } = { scheduledAt: newDate.toISOString() };
     if (wasSmartScheduled) {
       body.scheduleMethod = "smart_schedule_modified";
     }
 
-    const resp = await apiFetch(`${API_BASE}/api/calendar-entries/${entryId}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-
-    if (!resp.ok) {
+    try {
+      await updateCalendarEntry(entryId, body);
+    } catch {
       setEntries(prev => prev.map(e =>
         e.id === entryId ? { ...e, scheduledAt: previousScheduledAt, scheduleMethod: entry?.scheduleMethod } : e
       ));
@@ -342,11 +309,7 @@ export default function Calendar() {
           <ToastAction altText="Undo reschedule" onClick={async () => {
             const ref = lastRescheduleRef.current;
             if (!ref) return;
-            await apiFetch(`${API_BASE}/api/calendar-entries/${ref.entryId}`, {
-              method: "PUT",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ scheduledAt: ref.previousScheduledAt }),
-            });
+            await updateCalendarEntry(ref.entryId, { scheduledAt: ref.previousScheduledAt });
             setEntries(prev => prev.map(e =>
               e.id === ref.entryId ? { ...e, scheduledAt: ref.previousScheduledAt } : e
             ));
@@ -362,11 +325,7 @@ export default function Calendar() {
           <ToastAction altText="Undo reschedule" onClick={async () => {
             const ref = lastRescheduleRef.current;
             if (!ref) return;
-            await apiFetch(`${API_BASE}/api/calendar-entries/${ref.entryId}`, {
-              method: "PUT",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ scheduledAt: ref.previousScheduledAt }),
-            });
+            await updateCalendarEntry(ref.entryId, { scheduledAt: ref.previousScheduledAt });
             setEntries(prev => prev.map(e =>
               e.id === ref.entryId ? { ...e, scheduledAt: ref.previousScheduledAt } : e
             ));

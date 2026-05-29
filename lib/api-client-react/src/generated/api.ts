@@ -20,19 +20,31 @@ import type {
   Asset,
   AssetListResponse,
   AudioGenerateInput,
+  BatchScheduleInput,
+  BatchScheduleResponse,
   Brand,
+  CalendarEntryActionResponse,
+  CalendarEntryListResponse,
+  CalendarEntryRow,
+  ContentPlanImportResponse,
+  ContentPlanListResponse,
   CostLogEntry,
   CostSummary,
   CreateAssetInput,
   CreateBrandInput,
+  CreateCalendarEntryInput,
+  CreateCreativeFromPlanItemResponse,
   CreateCreativeInput,
   CreateHashtagSetInput,
+  CreatePlanItemInput,
   CreateTemplateInput,
   Creative,
   CreativeListResponse,
   CreativeVariant,
   GenerateVideoBody,
   GetAssetsParams,
+  GetCalendarEntriesParams,
+  GetContentPlanParams,
   GetCostLogsParams,
   GetCostLogsSummaryParams,
   GetCreativesParams,
@@ -41,7 +53,10 @@ import type {
   HashtagSet,
   HashtagSetListResponse,
   HealthStatus,
+  ImportContentPlanBody,
   MessageResponse,
+  PlanItem,
+  PlanItemDeleteResponse,
   RecommendationActionInput,
   SocialAccount,
   SocialAccountDeleteResponse,
@@ -52,7 +67,9 @@ import type {
   TemplateStats,
   TemplateVersion,
   UpdateAssetInput,
+  UpdateCalendarEntryInput,
   UpdateCreativeInput,
+  UpdatePlanItemInput,
   UploadFileBody,
   UploadResponse,
   UploadVariantAudioBody,
@@ -3267,6 +3284,1242 @@ export const useUploadVariantAudio = <
   TContext
 > => {
   return useMutation(getUploadVariantAudioMutationOptions(options));
+};
+
+/**
+ * @summary Get calendar entries within a date range
+ */
+export const getGetCalendarEntriesUrl = (params?: GetCalendarEntriesParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/calendar-entries?${stringifiedParams}`
+    : `/api/calendar-entries`;
+};
+
+export const getCalendarEntries = async (
+  params?: GetCalendarEntriesParams,
+  options?: RequestInit,
+): Promise<CalendarEntryListResponse> => {
+  return customFetch<CalendarEntryListResponse>(
+    getGetCalendarEntriesUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetCalendarEntriesQueryKey = (
+  params?: GetCalendarEntriesParams,
+) => {
+  return [`/api/calendar-entries`, ...(params ? [params] : [])] as const;
+};
+
+export const getGetCalendarEntriesQueryOptions = <
+  TData = Awaited<ReturnType<typeof getCalendarEntries>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: GetCalendarEntriesParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getCalendarEntries>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetCalendarEntriesQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getCalendarEntries>>
+  > = ({ signal }) => getCalendarEntries(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getCalendarEntries>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetCalendarEntriesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getCalendarEntries>>
+>;
+export type GetCalendarEntriesQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get calendar entries within a date range
+ */
+
+export function useGetCalendarEntries<
+  TData = Awaited<ReturnType<typeof getCalendarEntries>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: GetCalendarEntriesParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getCalendarEntries>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetCalendarEntriesQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Schedule a creative variant
+ */
+export const getCreateCalendarEntryUrl = () => {
+  return `/api/calendar-entries`;
+};
+
+export const createCalendarEntry = async (
+  createCalendarEntryInput: CreateCalendarEntryInput,
+  options?: RequestInit,
+): Promise<CalendarEntryRow> => {
+  return customFetch<CalendarEntryRow>(getCreateCalendarEntryUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(createCalendarEntryInput),
+  });
+};
+
+export const getCreateCalendarEntryMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createCalendarEntry>>,
+    TError,
+    { data: BodyType<CreateCalendarEntryInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof createCalendarEntry>>,
+  TError,
+  { data: BodyType<CreateCalendarEntryInput> },
+  TContext
+> => {
+  const mutationKey = ["createCalendarEntry"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof createCalendarEntry>>,
+    { data: BodyType<CreateCalendarEntryInput> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return createCalendarEntry(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CreateCalendarEntryMutationResult = NonNullable<
+  Awaited<ReturnType<typeof createCalendarEntry>>
+>;
+export type CreateCalendarEntryMutationBody =
+  BodyType<CreateCalendarEntryInput>;
+export type CreateCalendarEntryMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Schedule a creative variant
+ */
+export const useCreateCalendarEntry = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createCalendarEntry>>,
+    TError,
+    { data: BodyType<CreateCalendarEntryInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof createCalendarEntry>>,
+  TError,
+  { data: BodyType<CreateCalendarEntryInput> },
+  TContext
+> => {
+  return useMutation(getCreateCalendarEntryMutationOptions(options));
+};
+
+/**
+ * @summary Batch schedule multiple approved creatives
+ */
+export const getBatchScheduleCalendarEntriesUrl = () => {
+  return `/api/calendar-entries/batch`;
+};
+
+export const batchScheduleCalendarEntries = async (
+  batchScheduleInput: BatchScheduleInput,
+  options?: RequestInit,
+): Promise<BatchScheduleResponse> => {
+  return customFetch<BatchScheduleResponse>(
+    getBatchScheduleCalendarEntriesUrl(),
+    {
+      ...options,
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(batchScheduleInput),
+    },
+  );
+};
+
+export const getBatchScheduleCalendarEntriesMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof batchScheduleCalendarEntries>>,
+    TError,
+    { data: BodyType<BatchScheduleInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof batchScheduleCalendarEntries>>,
+  TError,
+  { data: BodyType<BatchScheduleInput> },
+  TContext
+> => {
+  const mutationKey = ["batchScheduleCalendarEntries"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof batchScheduleCalendarEntries>>,
+    { data: BodyType<BatchScheduleInput> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return batchScheduleCalendarEntries(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type BatchScheduleCalendarEntriesMutationResult = NonNullable<
+  Awaited<ReturnType<typeof batchScheduleCalendarEntries>>
+>;
+export type BatchScheduleCalendarEntriesMutationBody =
+  BodyType<BatchScheduleInput>;
+export type BatchScheduleCalendarEntriesMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Batch schedule multiple approved creatives
+ */
+export const useBatchScheduleCalendarEntries = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof batchScheduleCalendarEntries>>,
+    TError,
+    { data: BodyType<BatchScheduleInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof batchScheduleCalendarEntries>>,
+  TError,
+  { data: BodyType<BatchScheduleInput> },
+  TContext
+> => {
+  return useMutation(getBatchScheduleCalendarEntriesMutationOptions(options));
+};
+
+/**
+ * @summary Update a calendar entry
+ */
+export const getUpdateCalendarEntryUrl = (id: string) => {
+  return `/api/calendar-entries/${id}`;
+};
+
+export const updateCalendarEntry = async (
+  id: string,
+  updateCalendarEntryInput: UpdateCalendarEntryInput,
+  options?: RequestInit,
+): Promise<CalendarEntryRow> => {
+  return customFetch<CalendarEntryRow>(getUpdateCalendarEntryUrl(id), {
+    ...options,
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(updateCalendarEntryInput),
+  });
+};
+
+export const getUpdateCalendarEntryMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateCalendarEntry>>,
+    TError,
+    { id: string; data: BodyType<UpdateCalendarEntryInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof updateCalendarEntry>>,
+  TError,
+  { id: string; data: BodyType<UpdateCalendarEntryInput> },
+  TContext
+> => {
+  const mutationKey = ["updateCalendarEntry"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof updateCalendarEntry>>,
+    { id: string; data: BodyType<UpdateCalendarEntryInput> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return updateCalendarEntry(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UpdateCalendarEntryMutationResult = NonNullable<
+  Awaited<ReturnType<typeof updateCalendarEntry>>
+>;
+export type UpdateCalendarEntryMutationBody =
+  BodyType<UpdateCalendarEntryInput>;
+export type UpdateCalendarEntryMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Update a calendar entry
+ */
+export const useUpdateCalendarEntry = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateCalendarEntry>>,
+    TError,
+    { id: string; data: BodyType<UpdateCalendarEntryInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof updateCalendarEntry>>,
+  TError,
+  { id: string; data: BodyType<UpdateCalendarEntryInput> },
+  TContext
+> => {
+  return useMutation(getUpdateCalendarEntryMutationOptions(options));
+};
+
+/**
+ * @summary Delete a calendar entry
+ */
+export const getDeleteCalendarEntryUrl = (id: string) => {
+  return `/api/calendar-entries/${id}`;
+};
+
+export const deleteCalendarEntry = async (
+  id: string,
+  options?: RequestInit,
+): Promise<MessageResponse> => {
+  return customFetch<MessageResponse>(getDeleteCalendarEntryUrl(id), {
+    ...options,
+    method: "DELETE",
+  });
+};
+
+export const getDeleteCalendarEntryMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteCalendarEntry>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof deleteCalendarEntry>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  const mutationKey = ["deleteCalendarEntry"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof deleteCalendarEntry>>,
+    { id: string }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return deleteCalendarEntry(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type DeleteCalendarEntryMutationResult = NonNullable<
+  Awaited<ReturnType<typeof deleteCalendarEntry>>
+>;
+
+export type DeleteCalendarEntryMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Delete a calendar entry
+ */
+export const useDeleteCalendarEntry = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteCalendarEntry>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof deleteCalendarEntry>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  return useMutation(getDeleteCalendarEntryMutationOptions(options));
+};
+
+/**
+ * @summary Publish a calendar entry immediately
+ */
+export const getPublishCalendarEntryUrl = (id: string) => {
+  return `/api/calendar-entries/${id}/publish`;
+};
+
+export const publishCalendarEntry = async (
+  id: string,
+  options?: RequestInit,
+): Promise<CalendarEntryActionResponse> => {
+  return customFetch<CalendarEntryActionResponse>(
+    getPublishCalendarEntryUrl(id),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getPublishCalendarEntryMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof publishCalendarEntry>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof publishCalendarEntry>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  const mutationKey = ["publishCalendarEntry"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof publishCalendarEntry>>,
+    { id: string }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return publishCalendarEntry(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type PublishCalendarEntryMutationResult = NonNullable<
+  Awaited<ReturnType<typeof publishCalendarEntry>>
+>;
+
+export type PublishCalendarEntryMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Publish a calendar entry immediately
+ */
+export const usePublishCalendarEntry = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof publishCalendarEntry>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof publishCalendarEntry>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  return useMutation(getPublishCalendarEntryMutationOptions(options));
+};
+
+/**
+ * @summary Retry a failed calendar entry
+ */
+export const getRetryCalendarEntryUrl = (id: string) => {
+  return `/api/calendar-entries/${id}/retry`;
+};
+
+export const retryCalendarEntry = async (
+  id: string,
+  options?: RequestInit,
+): Promise<CalendarEntryActionResponse> => {
+  return customFetch<CalendarEntryActionResponse>(
+    getRetryCalendarEntryUrl(id),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getRetryCalendarEntryMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof retryCalendarEntry>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof retryCalendarEntry>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  const mutationKey = ["retryCalendarEntry"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof retryCalendarEntry>>,
+    { id: string }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return retryCalendarEntry(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RetryCalendarEntryMutationResult = NonNullable<
+  Awaited<ReturnType<typeof retryCalendarEntry>>
+>;
+
+export type RetryCalendarEntryMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Retry a failed calendar entry
+ */
+export const useRetryCalendarEntry = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof retryCalendarEntry>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof retryCalendarEntry>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  return useMutation(getRetryCalendarEntryMutationOptions(options));
+};
+
+/**
+ * @summary Get content plan items
+ */
+export const getGetContentPlanUrl = (params?: GetContentPlanParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/content-plan?${stringifiedParams}`
+    : `/api/content-plan`;
+};
+
+export const getContentPlan = async (
+  params?: GetContentPlanParams,
+  options?: RequestInit,
+): Promise<ContentPlanListResponse> => {
+  return customFetch<ContentPlanListResponse>(getGetContentPlanUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetContentPlanQueryKey = (params?: GetContentPlanParams) => {
+  return [`/api/content-plan`, ...(params ? [params] : [])] as const;
+};
+
+export const getGetContentPlanQueryOptions = <
+  TData = Awaited<ReturnType<typeof getContentPlan>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: GetContentPlanParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getContentPlan>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetContentPlanQueryKey(params);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getContentPlan>>> = ({
+    signal,
+  }) => getContentPlan(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getContentPlan>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetContentPlanQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getContentPlan>>
+>;
+export type GetContentPlanQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get content plan items
+ */
+
+export function useGetContentPlan<
+  TData = Awaited<ReturnType<typeof getContentPlan>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: GetContentPlanParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getContentPlan>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetContentPlanQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Create a content plan item
+ */
+export const getCreatePlanItemUrl = () => {
+  return `/api/content-plan`;
+};
+
+export const createPlanItem = async (
+  createPlanItemInput: CreatePlanItemInput,
+  options?: RequestInit,
+): Promise<PlanItem> => {
+  return customFetch<PlanItem>(getCreatePlanItemUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(createPlanItemInput),
+  });
+};
+
+export const getCreatePlanItemMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createPlanItem>>,
+    TError,
+    { data: BodyType<CreatePlanItemInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof createPlanItem>>,
+  TError,
+  { data: BodyType<CreatePlanItemInput> },
+  TContext
+> => {
+  const mutationKey = ["createPlanItem"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof createPlanItem>>,
+    { data: BodyType<CreatePlanItemInput> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return createPlanItem(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CreatePlanItemMutationResult = NonNullable<
+  Awaited<ReturnType<typeof createPlanItem>>
+>;
+export type CreatePlanItemMutationBody = BodyType<CreatePlanItemInput>;
+export type CreatePlanItemMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Create a content plan item
+ */
+export const useCreatePlanItem = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createPlanItem>>,
+    TError,
+    { data: BodyType<CreatePlanItemInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof createPlanItem>>,
+  TError,
+  { data: BodyType<CreatePlanItemInput> },
+  TContext
+> => {
+  return useMutation(getCreatePlanItemMutationOptions(options));
+};
+
+/**
+ * @summary Import content plan items from a CSV file
+ */
+export const getImportContentPlanUrl = () => {
+  return `/api/content-plan/import`;
+};
+
+export const importContentPlan = async (
+  importContentPlanBody: ImportContentPlanBody,
+  options?: RequestInit,
+): Promise<ContentPlanImportResponse> => {
+  const formData = new FormData();
+  formData.append(`file`, importContentPlanBody.file);
+
+  return customFetch<ContentPlanImportResponse>(getImportContentPlanUrl(), {
+    ...options,
+    method: "POST",
+    body: formData,
+  });
+};
+
+export const getImportContentPlanMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof importContentPlan>>,
+    TError,
+    { data: BodyType<ImportContentPlanBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof importContentPlan>>,
+  TError,
+  { data: BodyType<ImportContentPlanBody> },
+  TContext
+> => {
+  const mutationKey = ["importContentPlan"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof importContentPlan>>,
+    { data: BodyType<ImportContentPlanBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return importContentPlan(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ImportContentPlanMutationResult = NonNullable<
+  Awaited<ReturnType<typeof importContentPlan>>
+>;
+export type ImportContentPlanMutationBody = BodyType<ImportContentPlanBody>;
+export type ImportContentPlanMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Import content plan items from a CSV file
+ */
+export const useImportContentPlan = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof importContentPlan>>,
+    TError,
+    { data: BodyType<ImportContentPlanBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof importContentPlan>>,
+  TError,
+  { data: BodyType<ImportContentPlanBody> },
+  TContext
+> => {
+  return useMutation(getImportContentPlanMutationOptions(options));
+};
+
+/**
+ * @summary Get a content plan item
+ */
+export const getGetPlanItemUrl = (id: string) => {
+  return `/api/content-plan/${id}`;
+};
+
+export const getPlanItem = async (
+  id: string,
+  options?: RequestInit,
+): Promise<PlanItem> => {
+  return customFetch<PlanItem>(getGetPlanItemUrl(id), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetPlanItemQueryKey = (id: string) => {
+  return [`/api/content-plan/${id}`] as const;
+};
+
+export const getGetPlanItemQueryOptions = <
+  TData = Awaited<ReturnType<typeof getPlanItem>>,
+  TError = ErrorType<unknown>,
+>(
+  id: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getPlanItem>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetPlanItemQueryKey(id);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getPlanItem>>> = ({
+    signal,
+  }) => getPlanItem(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!id,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getPlanItem>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetPlanItemQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getPlanItem>>
+>;
+export type GetPlanItemQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get a content plan item
+ */
+
+export function useGetPlanItem<
+  TData = Awaited<ReturnType<typeof getPlanItem>>,
+  TError = ErrorType<unknown>,
+>(
+  id: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getPlanItem>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetPlanItemQueryOptions(id, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Update a content plan item
+ */
+export const getUpdatePlanItemUrl = (id: string) => {
+  return `/api/content-plan/${id}`;
+};
+
+export const updatePlanItem = async (
+  id: string,
+  updatePlanItemInput: UpdatePlanItemInput,
+  options?: RequestInit,
+): Promise<PlanItem> => {
+  return customFetch<PlanItem>(getUpdatePlanItemUrl(id), {
+    ...options,
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(updatePlanItemInput),
+  });
+};
+
+export const getUpdatePlanItemMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updatePlanItem>>,
+    TError,
+    { id: string; data: BodyType<UpdatePlanItemInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof updatePlanItem>>,
+  TError,
+  { id: string; data: BodyType<UpdatePlanItemInput> },
+  TContext
+> => {
+  const mutationKey = ["updatePlanItem"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof updatePlanItem>>,
+    { id: string; data: BodyType<UpdatePlanItemInput> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return updatePlanItem(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UpdatePlanItemMutationResult = NonNullable<
+  Awaited<ReturnType<typeof updatePlanItem>>
+>;
+export type UpdatePlanItemMutationBody = BodyType<UpdatePlanItemInput>;
+export type UpdatePlanItemMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Update a content plan item
+ */
+export const useUpdatePlanItem = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updatePlanItem>>,
+    TError,
+    { id: string; data: BodyType<UpdatePlanItemInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof updatePlanItem>>,
+  TError,
+  { id: string; data: BodyType<UpdatePlanItemInput> },
+  TContext
+> => {
+  return useMutation(getUpdatePlanItemMutationOptions(options));
+};
+
+/**
+ * @summary Delete a content plan item
+ */
+export const getDeletePlanItemUrl = (id: string) => {
+  return `/api/content-plan/${id}`;
+};
+
+export const deletePlanItem = async (
+  id: string,
+  options?: RequestInit,
+): Promise<PlanItemDeleteResponse> => {
+  return customFetch<PlanItemDeleteResponse>(getDeletePlanItemUrl(id), {
+    ...options,
+    method: "DELETE",
+  });
+};
+
+export const getDeletePlanItemMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deletePlanItem>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof deletePlanItem>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  const mutationKey = ["deletePlanItem"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof deletePlanItem>>,
+    { id: string }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return deletePlanItem(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type DeletePlanItemMutationResult = NonNullable<
+  Awaited<ReturnType<typeof deletePlanItem>>
+>;
+
+export type DeletePlanItemMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Delete a content plan item
+ */
+export const useDeletePlanItem = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deletePlanItem>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof deletePlanItem>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  return useMutation(getDeletePlanItemMutationOptions(options));
+};
+
+/**
+ * @summary Create a creative from a content plan item
+ */
+export const getCreateCreativeFromPlanItemUrl = (id: string) => {
+  return `/api/content-plan/${id}/create-creative`;
+};
+
+export const createCreativeFromPlanItem = async (
+  id: string,
+  options?: RequestInit,
+): Promise<CreateCreativeFromPlanItemResponse> => {
+  return customFetch<CreateCreativeFromPlanItemResponse>(
+    getCreateCreativeFromPlanItemUrl(id),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getCreateCreativeFromPlanItemMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createCreativeFromPlanItem>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof createCreativeFromPlanItem>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  const mutationKey = ["createCreativeFromPlanItem"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof createCreativeFromPlanItem>>,
+    { id: string }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return createCreativeFromPlanItem(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CreateCreativeFromPlanItemMutationResult = NonNullable<
+  Awaited<ReturnType<typeof createCreativeFromPlanItem>>
+>;
+
+export type CreateCreativeFromPlanItemMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Create a creative from a content plan item
+ */
+export const useCreateCreativeFromPlanItem = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createCreativeFromPlanItem>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof createCreativeFromPlanItem>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  return useMutation(getCreateCreativeFromPlanItemMutationOptions(options));
 };
 
 /**

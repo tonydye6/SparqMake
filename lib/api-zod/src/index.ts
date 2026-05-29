@@ -8,6 +8,7 @@ export * from "./generated/types";
 // the zod client so the runtime schemas win and the ambiguity is resolved.
 export {
   GenerateVideoBody,
+  ImportContentPlanBody,
   UploadFileBody,
   UploadVariantAudioBody,
 } from "./generated/api";

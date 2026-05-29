@@ -17,7 +17,7 @@ import {
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn, apiFetch } from "@/lib/utils";
-import { useGetCreatives } from "@workspace/api-client-react";
+import { useGetCreatives, getCalendarEntries } from "@workspace/api-client-react";
 import { useAuth } from "@/hooks/useAuth";
 
 type SidebarMode = "mobile" | "tablet" | "desktop";
@@ -64,9 +64,8 @@ export function Sidebar({ mobileOpen, onMobileClose }: SidebarProps) {
     const now = new Date();
     const start = new Date(now.getFullYear(), now.getMonth(), 1);
     const end = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
-    apiFetch(`/api/calendar-entries?start=${start.toISOString()}&end=${end.toISOString()}`)
-      .then(res => res.json())
-      .then(data => setCalendarCount(Array.isArray(data) ? data.length : (data?.entries?.length ?? 0)))
+    getCalendarEntries({ start: start.toISOString(), end: end.toISOString() })
+      .then(data => setCalendarCount(data.entries.length))
       .catch((err) => console.error("Failed to load calendar count:", err));
   }, []);
 

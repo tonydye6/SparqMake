@@ -25,6 +25,10 @@ tags:
     description: Social media account management
   - name: costs
     description: Cost tracking and analytics
+  - name: calendar
+    description: Calendar entries and scheduling
+  - name: content-plan
+    description: Social content planning
 paths:
   /healthz:
     get:
@@ -817,6 +821,320 @@ paths:
               schema:
                 $ref: "#/components/schemas/CreativeVariant"
 
+  /calendar-entries:
+    get:
+      operationId: getCalendarEntries
+      tags: [calendar]
+      summary: Get calendar entries within a date range
+      parameters:
+        - name: start
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: end
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: brandId
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+        - name: offset
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of calendar entries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CalendarEntryListResponse"
+    post:
+      operationId: createCalendarEntry
+      tags: [calendar]
+      summary: Schedule a creative variant
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCalendarEntryInput"
+      responses:
+        "201":
+          description: Calendar entry created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CalendarEntryRow"
+
+  /calendar-entries/batch:
+    post:
+      operationId: batchScheduleCalendarEntries
+      tags: [calendar]
+      summary: Batch schedule multiple approved creatives
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BatchScheduleInput"
+      responses:
+        "201":
+          description: Calendar entries created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchScheduleResponse"
+
+  /calendar-entries/{id}:
+    put:
+      operationId: updateCalendarEntry
+      tags: [calendar]
+      summary: Update a calendar entry
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCalendarEntryInput"
+      responses:
+        "200":
+          description: Calendar entry updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CalendarEntryRow"
+    delete:
+      operationId: deleteCalendarEntry
+      tags: [calendar]
+      summary: Delete a calendar entry
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
+  /calendar-entries/{id}/publish:
+    post:
+      operationId: publishCalendarEntry
+      tags: [calendar]
+      summary: Publish a calendar entry immediately
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Publishing initiated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CalendarEntryActionResponse"
+
+  /calendar-entries/{id}/retry:
+    post:
+      operationId: retryCalendarEntry
+      tags: [calendar]
+      summary: Retry a failed calendar entry
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Retry initiated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CalendarEntryActionResponse"
+
+  /content-plan:
+    get:
+      operationId: getContentPlan
+      tags: [content-plan]
+      summary: Get content plan items
+      parameters:
+        - name: pillar
+          in: query
+          schema:
+            type: string
+        - name: platform
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: plannedWeek
+          in: query
+          schema:
+            type: string
+        - name: brandLayer
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+        - name: offset
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of content plan items
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContentPlanListResponse"
+    post:
+      operationId: createPlanItem
+      tags: [content-plan]
+      summary: Create a content plan item
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePlanItemInput"
+      responses:
+        "201":
+          description: Plan item created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlanItem"
+
+  /content-plan/import:
+    post:
+      operationId: importContentPlan
+      tags: [content-plan]
+      summary: Import content plan items from a CSV file
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+              required:
+                - file
+      responses:
+        "200":
+          description: Import result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContentPlanImportResponse"
+
+  /content-plan/{id}:
+    get:
+      operationId: getPlanItem
+      tags: [content-plan]
+      summary: Get a content plan item
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Plan item
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlanItem"
+    put:
+      operationId: updatePlanItem
+      tags: [content-plan]
+      summary: Update a content plan item
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdatePlanItemInput"
+      responses:
+        "200":
+          description: Plan item updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlanItem"
+    delete:
+      operationId: deletePlanItem
+      tags: [content-plan]
+      summary: Delete a content plan item
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlanItemDeleteResponse"
+
+  /content-plan/{id}/create-creative:
+    post:
+      operationId: createCreativeFromPlanItem
+      tags: [content-plan]
+      summary: Create a creative from a content plan item
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "201":
+          description: Creative created from plan item
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateCreativeFromPlanItemResponse"
+
   /cost-logs:
     get:
       operationId: getCostLogs
@@ -959,6 +1277,487 @@ components:
           type: integer
       required:
         - data
+
+    CalendarEntry:
+      type: object
+      properties:
+        id:
+          type: string
+        creativeId:
+          type: string
+        variantId:
+          type: string
+        platform:
+          type: string
+        socialAccountId:
+          type: string
+          nullable: true
+        scheduledAt:
+          type: string
+          format: date-time
+        publishedAt:
+          type: string
+          format: date-time
+          nullable: true
+        publishStatus:
+          type: string
+        publishError:
+          type: string
+          nullable: true
+        retryCount:
+          type: integer
+        scheduleMethod:
+          type: string
+          nullable: true
+        smartScheduleRationale:
+          type: string
+          nullable: true
+        proposalId:
+          type: string
+          nullable: true
+        creativeName:
+          type: string
+        brandId:
+          type: string
+        brandName:
+          type: string
+        brandColor:
+          type: string
+        caption:
+          type: string
+        aspectRatio:
+          type: string
+        compositedImageUrl:
+          type: string
+          nullable: true
+      required:
+        - id
+        - creativeId
+        - variantId
+        - platform
+        - scheduledAt
+        - publishStatus
+        - retryCount
+        - creativeName
+        - brandId
+        - brandName
+        - brandColor
+        - caption
+        - aspectRatio
+
+    CalendarEntryRow:
+      type: object
+      properties:
+        id:
+          type: string
+        creativeId:
+          type: string
+        variantId:
+          type: string
+        platform:
+          type: string
+        socialAccountId:
+          type: string
+          nullable: true
+        scheduledAt:
+          type: string
+          format: date-time
+        publishedAt:
+          type: string
+          format: date-time
+          nullable: true
+        publishStatus:
+          type: string
+        publishError:
+          type: string
+          nullable: true
+        retryCount:
+          type: integer
+        scheduleMethod:
+          type: string
+        smartScheduleRationale:
+          type: string
+          nullable: true
+        proposalId:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - creativeId
+        - variantId
+        - platform
+        - scheduledAt
+        - publishStatus
+        - retryCount
+        - scheduleMethod
+        - createdAt
+        - updatedAt
+
+    CalendarEntryListResponse:
+      type: object
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/CalendarEntry"
+        limit:
+          type: integer
+        offset:
+          type: integer
+      required:
+        - entries
+
+    CalendarEntryActionResponse:
+      type: object
+      properties:
+        message:
+          type: string
+        entryId:
+          type: string
+      required:
+        - message
+        - entryId
+
+    CreateCalendarEntryInput:
+      type: object
+      properties:
+        creativeId:
+          type: string
+        variantId:
+          type: string
+        platform:
+          type: string
+        scheduledAt:
+          type: string
+        socialAccountId:
+          type: string
+          nullable: true
+      required:
+        - creativeId
+        - variantId
+        - platform
+        - scheduledAt
+
+    UpdateCalendarEntryInput:
+      type: object
+      properties:
+        scheduledAt:
+          type: string
+        publishStatus:
+          type: string
+        socialAccountId:
+          type: string
+          nullable: true
+        scheduleMethod:
+          type: string
+
+    BatchScheduleInput:
+      type: object
+      properties:
+        entries:
+          type: array
+          items:
+            type: object
+            properties:
+              creativeId:
+                type: string
+              scheduledAt:
+                type: string
+              socialAccounts:
+                type: object
+                additionalProperties:
+                  type: string
+            required:
+              - creativeId
+              - scheduledAt
+      required:
+        - entries
+
+    BatchScheduleResponse:
+      type: object
+      properties:
+        created:
+          type: array
+          items:
+            $ref: "#/components/schemas/CalendarEntryRow"
+        creativesScheduled:
+          type: array
+          items:
+            type: string
+      required:
+        - created
+        - creativesScheduled
+
+    PlanItem:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        campaignName:
+          type: string
+          nullable: true
+        primaryPlatform:
+          type: string
+        secondaryPlatforms:
+          type: array
+          items:
+            type: string
+        templateName:
+          type: string
+          nullable: true
+        pillar:
+          type: string
+          nullable: true
+        audience:
+          type: string
+          nullable: true
+        brandLayer:
+          type: string
+          nullable: true
+        objective:
+          type: string
+          nullable: true
+        contentType:
+          type: string
+          nullable: true
+        assetPacketType:
+          type: string
+          nullable: true
+        coreMessage:
+          type: string
+          nullable: true
+        cta:
+          type: string
+          nullable: true
+        requiredAssetRoles:
+          type: array
+          items:
+            type: string
+        status:
+          type: string
+        plannedWeek:
+          type: string
+          nullable: true
+        plannedDate:
+          type: string
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+        linkedCreativeId:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - title
+        - primaryPlatform
+        - secondaryPlatforms
+        - requiredAssetRoles
+        - status
+        - createdAt
+        - updatedAt
+
+    ContentPlanListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/PlanItem"
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+      required:
+        - items
+
+    CreatePlanItemInput:
+      type: object
+      properties:
+        title:
+          type: string
+        campaignName:
+          type: string
+          nullable: true
+        primaryPlatform:
+          type: string
+        secondaryPlatforms:
+          type: array
+          items:
+            type: string
+        templateName:
+          type: string
+          nullable: true
+        pillar:
+          type: string
+          nullable: true
+        audience:
+          type: string
+          nullable: true
+        brandLayer:
+          type: string
+          nullable: true
+        objective:
+          type: string
+          nullable: true
+        contentType:
+          type: string
+          nullable: true
+        assetPacketType:
+          type: string
+          nullable: true
+        coreMessage:
+          type: string
+          nullable: true
+        cta:
+          type: string
+          nullable: true
+        requiredAssetRoles:
+          type: array
+          items:
+            type: string
+        status:
+          type: string
+        plannedWeek:
+          type: string
+          nullable: true
+        plannedDate:
+          type: string
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+        linkedCreativeId:
+          type: string
+          nullable: true
+      required:
+        - title
+        - primaryPlatform
+
+    UpdatePlanItemInput:
+      type: object
+      properties:
+        title:
+          type: string
+        campaignName:
+          type: string
+          nullable: true
+        primaryPlatform:
+          type: string
+        secondaryPlatforms:
+          type: array
+          items:
+            type: string
+        templateName:
+          type: string
+          nullable: true
+        pillar:
+          type: string
+          nullable: true
+        audience:
+          type: string
+          nullable: true
+        brandLayer:
+          type: string
+          nullable: true
+        objective:
+          type: string
+          nullable: true
+        contentType:
+          type: string
+          nullable: true
+        assetPacketType:
+          type: string
+          nullable: true
+        coreMessage:
+          type: string
+          nullable: true
+        cta:
+          type: string
+          nullable: true
+        requiredAssetRoles:
+          type: array
+          items:
+            type: string
+        status:
+          type: string
+          enum: [planned, in_progress, completed, cancelled]
+        plannedWeek:
+          type: string
+          nullable: true
+        plannedDate:
+          type: string
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+        linkedCreativeId:
+          type: string
+          nullable: true
+
+    PlanItemDeleteResponse:
+      type: object
+      properties:
+        deleted:
+          type: boolean
+      required:
+        - deleted
+
+    ContentPlanImportResponse:
+      type: object
+      properties:
+        imported:
+          type: integer
+        rejected:
+          type: integer
+        rejectedDetails:
+          type: array
+          items:
+            type: object
+            properties:
+              row:
+                type: integer
+              reason:
+                type: string
+            required:
+              - row
+              - reason
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/PlanItem"
+      required:
+        - imported
+        - rejected
+        - rejectedDetails
+        - items
+
+    CreateCreativeFromPlanItemResponse:
+      type: object
+      properties:
+        creative:
+          $ref: "#/components/schemas/Creative"
+        planItem:
+          $ref: "#/components/schemas/PlanItem"
+      required:
+        - creative
+        - planItem
 
     UploadResponse:
       type: object

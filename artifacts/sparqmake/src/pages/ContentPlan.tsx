@@ -1,4 +1,3 @@
-import { apiFetch } from "@/lib/utils";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
   Upload, Plus, Search, Filter, ChevronDown, ChevronUp,
@@ -17,39 +16,28 @@ import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
 import { SmartScheduleModal } from "@/components/SmartScheduleModal";
+import {
+  getContentPlan,
+  createPlanItem,
+  updatePlanItem,
+  deletePlanItem,
+  createCreativeFromPlanItem,
+  importContentPlan,
+  ApiError,
+  type PlanItem,
+  type UpdatePlanItemInput,
+  type ContentPlanImportResponse,
+} from "@workspace/api-client-react";
 
-const API_BASE = import.meta.env.VITE_API_URL || "";
-
-interface PlanItem {
-  id: string;
-  title: string;
-  campaignName: string | null;
-  primaryPlatform: string;
-  secondaryPlatforms: string[];
-  templateName: string | null;
-  pillar: string | null;
-  audience: string | null;
-  brandLayer: string | null;
-  objective: string | null;
-  contentType: string | null;
-  assetPacketType: string | null;
-  coreMessage: string | null;
-  cta: string | null;
-  requiredAssetRoles: string[];
-  status: string;
-  plannedWeek: string | null;
-  plannedDate: string | null;
-  notes: string | null;
-  linkedCreativeId: string | null;
-  createdAt: string;
-  updatedAt: string;
+function getApiErrorMessage(err: unknown): string | undefined {
+  if (err instanceof ApiError) {
+    const data = err.data as { error?: string } | null;
+    return data?.error ?? err.message;
+  }
+  return err instanceof Error ? err.message : undefined;
 }
 
-interface ImportResult {
-  imported: number;
-  rejected: number;
-  rejectedDetails: { row: number; reason: string }[];
-}
+type ImportResult = Pick<ContentPlanImportResponse, "imported" | "rejected" | "rejectedDetails">;
 
 const STATUS_COLORS: Record<string, string> = {
   planned: "bg-blue-500/20 text-blue-400 border-blue-500/30",
@@ -115,11 +103,8 @@ export default function ContentPlan() {
 
   const fetchItems = useCallback(async () => {
     try {
-      const res = await apiFetch(`${API_BASE}/api/content-plan?limit=200`);
-      if (res.ok) {
-        const data = await res.json();
-        setItems(Array.isArray(data) ? data : data.items || []);
-      }
+      const data = await getContentPlan({ limit: 200 });
+      setItems(data.items);
     } catch {
     } finally {
       setLoading(false);
@@ -178,20 +163,9 @@ export default function ContentPlan() {
     if (!file) return;
 
     setImporting(true);
-    const formData = new FormData();
-    formData.append("file", file);
 
     try {
-      const res = await apiFetch(`${API_BASE}/api/content-plan/import`, {
-        method: "POST",
-        body: formData,
-      });
-      const data = await res.json();
-
-      if (!res.ok) {
-        toast({ title: "Import failed", description: data.error, variant: "destructive" });
-        return;
-      }
+      const data = await importContentPlan({ file });
 
       setImportResult(data);
       setShowImportResult(true);
@@ -200,8 +174,8 @@ export default function ContentPlan() {
         description: `${data.imported} items imported, ${data.rejected} rejected`,
       });
       fetchItems();
-    } catch {
-      toast({ title: "Import failed", description: "Network error", variant: "destructive" });
+    } catch (err) {
+      toast({ title: "Import failed", description: getApiErrorMessage(err) ?? "Network error", variant: "destructive" });
     } finally {
       setImporting(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -210,12 +184,10 @@ export default function ContentPlan() {
 
   const handleDelete = async (id: string) => {
     try {
-      const res = await apiFetch(`${API_BASE}/api/content-plan/${id}`, { method: "DELETE" });
-      if (res.ok) {
-        setItems(prev => prev.filter(i => i.id !== id));
-        toast({ title: "Plan item deleted" });
-        if (expandedId === id) setExpandedId(null);
-      }
+      await deletePlanItem(id);
+      setItems(prev => prev.filter(i => i.id !== id));
+      toast({ title: "Plan item deleted" });
+      if (expandedId === id) setExpandedId(null);
     } catch {
       toast({ title: "Delete failed", variant: "destructive" });
     }
@@ -223,25 +195,22 @@ export default function ContentPlan() {
 
   const handleCreateCreative = async (id: string) => {
     try {
-      const res = await apiFetch(`${API_BASE}/api/content-plan/${id}/create-creative`, { method: "POST" });
-      const data = await res.json();
-
-      if (!res.ok) {
-        if (data.creativeId) {
+      const data = await createCreativeFromPlanItem(id);
+      toast({ title: "Creative created", description: `Creative "${data.creative.name}" is ready in Creative Studio` });
+      fetchItems();
+      const platform = data.planItem?.primaryPlatform ? `&platform=${encodeURIComponent(data.planItem.primaryPlatform)}` : "";
+      setLocation(`/?campaign=${data.creative.id}${platform}`);
+    } catch (err) {
+      if (err instanceof ApiError) {
+        const data = err.data as { creativeId?: string; error?: string } | null;
+        if (data?.creativeId) {
           toast({ title: "Already linked", description: "This plan item already has a creative" });
           setLocation(`/?campaign=${data.creativeId}`);
           return;
         }
-        toast({ title: "Failed to create creative", description: data.error, variant: "destructive" });
+        toast({ title: "Failed to create creative", description: data?.error, variant: "destructive" });
         return;
       }
-
-      toast({ title: "Creative created", description: `Creative "${data.creative.name}" is ready in Creative Studio` });
-      fetchItems();
-      const planData = data.planItem;
-      const platform = planData?.primaryPlatform ? `&platform=${encodeURIComponent(planData.primaryPlatform)}` : "";
-      setLocation(`/?campaign=${data.creative.id}${platform}`);
-    } catch {
       toast({ title: "Failed to create creative", variant: "destructive" });
     }
   };
@@ -302,27 +271,16 @@ export default function ContentPlan() {
         notes: formData.notes || null,
       };
 
-      const url = editingItem
-        ? `${API_BASE}/api/content-plan/${editingItem.id}`
-        : `${API_BASE}/api/content-plan`;
-      const method = editingItem ? "PUT" : "POST";
-
-      const res = await apiFetch(url, {
-        method,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-
-      if (res.ok) {
-        toast({ title: editingItem ? "Plan item updated" : "Plan item created" });
-        setEditModalOpen(false);
-        fetchItems();
+      if (editingItem) {
+        await updatePlanItem(editingItem.id, payload as UpdatePlanItemInput);
       } else {
-        const data = await res.json();
-        toast({ title: "Save failed", description: data.error, variant: "destructive" });
+        await createPlanItem(payload);
       }
-    } catch {
-      toast({ title: "Save failed", variant: "destructive" });
+      toast({ title: editingItem ? "Plan item updated" : "Plan item created" });
+      setEditModalOpen(false);
+      fetchItems();
+    } catch (err) {
+      toast({ title: "Save failed", description: getApiErrorMessage(err), variant: "destructive" });
     } finally {
       setCreating(false);
     }
