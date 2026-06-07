@@ -62,6 +62,14 @@ export default defineConfig({
     port,
     host: "0.0.0.0",
     allowedHosts: true,
+    // Local dev only: the app calls `/api` same-origin (no VITE_API_URL / orval
+    // base is wired), so proxy it to the api-server. No effect on the build.
+    proxy: {
+      "/api": {
+        target: process.env.VITE_DEV_API_PROXY || "http://localhost:5050",
+        changeOrigin: true,
+      },
+    },
     fs: {
       strict: true,
       deny: ["**/.*"],

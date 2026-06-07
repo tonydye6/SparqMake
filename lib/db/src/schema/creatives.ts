@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, json, index, real, integer, numeric, foreignKey, uniqueIndex, check } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, json, index, real, integer, numeric, boolean, foreignKey, uniqueIndex, check } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
@@ -20,6 +20,11 @@ export const creativesTable = pgTable("creatives", {
   selectedAssets: json("selected_assets").notNull().default([]),
   selectedHashtagSets: json("selected_hashtag_sets"),
   sourceCreativeId: text("source_creative_id"),
+  // Beat 1 (Home) concept ideation: the snapshot of suggested concept cards and
+  // which one (if any) seeded this creative. Both nullable — the express path
+  // (free prompt, no card) leaves them empty.
+  conceptSuggestions: json("concept_suggestions"),
+  selectedConceptId: text("selected_concept_id"),
   estimatedCost: real("estimated_cost"),
   createdBy: text("created_by").notNull().references(() => usersTable.id, { onDelete: "restrict" }),
   reviewedBy: text("reviewed_by").references(() => usersTable.id, { onDelete: "set null" }),
@@ -65,10 +70,34 @@ export const creativeVariantsTable = pgTable("creative_variants", {
   // Stores the failure reason (text) when image compositing failed for this
   // variant; NULL means compositing succeeded or was not attempted.
   compositingFailed: text("compositing_failed"),
+  // Beat 2 (Board) Vary lineage: the variant this one was varied from, and the
+  // constraint mode used (more_like_this | keep_style | keep_subject). Both
+  // nullable — original generations have no source and no vary mode.
+  sourceVariantId: text("source_variant_id"),
+  varyMode: text("vary_mode"),
+  // Beat 4 (Fan-out) N1: normalized (0..1) subject focal point used to reframe
+  // this image to other aspect ratios without clipping the subject. Detected by
+  // vision on the winning take, copied to each platform variant, manually
+  // nudgeable per variant. NULL falls back to a centered crop.
+  focalX: real("focal_x"),
+  focalY: real("focal_y"),
+  // Normalized (0..1) subject bounding box {x0,y0,x1,y1}, detected with the
+  // focal point on the winning take. Drives clip prediction + escalation when
+  // reframing. Stored on the source take; platform variants reference it via
+  // source_variant_id.
+  subjectBox: json("subject_box"),
+  // Set on a platform variant when the reframe was predicted to clip the subject
+  // (drives the ⚠ + escalation choice in the fan-out grid). NULL = not evaluated.
+  clipWarning: boolean("clip_warning"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (table) => [
   index("creative_variants_creative_idx").on(table.creativeId),
+  foreignKey({
+    columns: [table.sourceVariantId],
+    foreignColumns: [table.id],
+    name: "creative_variants_source_variant_id_fk",
+  }).onDelete("set null"),
 ]);
 
 export const calendarEntriesTable = pgTable("calendar_entries", {

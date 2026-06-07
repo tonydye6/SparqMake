@@ -52,6 +52,11 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+# Loose credential docs (never commit API keys pasted into files)
+sparqmake keys.pdf
+*keys*.pdf
+*keys*.txt
+*credentials*
 
 # Local runtime uploads (never commit user/generated media)
 uploads/

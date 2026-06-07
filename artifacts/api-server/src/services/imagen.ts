@@ -18,7 +18,21 @@ export interface ReferenceImage {
   description?: string;
 }
 
-function buildImagePrompt(ctx: AssembledContext, referenceImages?: ReferenceImage[]): string {
+// Beat 2 (Board) "Vary" constraint modes. The value is stored on the variant
+// (creative_variants.vary_mode) and steers how the next generation relates to
+// the one it was varied from.
+export type VaryMode = "more_like_this" | "keep_style" | "keep_subject";
+
+const VARY_DIRECTIVES: Record<VaryMode, string> = {
+  more_like_this:
+    "VARIATION DIRECTIVE: Produce a fresh take on the same concept and brand direction. Explore a different composition, angle, or moment while staying clearly on-brand.",
+  keep_style:
+    "VARIATION DIRECTIVE: Keep the established visual style, color palette, lighting, and overall mood consistent. Vary the subject matter, composition, or scene.",
+  keep_subject:
+    "VARIATION DIRECTIVE: Keep the primary subject recognizable and consistent. Vary the visual style, treatment, background, and mood around it.",
+};
+
+function buildImagePrompt(ctx: AssembledContext, referenceImages?: ReferenceImage[], varyMode?: VaryMode): string {
   const parts: string[] = [];
 
   if (ctx.brand.characterStyleRules) {
@@ -50,6 +64,10 @@ function buildImagePrompt(ctx: AssembledContext, referenceImages?: ReferenceImag
     parts.push(ctx.combinedBrief);
   }
 
+  if (varyMode) {
+    parts.push(VARY_DIRECTIVES[varyMode]);
+  }
+
   if (ctx.referenceAnalysis) {
     const ref = ctx.referenceAnalysis as Record<string, string>;
     let refText = "REFERENCE INSPIRATION:";
@@ -74,11 +92,12 @@ export async function generateImage(
   ctx: AssembledContext,
   platformKey: string,
   referenceImages?: ReferenceImage[],
+  varyMode?: VaryMode,
 ): Promise<ImageGenerationResult> {
   const config = PLATFORM_CONFIGS[platformKey];
   if (!config) throw new Error(`Unknown platform: ${platformKey}`);
 
-  const prompt = buildImagePrompt(ctx, referenceImages);
+  const prompt = buildImagePrompt(ctx, referenceImages, varyMode);
   const fullPrompt = `${prompt}\n\nGenerate this as a ${config.aspectRatio} aspect ratio image suitable for ${config.platform.replace(/_/g, " ")}.`;
 
   const contentParts: Array<{ text: string } | { inlineData: { data: string; mimeType: string } }> = [];
@@ -161,6 +180,51 @@ export async function generateAllImages(
   }
 
   return results;
+}
+
+// N1 escalation (generative outpaint): extend the source image's background to a
+// target aspect ratio, keeping the subject intact, so reframing no longer clips
+// it. Costs one image-model call. Returns the extended image buffer.
+export async function outpaintImage(
+  rawImageBuffer: Buffer,
+  mimeType: string,
+  aspectLabel: string,
+  sceneHint?: string,
+): Promise<Buffer> {
+  const prompt = `Extend this image to a ${aspectLabel} aspect ratio. Keep the existing subject exactly as-is and fully visible; seamlessly continue and extend the background and scene to fill the new ${aspectLabel} frame. Do not add any text, words, letters, or watermarks.${sceneHint ? ` Scene context: ${sceneHint}` : ""}`;
+
+  const abortController = new AbortController();
+  const timeoutId = setTimeout(() => abortController.abort(), 120_000);
+  let response;
+  try {
+    response = await ai.models.generateContent({
+      model: AI_MODELS.GEMINI_FLASH_IMAGE,
+      contents: [
+        {
+          role: "user",
+          parts: [
+            { inlineData: { data: rawImageBuffer.toString("base64"), mimeType: mimeType || "image/png" } },
+            { text: prompt },
+          ],
+        },
+      ],
+      config: {
+        responseModalities: [Modality.TEXT, Modality.IMAGE],
+        abortSignal: abortController.signal,
+      },
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
+  const candidate = response.candidates?.[0];
+  const imagePart = candidate?.content?.parts?.find(
+    (part: { inlineData?: { data?: string; mimeType?: string } }) => part.inlineData,
+  );
+  if (!imagePart?.inlineData?.data) {
+    throw new Error("No image data in outpaint response");
+  }
+  return Buffer.from(imagePart.inlineData.data, "base64");
 }
 
 export { estimateImagenCost } from "../lib/ai-config.js";
