@@ -1,4 +1,4 @@
-import { useReducer, useEffect, useState, useCallback, useRef } from "react";
+import { useReducer, useEffect, useState, useCallback, useRef, useMemo } from "react";
 import type { Dispatch, MouseEvent } from "react";
 import { Sparkles, LayoutGrid, Wand2, RefreshCw, ArrowRight, Check, Plus, Loader2, Share2, AlertTriangle, Send } from "lucide-react";
 import { FaInstagram, FaXTwitter, FaTiktok, FaLinkedin } from "react-icons/fa6";
@@ -44,6 +44,10 @@ interface StudioState {
   selectedConcept: Concept | null;
   // The take chosen on the Board, carried into Finish.
   selectedVariantId: string | null;
+  // Fan-out approve-selection (variant ids checked but not yet approved). Held in
+  // the reducer so it survives BeatFanout unmounting when the user navigates
+  // between beats; without this the selection is silently lost on every switch.
+  fanoutApproved: string[];
 }
 
 type StudioAction =
@@ -52,7 +56,9 @@ type StudioAction =
   | { type: "setBrief"; briefText: string }
   | { type: "selectConcept"; concept: Concept | null }
   | { type: "setCreative"; creativeId: string }
-  | { type: "selectVariant"; variantId: string };
+  | { type: "selectVariant"; variantId: string }
+  | { type: "toggleFanoutApprove"; id: string }
+  | { type: "setFanoutApproved"; ids: string[] };
 
 const initialState: StudioState = {
   beat: "home",
@@ -61,6 +67,7 @@ const initialState: StudioState = {
   briefText: "",
   selectedConcept: null,
   selectedVariantId: null,
+  fanoutApproved: [],
 };
 
 function reducer(state: StudioState, action: StudioAction): StudioState {
@@ -75,6 +82,7 @@ function reducer(state: StudioState, action: StudioAction): StudioState {
         selectedConcept: null,
         creativeId: null,
         selectedVariantId: null,
+        fanoutApproved: [],
       };
     case "setBrief":
       return { ...state, briefText: action.briefText };
@@ -84,6 +92,17 @@ function reducer(state: StudioState, action: StudioAction): StudioState {
       return { ...state, creativeId: action.creativeId };
     case "selectVariant":
       return { ...state, selectedVariantId: action.variantId };
+    case "toggleFanoutApprove": {
+      const has = state.fanoutApproved.includes(action.id);
+      return {
+        ...state,
+        fanoutApproved: has
+          ? state.fanoutApproved.filter((x) => x !== action.id)
+          : [...state.fanoutApproved, action.id],
+      };
+    }
+    case "setFanoutApproved":
+      return { ...state, fanoutApproved: action.ids };
     default:
       return state;
   }
@@ -172,7 +191,7 @@ export default function StudioNext() {
         {state.beat === "finish" && (
           <BeatFinish state={state} onAdvance={() => dispatch({ type: "goto", beat: "fanout" })} />
         )}
-        {state.beat === "fanout" && <BeatFanout state={state} />}
+        {state.beat === "fanout" && <BeatFanout state={state} dispatch={dispatch} />}
       </div>
     </div>
   );
@@ -828,12 +847,14 @@ const PLATFORM_META: Record<string, { group: string; sub?: string; Icon: IconTyp
   FANOUT_PLATFORMS.map((p) => [p.key, { group: p.group, sub: p.sub, Icon: p.Icon }]),
 );
 
-function BeatFanout({ state }: { state: StudioState }) {
+function BeatFanout({ state, dispatch }: { state: StudioState; dispatch: Dispatch<StudioAction> }) {
   const { toast } = useToast();
   const [phase, setPhase] = useState<"select" | "working" | "ready">("select");
   const [selected, setSelected] = useState<Set<string>>(() => new Set(FANOUT_PLATFORMS.map((p) => p.key)));
   const [variants, setVariants] = useState<BoardVariant[]>([]);
-  const [approveIds, setApproveIds] = useState<Set<string>>(new Set());
+  // Approve-selection lives in the reducer so it survives this beat unmounting
+  // on navigation (see StudioState.fanoutApproved).
+  const approveIds = useMemo(() => new Set(state.fanoutApproved), [state.fanoutApproved]);
   const [approving, setApproving] = useState(false);
   const startedRef = useRef(false);
 
@@ -880,6 +901,8 @@ function BeatFanout({ state }: { state: StudioState }) {
         { platforms: Array.from(selected) },
       );
       setVariants((res.variants || []) as BoardVariant[]);
+      // Fresh variant ids — drop any stale approve-selection.
+      dispatch({ type: "setFanoutApproved", ids: [] });
       setPhase("ready");
     } catch (err) {
       toast({ variant: "destructive", title: "Fan-out failed", description: err instanceof Error ? err.message : "Please try again." });
@@ -892,12 +915,7 @@ function BeatFanout({ state }: { state: StudioState }) {
   }
 
   function toggleApprove(id: string) {
-    setApproveIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+    dispatch({ type: "toggleFanoutApprove", id });
   }
 
   async function approveSelected() {
@@ -909,7 +927,7 @@ function BeatFanout({ state }: { state: StudioState }) {
         status: "approved",
       });
       setVariants((prev) => prev.map((v) => (approveIds.has(v.id) ? { ...v, status: "approved" } : v)));
-      setApproveIds(new Set());
+      dispatch({ type: "setFanoutApproved", ids: [] });
       toast({ title: "Approved", description: "Selected platform posts are approved." });
     } catch (err) {
       toast({ variant: "destructive", title: "Approve failed", description: err instanceof Error ? err.message : "Please try again." });
