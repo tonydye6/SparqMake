@@ -1,0 +1,27 @@
+We have a large new feature on the branch `redesign/studio-spine` (just pushed to GitHub) that this environment hasn't seen. It's a parallel, flag-gated "generation-first Creative Studio" redesign. The existing app at `/` is completely untouched — all new work lives behind the `VITE_ENABLE_STUDIO_NEXT` feature flag at new routes. Your job: pull it, integrate it, and get it running so I can review the new screens. Do NOT modify the feature code — just install, migrate, run, and report.
+
+1) GET THE BRANCH
+- Fetch and check out `redesign/studio-spine`.
+- Run `pnpm install` (no new dependencies were added — this should reconcile quickly).
+
+2) APPLY DB MIGRATIONS (required — the new features depend on them)
+- Run `pnpm --filter @workspace/db run migrate`.
+- This applies additive migrations 0003, 0004, 0005 only (new nullable columns — no destructive changes): creatives.concept_suggestions / selected_concept_id; creative_variants.source_variant_id / vary_mode / focal_x / focal_y / subject_box / clip_warning.
+- If migrate fails with a Postgres "relation already exists" / heap_create_with_catalog error, that's the known empty-__drizzle_migrations-journal issue — baseline the journal before re-running (see .agents/memory/ drizzle-migration-baseline note), then migrate again.
+
+3) PREREQUISITES
+- Ensure the Anthropic and Gemini AI integrations are provisioned (the AI_INTEGRATIONS_ANTHROPIC_* and AI_INTEGRATIONS_GEMINI_* env vars). The redesign uses Claude (concepts, captions, brand agent) and Gemini (image gen, subject detection, outpaint).
+- Ensure at least one brand exists in the DB (the new pages are brand-scoped). If empty, seed with SEED_DEMO_DATA=true on the API server or create a brand.
+
+4) ENABLE THE FLAG + RUN
+- Set VITE_ENABLE_STUDIO_NEXT=true in the frontend env.
+- Start the API server and frontend as usual. New sidebar nav items ("Studio Next", "Brand", "Calendar (new)") appear when the flag is on.
+
+5) REVIEW SURFACES — confirm each renders and the flow works
+- /studio-next — Studio spine: pick a brand → on-brand concept cards or a free prompt → Board (generated "takes", each with Vary: more-like-this / keep-style / keep-subject, plus "More takes") → pick a take → Finish (instant headline + caption edits vs. Regenerate) → "Make platform set".
+- Fan-out (Finish → Make platform set): choose platforms → the one image is reframed to each (subject-aware crop, no regeneration) with per-platform captions; any "subject clipped" card offers click-to-recenter or "Extend background" (generative outpaint); select cards → batch Approve; approved cards show a "Schedule" button.
+- /brand-next — Brand: multi-brand switcher; Visual DNA / Voice / Assets / Templates / Platforms tabs; "Edit with the agent" (describe a change in plain language → proposed structured edits to review and Save) and "Seed from brand docs" (drafts the spec from uploaded brand documents).
+- /calendar-next — Calendar: day-grouped agenda of scheduled posts with Publish / Retry.
+
+6) REPORT BACK
+This frontend has been type-checked but never visually rendered until now. Load each page, exercise the flows above, and report any runtime errors, console errors, or broken rendering (include the route and the exact error). Do not fix or change the feature code — just surface findings so we can review together.
