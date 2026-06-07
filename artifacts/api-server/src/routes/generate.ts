@@ -905,12 +905,12 @@ const BOARD_FORMAT = "instagram_feed";
 const DEFAULT_TAKE_COUNT = 3;
 const MAX_TAKE_COUNT = 4;
 
-// Reserve daily-budget headroom for `imageCount` images (advisory-locked, same
+// Reserve `estimatedCost` USD of daily-budget headroom (advisory-locked, same
 // scheme as /generate and /regenerate). Returns the reservation id to settle
 // later, or an `ok:false` result the caller turns into a 429.
-async function reserveImageBudget(
+async function reserveBudget(
   creativeId: string,
-  imageCount: number,
+  estimatedCost: number,
 ): Promise<{ ok: true; reservationId: string | null } | { ok: false; todaySpend: number; threshold: number }> {
   const [thresholdRow] = await db.select().from(appSettingsTable).where(eq(appSettingsTable.key, "dailyCostThreshold"));
   const budgetThreshold = thresholdRow ? parseFloat(thresholdRow.value) : null;
@@ -920,7 +920,7 @@ async function reserveImageBudget(
 
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
-  const estimatedGenerationCost = estimateImagenCost(imageCount);
+  const estimatedGenerationCost = estimatedCost;
   const reservationId = crypto.randomUUID();
 
   const result = await db.transaction(async (tx) => {
@@ -946,6 +946,16 @@ async function reserveImageBudget(
 
   if (result.exceeded) return { ok: false, todaySpend: result.todaySpend, threshold: budgetThreshold };
   return { ok: true, reservationId };
+}
+
+// Reserve daily-budget headroom for `imageCount` images (advisory-locked, same
+// scheme as /generate and /regenerate). Returns the reservation id to settle
+// later, or an `ok:false` result the caller turns into a 429.
+async function reserveImageBudget(
+  creativeId: string,
+  imageCount: number,
+): Promise<{ ok: true; reservationId: string | null } | { ok: false; todaySpend: number; threshold: number }> {
+  return reserveBudget(creativeId, estimateImagenCost(imageCount));
 }
 
 function budgetExceededBody(todaySpend: number, threshold: number) {
@@ -1407,7 +1417,14 @@ router.post("/creatives/:id/variants/:variantId/fan-out", generationLimiter, asy
     return;
   }
 
-  const budget = await reserveImageBudget(creativeId, 1);
+  // Two billable AI calls on the cold path: a Gemini vision subject-detection
+  // call (only when the take has no cached focal/box) and a Claude captions
+  // call. Reserve the sum of their real estimates.
+  const needsSubjectDetection = !(winner.focalX != null && winner.focalY != null && winner.subjectBox);
+  const estimatedSubjectCost = needsSubjectDetection ? estimateClaudeCost() : 0;
+  const estimatedCaptionsCost = estimateClaudeCost();
+
+  const budget = await reserveBudget(creativeId, estimatedSubjectCost + estimatedCaptionsCost);
   if (!budget.ok) {
     res.status(429).json(budgetExceededBody(budget.todaySpend, budget.threshold));
     return;
@@ -1424,8 +1441,8 @@ router.post("/creatives/:id/variants/:variantId/fan-out", generationLimiter, asy
     // once (vision) and cache it on the take. The box drives clip prediction.
     let focal: { x: number; y: number };
     let box: SubjectBox;
-    if (winner.focalX != null && winner.focalY != null && winner.subjectBox) {
-      focal = { x: winner.focalX, y: winner.focalY };
+    if (!needsSubjectDetection) {
+      focal = { x: winner.focalX!, y: winner.focalY! };
       box = winner.subjectBox as SubjectBox;
     } else {
       const detected = await detectSubject(rawBuffer);
@@ -1537,11 +1554,20 @@ router.post("/creatives/:id/variants/:variantId/fan-out", generationLimiter, asy
         if (reservationId) {
           await tx.delete(costLogsTable).where(eq(costLogsTable.id, reservationId));
         }
+        if (needsSubjectDetection) {
+          await tx.insert(costLogsTable).values({
+            creativeId,
+            service: "gemini",
+            operation: "fan_out_subject_detection",
+            model: AI_MODELS.GEMINI_FLASH_TEXT,
+            costUsd: estimatedSubjectCost,
+          });
+        }
         await tx.insert(costLogsTable).values({
           creativeId,
-          service: "gemini",
-          operation: "fan_out",
-          model: AI_MODELS.GEMINI_FLASH_TEXT,
+          service: "anthropic",
+          operation: "fan_out_captions",
+          model: AI_MODELS.CLAUDE_SONNET,
           costUsd: estimateClaudeCost(),
         });
         return rows;

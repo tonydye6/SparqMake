@@ -35,19 +35,29 @@ Return the subject's bounding box and focal center, all normalized between 0 and
 Return ONLY valid JSON, no markdown:
 {"box": {"x0": number, "y0": number, "x1": number, "y1": number}, "focal": {"x": number, "y": number}}`;
 
+  const abortController = new AbortController();
+  const timeoutId = setTimeout(() => abortController.abort(), 120_000);
   try {
-    const response = await ai.models.generateContent({
-      model: AI_MODELS.GEMINI_FLASH_TEXT,
-      contents: [
-        {
-          role: "user",
-          parts: [
-            { text: prompt },
-            { inlineData: { data: imageBuffer.toString("base64"), mimeType } },
-          ],
+    let response;
+    try {
+      response = await ai.models.generateContent({
+        model: AI_MODELS.GEMINI_FLASH_TEXT,
+        contents: [
+          {
+            role: "user",
+            parts: [
+              { text: prompt },
+              { inlineData: { data: imageBuffer.toString("base64"), mimeType } },
+            ],
+          },
+        ],
+        config: {
+          abortSignal: abortController.signal,
         },
-      ],
-    });
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
 
     const text = response.candidates?.[0]?.content?.parts
       ?.filter((part: { text?: string }) => part.text)

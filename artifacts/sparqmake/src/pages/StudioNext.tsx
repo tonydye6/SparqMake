@@ -15,6 +15,15 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
 
+// Client-side cache-buster. When a variant's image is re-composited in place the
+// server reuses the same image *path*, so the browser keeps showing the cached
+// old bytes. Appending a bumped `?v=N` (or `&v=N` when the URL already has a
+// query) forces a re-fetch. Kept local to the card components.
+function withImageVersion(url: string, version: number): string {
+  if (version <= 0) return url;
+  return `${url}${url.includes("?") ? "&" : "?"}v=${version}`;
+}
+
 // Studio beats: the P1 spine (Home → Board → Finish) plus Fan-out (P2). Send/Brand are P3.
 type Beat = "home" | "board" | "finish" | "fanout";
 
@@ -87,6 +96,26 @@ const BEATS: { id: Beat; label: string; icon: typeof Sparkles }[] = [
   { id: "fanout", label: "Fan-out", icon: Share2 },
 ];
 
+// Which beats are reachable from the current state, mirroring the in-beat
+// advance gates. Beats unmount on switch, so jumping forward into a beat that
+// has no data discards unsaved work and lands the user on an empty screen.
+// Gating the stepper to reachable targets prevents that: Board needs a concept
+// or brief (Board self-creates the creative on entry); Finish needs a chosen
+// take; Fan-out is reachable once Finish is (Finish → Fan-out has no extra gate).
+function canReachBeat(beat: Beat, state: StudioState): boolean {
+  switch (beat) {
+    case "home":
+      return true;
+    case "board":
+      return Boolean(state.creativeId || state.selectedConcept || state.briefText.trim());
+    case "finish":
+    case "fanout":
+      return Boolean(state.creativeId && state.selectedVariantId);
+    default:
+      return false;
+  }
+}
+
 export default function StudioNext() {
   const [state, dispatch] = useReducer(reducer, initialState);
   const activeIndex = BEATS.findIndex((b) => b.id === state.beat);
@@ -98,10 +127,12 @@ export default function StudioNext() {
         {BEATS.map((b, i) => {
           const active = b.id === state.beat;
           const done = i < activeIndex;
+          const reachable = active || canReachBeat(b.id, state);
           return (
             <button
               key={b.id}
               onClick={() => dispatch({ type: "goto", beat: b.id })}
+              disabled={!reachable}
               className={cn(
                 "flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors",
                 active
@@ -109,6 +140,7 @@ export default function StudioNext() {
                   : done
                     ? "text-foreground"
                     : "text-muted-foreground hover:text-foreground",
+                !reachable && "opacity-40 cursor-not-allowed hover:text-muted-foreground",
               )}
             >
               <b.icon size={16} />
@@ -297,8 +329,16 @@ function BeatHome({
             : concepts.map((concept) => (
                 <Card
                   key={concept.id}
-                  className="p-4 flex flex-col gap-2 cursor-pointer transition-colors hover:border-primary"
+                  role="button"
+                  tabIndex={0}
+                  className="p-4 flex flex-col gap-2 cursor-pointer transition-colors hover:border-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
                   onClick={() => pickConcept(concept)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      pickConcept(concept);
+                    }
+                  }}
                   data-testid={`studio-next-concept-${concept.id}`}
                 >
                   <h3 className="font-display font-semibold text-foreground leading-snug">
@@ -605,6 +645,7 @@ function BeatFinish({ state, onAdvance }: { state: StudioState; onAdvance: () =>
   const [savingHeadline, setSavingHeadline] = useState(false);
   const [savingCaption, setSavingCaption] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
+  const [imgV, setImgV] = useState(0);
   const startedRef = useRef(false);
 
   // Load the take chosen on the Board (variants live on the server).
@@ -641,6 +682,8 @@ function BeatFinish({ state, onAdvance }: { state: StudioState; onAdvance: () =>
     try {
       const updated = await putJson(`${API_BASE}/api/creatives/${state.creativeId}/variants/${variant.id}/headline`, { headline: headline.trim() });
       setVariant(updated as BoardVariant);
+      // Headline recomposite reuses the same image path — bump to bust the cache.
+      setImgV((v) => v + 1);
       toast({ title: "Headline updated" });
     } catch (err) {
       toast({ variant: "destructive", title: "Update failed", description: err instanceof Error ? err.message : "Please try again." });
@@ -669,6 +712,7 @@ function BeatFinish({ state, onAdvance }: { state: StudioState; onAdvance: () =>
     try {
       const updated = await postJson(`${API_BASE}/api/creatives/${state.creativeId}/variants/${variant.id}/regenerate`, {});
       setVariant(updated as BoardVariant);
+      setImgV((v) => v + 1);
       toast({ title: "Regenerated" });
     } catch (err) {
       toast({ variant: "destructive", title: "Regenerate failed", description: err instanceof Error ? err.message : "Please try again." });
@@ -700,7 +744,7 @@ function BeatFinish({ state, onAdvance }: { state: StudioState; onAdvance: () =>
       <div className="space-y-2">
         <Card className="overflow-hidden p-0 bg-muted">
           {img ? (
-            <img src={img} alt="Finished composite" className="w-full aspect-square object-cover" />
+            <img src={withImageVersion(img, imgV)} alt="Finished composite" className="w-full aspect-square object-cover" />
           ) : (
             <div className="aspect-square flex items-center justify-center text-muted-foreground">No image</div>
           )}
@@ -986,6 +1030,7 @@ function FanoutCard({
   const [scheduling, setScheduling] = useState(false);
   const [scheduled, setScheduled] = useState(false);
   const [caption, setCaption] = useState(variant.caption || "");
+  const [imgV, setImgV] = useState(0);
   const img = variant.compositedImageUrl || variant.rawImageUrl;
   const approved = variant.status === "approved";
 
@@ -999,6 +1044,7 @@ function FanoutCard({
     try {
       const updated = await putJson(`${API_BASE}/api/creatives/${creativeId}/variants/${variant.id}/refocus`, { focalX: x, focalY: y });
       onPatched(updated as BoardVariant);
+      setImgV((v) => v + 1);
     } catch (err) {
       toast({ variant: "destructive", title: "Nudge failed", description: err instanceof Error ? err.message : "Please try again." });
     } finally {
@@ -1012,6 +1058,7 @@ function FanoutCard({
     try {
       const updated = await postJson(`${API_BASE}/api/creatives/${creativeId}/variants/${variant.id}/outpaint`, {});
       onPatched(updated as BoardVariant);
+      setImgV((v) => v + 1);
     } catch (err) {
       toast({ variant: "destructive", title: "Extend background failed", description: err instanceof Error ? err.message : "Please try again." });
     } finally {
@@ -1063,7 +1110,7 @@ function FanoutCard({
         title={variant.clipWarning ? "Subject clipped — click it to recenter the crop" : "Click to recenter the crop"}
       >
         {img ? (
-          <img src={img} alt={`${meta?.group || variant.platform || "platform"} variant`} className="w-full h-full object-cover" />
+          <img src={withImageVersion(img, imgV)} alt={`${meta?.group || variant.platform || "platform"} variant`} className="w-full h-full object-cover" />
         ) : (
           <div className="w-full h-full flex items-center justify-center text-xs text-muted-foreground">No image</div>
         )}
