@@ -5,6 +5,14 @@ function normalizeOrigin(origin: string): string {
 export function getAllowedOriginStrings(): string[] {
   const origins: string[] = [];
 
+  // The app is served same-origin behind Replit's path-based proxy, which
+  // forwards requests internally through localhost:80. Same-origin requests
+  // from the app (dev preview and deployed) therefore arrive with an
+  // `Origin: http://localhost` header, so it must always be allowed. This is
+  // not a CSRF weakness: a browser only sends a localhost origin for pages
+  // actually served from localhost, never for a genuine cross-origin attacker.
+  origins.push("http://localhost");
+
   if (process.env.CORS_ORIGIN) {
     origins.push(...process.env.CORS_ORIGIN.split(",").map(normalizeOrigin));
   }
