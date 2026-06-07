@@ -7,7 +7,7 @@ export const PLATFORM_CONFIGS: Record<string, { platform: string; aspectRatio: s
   instagram_feed: { platform: "instagram_feed", aspectRatio: "1:1", width: 1080, height: 1080 },
   instagram_story: { platform: "instagram_story", aspectRatio: "9:16", width: 1080, height: 1920 },
   twitter: { platform: "twitter", aspectRatio: "16:9", width: 1200, height: 675 },
-  linkedin: { platform: "linkedin", aspectRatio: "16:9", width: 1200, height: 628 },
+  linkedin: { platform: "linkedin", aspectRatio: "1.91:1", width: 1200, height: 628 },
   tiktok: { platform: "tiktok", aspectRatio: "9:16", width: 1080, height: 1920 },
 };
 

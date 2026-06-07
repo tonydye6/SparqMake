@@ -6,7 +6,7 @@ import { sql, gte } from "drizzle-orm";
 import { assembleContext, type SelectedAssetRef } from "../services/context-assembly.js";
 import { generateCaptions } from "../services/claude.js";
 import { generateAllImages, generateImage, outpaintImage, PLATFORM_CONFIGS, type ReferenceImage, type VaryMode } from "../services/imagen.js";
-import { AI_MODELS, estimateClaudeCost, estimateImagenCost } from "../lib/ai-config.js";
+import { AI_MODELS, estimateClaudeCost, estimateGeminiTextCost, estimateImagenCost } from "../lib/ai-config.js";
 import { compositeImage, reframeImage, imageDimensions, type LayoutSpec } from "../services/compositing.js";
 import { detectSubject, predictClip, type SubjectBox } from "../services/focal-point.js";
 import { checkBrandReadiness } from "../lib/brand-readiness.js";
@@ -23,6 +23,10 @@ interface AuthenticatedUser {
   id: string;
   [key: string]: unknown;
 }
+
+const CreativeParams = z.object({
+  id: z.string().min(1),
+});
 
 const CreativeVariantParams = z.object({
   id: z.string().min(1),
@@ -703,194 +707,42 @@ router.post("/creatives/:id/variants/:variantId/regenerate", generationLimiter, 
     return;
   }
 
-  const [thresholdRow] = await db.select().from(appSettingsTable).where(eq(appSettingsTable.key, "dailyCostThreshold"));
-  const budgetThreshold = thresholdRow ? parseFloat(thresholdRow.value) : null;
-  let reservationId: string | null = null;
-
-  if (budgetThreshold !== null && !isNaN(budgetThreshold) && budgetThreshold > 0) {
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-
-    const estimatedGenerationCost = estimateImagenCost(1);
-    reservationId = crypto.randomUUID();
-
-    const budgetCheckResult = await db.transaction(async (tx) => {
-      const BUDGET_LOCK_KEY = 100001;
-      await tx.execute(sql`SELECT pg_advisory_xact_lock(${BUDGET_LOCK_KEY})`);
-      const [todayResult] = await tx.select({
-        totalCost: sql<number>`COALESCE(SUM(${costLogsTable.costUsd}), 0)`,
-      }).from(costLogsTable).where(gte(costLogsTable.createdAt, todayStart));
-      const currentSpend = Number(todayResult?.totalCost || 0);
-
-      if (currentSpend + estimatedGenerationCost > budgetThreshold) {
-        return { exceeded: true as const, todaySpend: currentSpend };
-      }
-
-      await tx.insert(costLogsTable).values({
-        id: reservationId!,
-        creativeId,
-        service: "system",
-        operation: "budget_reservation",
-        model: null,
-        costUsd: estimatedGenerationCost,
-      });
-      return { exceeded: false as const, todaySpend: currentSpend };
-    });
-
-    if (budgetCheckResult.exceeded) {
-      res.status(429).json({
-        error: "Daily budget exceeded",
-        todaySpend: budgetCheckResult.todaySpend,
-        threshold: budgetThreshold,
-        message: `Today's spend ($${budgetCheckResult.todaySpend.toFixed(2)}) has reached the daily budget limit ($${budgetThreshold.toFixed(2)}). Increase the limit in Cost Dashboard settings or wait until tomorrow.`,
-      });
-      return;
-    }
-  }
-
-  let regenTmpDir: string | null = null;
-  try {
-    const selectedAssets = (campaign.selectedAssets || []) as import("../services/context-assembly.js").SelectedAssetRef[];
-    const selectedAssetIds = selectedAssets.map(a => a.assetId);
-
-    let packet: Awaited<ReturnType<typeof buildGenerationPacket>> | null = null;
-    let referenceImages: ReferenceImage[] = [];
-
-    if (selectedAssetIds.length > 0) {
-      packet = await buildGenerationPacket({
-        creativeId,
-        brandId: campaign.brandId,
-        templateId: campaign.templateId,
-        platform: variant.platform,
-        selectedAssetIds,
-      });
-      referenceImages = await buildReferenceImages(packet);
-    }
-
-    const ctx = await assembleContext({
-      brandId: campaign.brandId,
-      templateId: campaign.templateId,
-      selectedAssets,
-      selectedHashtagSetIds: (campaign.selectedHashtagSets || []) as string[],
-      briefText: instruction
-        ? `${campaign.briefText || ""}\n\nADDITIONAL REFINEMENT: ${instruction}`
-        : campaign.briefText || undefined,
-      referenceAnalysis: campaign.referenceAnalysis as Record<string, unknown> | null,
-      generationPacket: packet,
-    });
-
-    const imgResult = await generateImage(ctx, variant.platform, referenceImages);
-
-    ensureDir(UPLOADS_DIR);
-
-    regenTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "sparq-regen-"));
-    const ts = Date.now();
-    const rawFilename = `${creativeId}_${variant.platform}_${ts}_raw.png`;
-    const rawTmpPath = path.join(regenTmpDir, rawFilename);
-    fs.writeFileSync(rawTmpPath, imgResult.imageBuffer);
-
-    const layoutSpec = ctx.template.layoutSpec as Record<string, unknown> | null;
-    const [logoBuffer, brandFontFamily] = await Promise.all([
-      fetchLogoBuffer(campaign.brandId),
-      fetchBrandFontFamily(campaign.brandId),
-    ]);
-
-    let compositedBuffer: Buffer;
-    let compositingFailed = false;
-    try {
-      const result = await compositeImage({
-        rawImageBuffer: imgResult.imageBuffer,
-        layoutSpec: layoutSpec as LayoutSpec | null,
-        headlineText: variant.headlineText || null,
-        logoBuffer,
-        width: config.width,
-        height: config.height,
-        fontFamily: brandFontFamily,
-      });
-      compositedBuffer = result.buffer;
-    } catch (err) {
-      console.error(`Compositing failed during regeneration for ${variant.platform}, using raw image:`, err instanceof Error ? err.message : err);
-      compositedBuffer = imgResult.imageBuffer;
-      compositingFailed = true;
-    }
-
-    const compFilename = `${creativeId}_${variant.platform}_${ts}_composited.png`;
-    const compTmpPath = path.join(regenTmpDir, compFilename);
-    fs.writeFileSync(compTmpPath, compositedBuffer);
-
-    const rawFinalPath = path.join(UPLOADS_DIR, rawFilename);
-    const compFinalPath = path.join(UPLOADS_DIR, compFilename);
-
-    try {
-      fs.copyFileSync(rawTmpPath, rawFinalPath);
-      fs.copyFileSync(compTmpPath, compFinalPath);
-    } catch (copyErr) {
-      try { fs.unlinkSync(rawFinalPath); } catch {}
-      try { fs.unlinkSync(compFinalPath); } catch {}
-      throw new Error("Failed to save generated files. Please try again.");
-    }
-
-    let updated;
-    try {
-      [updated] = await db.transaction(async (tx) => {
-        const [result] = await tx.update(creativeVariantsTable)
-          .set({
-            rawImageUrl: `/api/files/generated/${rawFilename}`,
-            compositedImageUrl: `/api/files/generated/${compFilename}`,
-            compositingFailed: compositingFailed ? `Compositing failed during regeneration for ${variant.platform}. Using raw image as fallback.` : null,
-            updatedAt: new Date(),
-          })
-          .where(eq(creativeVariantsTable.id, variantId))
-          .returning();
-
-        if (reservationId) {
-          await tx.delete(costLogsTable).where(eq(costLogsTable.id, reservationId));
-        }
-
-        const cost = estimateImagenCost(1);
-        await tx.insert(costLogsTable).values({
+  await runVariantImageGeneration(req, res, campaign, variant, config, {
+    briefText: instruction
+      ? `${campaign.briefText || ""}\n\nADDITIONAL REFINEMENT: ${instruction}`
+      : campaign.briefText || undefined,
+    fileTag: "",
+    tmpPrefix: "sparq-regen-",
+    failureVerb: "regeneration",
+    costOperation: "single_variant_regeneration",
+    statusCode: 200,
+    errorLabel: "Regeneration failed",
+    persist: async (tx, files) => {
+      const [result] = await tx.update(creativeVariantsTable)
+        .set({
+          rawImageUrl: `/api/files/generated/${files.rawFilename}`,
+          compositedImageUrl: `/api/files/generated/${files.compFilename}`,
+          compositingFailed: files.compositingFailed ? `Compositing failed during regeneration for ${variant.platform}. Using raw image as fallback.` : null,
+          updatedAt: new Date(),
+        })
+        .where(eq(creativeVariantsTable.id, variantId))
+        .returning();
+      return result;
+    },
+    afterCost: async (tx) => {
+      if (campaign.templateId) {
+        await tx.insert(refinementLogsTable).values({
           creativeId,
-          service: "gemini",
-          operation: "single_variant_regeneration",
-          model: AI_MODELS.GEMINI_FLASH_IMAGE,
-          costUsd: cost,
+          templateId: campaign.templateId,
+          editType: "image_refinement",
+          platform: variant.platform,
+          aspectRatio: variant.aspectRatio,
+          refinementPrompt: instruction || null,
+          userId: ((req as unknown as Record<string, unknown>).user as AuthenticatedUser | undefined)?.id || "system",
         });
-
-        if (campaign.templateId) {
-          await tx.insert(refinementLogsTable).values({
-            creativeId,
-            templateId: campaign.templateId,
-            editType: "image_refinement",
-            platform: variant.platform,
-            aspectRatio: variant.aspectRatio,
-            refinementPrompt: instruction || null,
-            userId: ((req as unknown as Record<string, unknown>).user as AuthenticatedUser | undefined)?.id || "system",
-          });
-        }
-
-        return [result];
-      });
-    } catch (dbErr) {
-      try { fs.unlinkSync(rawFinalPath); } catch {}
-      try { fs.unlinkSync(compFinalPath); } catch {}
-      throw dbErr;
-    }
-    fs.rmSync(regenTmpDir, { recursive: true, force: true });
-    regenTmpDir = null;
-
-    res.json(updated);
-  } catch (error) {
-    if (regenTmpDir) {
-      try { fs.rmSync(regenTmpDir, { recursive: true, force: true }); } catch {}
-    }
-    if (reservationId) {
-      try {
-        await db.delete(costLogsTable).where(eq(costLogsTable.id, reservationId));
-      } catch {}
-    }
-    const message = error instanceof Error ? error.message : String(error);
-    res.status(500).json({ error: `Regeneration failed: ${message}` });
-  }
+      }
+    },
+  });
 });
 
 // Board working format + shared helpers for the new /vary and /takes routes.
@@ -904,6 +756,10 @@ router.post("/creatives/:id/variants/:variantId/regenerate", generationLimiter, 
 const BOARD_FORMAT = "instagram_feed";
 const DEFAULT_TAKE_COUNT = 3;
 const MAX_TAKE_COUNT = 4;
+
+const TakesBody = z.object({
+  count: z.number().int().min(1).max(MAX_TAKE_COUNT).default(DEFAULT_TAKE_COUNT),
+});
 
 // Reserve `estimatedCost` USD of daily-budget headroom (advisory-locked, same
 // scheme as /generate and /regenerate). Returns the reservation id to settle
@@ -1061,7 +917,187 @@ async function generateVariantImage(
   }
 }
 
-const VARY_MODES: VaryMode[] = ["more_like_this", "keep_style", "keep_subject"];
+// Shared single-variant image pipeline behind /regenerate and /vary. Both
+// reserve one image's budget (advisory-locked), assemble packet/context,
+// generate (optionally under a varyMode), composite, stage-to-tmp then promote
+// the files, and persist + log cost in one transaction — differing only in the
+// briefText, the varyMode, the file/operation labels, and the persistence step
+// (update-in-place vs insert-with-lineage). This helper owns every shared step
+// (including the budget 429, file staging/promotion, reservation settle, the
+// gemini cost-log row, and all cleanup-on-error) and writes the success
+// response itself. The caller supplies the route-specific bits:
+//   - persist(tx, files): the UPDATE-or-INSERT, returning the variant row that
+//     becomes the response body.
+//   - afterCost(tx): optional extra writes that must run after the cost-log row
+//     inside the same transaction (e.g. /regenerate's refinement log), to keep
+//     the per-route transaction ordering byte-for-byte identical.
+// Behavior is intentionally identical to the previous inlined routes; nothing
+// observable (validations, budget semantics, cost-log rows, filenames, response
+// body/status) changes.
+async function runVariantImageGeneration(
+  req: Request,
+  res: Response,
+  campaign: typeof creativesTable.$inferSelect,
+  variant: typeof creativeVariantsTable.$inferSelect,
+  config: (typeof PLATFORM_CONFIGS)[string],
+  opts: {
+    briefText: string | undefined;
+    varyMode?: VaryMode;
+    fileTag: string;
+    tmpPrefix: string;
+    failureVerb: string;
+    costOperation: string;
+    statusCode: number;
+    errorLabel: string;
+    persist: (
+      tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+      files: { rawFilename: string; compFilename: string; compositingFailed: boolean },
+    ) => Promise<typeof creativeVariantsTable.$inferSelect>;
+    afterCost?: (tx: Parameters<Parameters<typeof db.transaction>[0]>[0]) => Promise<void>;
+  },
+): Promise<void> {
+  const creativeId = campaign.id;
+
+  const budget = await reserveImageBudget(creativeId, 1);
+  if (!budget.ok) {
+    res.status(429).json(budgetExceededBody(budget.todaySpend, budget.threshold));
+    return;
+  }
+  const reservationId = budget.reservationId;
+
+  let tmpDir: string | null = null;
+  try {
+    const selectedAssets = (campaign.selectedAssets || []) as import("../services/context-assembly.js").SelectedAssetRef[];
+    const selectedAssetIds = selectedAssets.map(a => a.assetId);
+
+    let packet: Awaited<ReturnType<typeof buildGenerationPacket>> | null = null;
+    let referenceImages: ReferenceImage[] = [];
+
+    if (selectedAssetIds.length > 0) {
+      packet = await buildGenerationPacket({
+        creativeId,
+        brandId: campaign.brandId,
+        templateId: campaign.templateId!,
+        platform: variant.platform,
+        selectedAssetIds,
+      });
+      referenceImages = await buildReferenceImages(packet);
+    }
+
+    const ctx = await assembleContext({
+      brandId: campaign.brandId,
+      templateId: campaign.templateId!,
+      selectedAssets,
+      selectedHashtagSetIds: (campaign.selectedHashtagSets || []) as string[],
+      briefText: opts.briefText,
+      referenceAnalysis: campaign.referenceAnalysis as Record<string, unknown> | null,
+      generationPacket: packet,
+    });
+
+    const imgResult = await generateImage(ctx, variant.platform, referenceImages, opts.varyMode);
+
+    ensureDir(UPLOADS_DIR);
+
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), opts.tmpPrefix));
+    const ts = Date.now();
+    const tag = opts.fileTag ? `_${opts.fileTag}` : "";
+    const rawFilename = `${creativeId}_${variant.platform}_${ts}${tag}_raw.png`;
+    const rawTmpPath = path.join(tmpDir, rawFilename);
+    fs.writeFileSync(rawTmpPath, imgResult.imageBuffer);
+
+    const layoutSpec = ctx.template.layoutSpec as Record<string, unknown> | null;
+    const [logoBuffer, brandFontFamily] = await Promise.all([
+      fetchLogoBuffer(campaign.brandId),
+      fetchBrandFontFamily(campaign.brandId),
+    ]);
+
+    let compositedBuffer: Buffer;
+    let compositingFailed = false;
+    try {
+      const result = await compositeImage({
+        rawImageBuffer: imgResult.imageBuffer,
+        layoutSpec: layoutSpec as LayoutSpec | null,
+        headlineText: variant.headlineText || null,
+        logoBuffer,
+        width: config.width,
+        height: config.height,
+        fontFamily: brandFontFamily,
+      });
+      compositedBuffer = result.buffer;
+    } catch (err) {
+      console.error(`Compositing failed during ${opts.failureVerb} for ${variant.platform}, using raw image:`, err instanceof Error ? err.message : err);
+      compositedBuffer = imgResult.imageBuffer;
+      compositingFailed = true;
+    }
+
+    const compFilename = `${creativeId}_${variant.platform}_${ts}${tag}_composited.png`;
+    const compTmpPath = path.join(tmpDir, compFilename);
+    fs.writeFileSync(compTmpPath, compositedBuffer);
+
+    const rawFinalPath = path.join(UPLOADS_DIR, rawFilename);
+    const compFinalPath = path.join(UPLOADS_DIR, compFilename);
+
+    try {
+      fs.copyFileSync(rawTmpPath, rawFinalPath);
+      fs.copyFileSync(compTmpPath, compFinalPath);
+    } catch (copyErr) {
+      try { fs.unlinkSync(rawFinalPath); } catch {}
+      try { fs.unlinkSync(compFinalPath); } catch {}
+      throw new Error("Failed to save generated files. Please try again.");
+    }
+
+    let row;
+    try {
+      [row] = await db.transaction(async (tx) => {
+        const result = await opts.persist(tx, { rawFilename, compFilename, compositingFailed });
+
+        if (reservationId) {
+          await tx.delete(costLogsTable).where(eq(costLogsTable.id, reservationId));
+        }
+
+        const cost = estimateImagenCost(1);
+        await tx.insert(costLogsTable).values({
+          creativeId,
+          service: "gemini",
+          operation: opts.costOperation,
+          model: AI_MODELS.GEMINI_FLASH_IMAGE,
+          costUsd: cost,
+        });
+
+        if (opts.afterCost) {
+          await opts.afterCost(tx);
+        }
+
+        return [result];
+      });
+    } catch (dbErr) {
+      try { fs.unlinkSync(rawFinalPath); } catch {}
+      try { fs.unlinkSync(compFinalPath); } catch {}
+      throw dbErr;
+    }
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    tmpDir = null;
+
+    res.status(opts.statusCode).json(row);
+  } catch (error) {
+    if (tmpDir) {
+      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+    }
+    if (reservationId) {
+      try {
+        await db.delete(costLogsTable).where(eq(costLogsTable.id, reservationId));
+      } catch {}
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: `${opts.errorLabel}: ${message}` });
+  }
+}
+
+const VARY_MODES = ["more_like_this", "keep_style", "keep_subject"] as const;
+
+const VaryBody = z.object({
+  varyMode: z.enum(VARY_MODES),
+});
 
 // Beat 2 (Board) "Vary": generate a NEW variant from an existing one under a
 // constraint mode, recording lineage (source_variant_id + vary_mode). Mirrors
@@ -1069,14 +1105,9 @@ const VARY_MODES: VaryMode[] = ["more_like_this", "keep_style", "keep_subject"];
 // NOTE: intentional near-duplicate of /regenerate — kept separate to avoid
 // touching the working regenerate path; dedupe into a shared helper once there
 // is runtime test coverage.
-router.post("/creatives/:id/variants/:variantId/vary", generationLimiter, async (req: Request, res: Response): Promise<void> => {
+router.post("/creatives/:id/variants/:variantId/vary", generationLimiter, validateRequest({ params: CreativeVariantParams, body: VaryBody }), async (req: Request, res: Response): Promise<void> => {
   const creativeId = str(req.params.id), variantId = str(req.params.variantId);
-  const varyMode = req.body?.varyMode as VaryMode | undefined;
-
-  if (!varyMode || !VARY_MODES.includes(varyMode)) {
-    res.status(400).json({ error: `varyMode must be one of: ${VARY_MODES.join(", ")}` });
-    return;
-  }
+  const varyMode = req.body.varyMode as VaryMode;
 
   const [campaign] = await db.select().from(creativesTable).where(eq(creativesTable.id, creativeId));
   if (!campaign) {
@@ -1100,197 +1131,44 @@ router.post("/creatives/:id/variants/:variantId/vary", generationLimiter, async 
     return;
   }
 
-  const [thresholdRow] = await db.select().from(appSettingsTable).where(eq(appSettingsTable.key, "dailyCostThreshold"));
-  const budgetThreshold = thresholdRow ? parseFloat(thresholdRow.value) : null;
-  let reservationId: string | null = null;
-
-  if (budgetThreshold !== null && !isNaN(budgetThreshold) && budgetThreshold > 0) {
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-
-    const estimatedGenerationCost = estimateImagenCost(1);
-    reservationId = crypto.randomUUID();
-
-    const budgetCheckResult = await db.transaction(async (tx) => {
-      const BUDGET_LOCK_KEY = 100001;
-      await tx.execute(sql`SELECT pg_advisory_xact_lock(${BUDGET_LOCK_KEY})`);
-      const [todayResult] = await tx.select({
-        totalCost: sql<number>`COALESCE(SUM(${costLogsTable.costUsd}), 0)`,
-      }).from(costLogsTable).where(gte(costLogsTable.createdAt, todayStart));
-      const currentSpend = Number(todayResult?.totalCost || 0);
-
-      if (currentSpend + estimatedGenerationCost > budgetThreshold) {
-        return { exceeded: true as const, todaySpend: currentSpend };
-      }
-
-      await tx.insert(costLogsTable).values({
-        id: reservationId!,
-        creativeId,
-        service: "system",
-        operation: "budget_reservation",
-        model: null,
-        costUsd: estimatedGenerationCost,
-      });
-      return { exceeded: false as const, todaySpend: currentSpend };
-    });
-
-    if (budgetCheckResult.exceeded) {
-      res.status(429).json({
-        error: "Daily budget exceeded",
-        todaySpend: budgetCheckResult.todaySpend,
-        threshold: budgetThreshold,
-        message: `Today's spend ($${budgetCheckResult.todaySpend.toFixed(2)}) has reached the daily budget limit ($${budgetThreshold.toFixed(2)}). Increase the limit in Cost Dashboard settings or wait until tomorrow.`,
-      });
-      return;
-    }
-  }
-
-  let varyTmpDir: string | null = null;
-  try {
-    const selectedAssets = (campaign.selectedAssets || []) as import("../services/context-assembly.js").SelectedAssetRef[];
-    const selectedAssetIds = selectedAssets.map(a => a.assetId);
-
-    let packet: Awaited<ReturnType<typeof buildGenerationPacket>> | null = null;
-    let referenceImages: ReferenceImage[] = [];
-
-    if (selectedAssetIds.length > 0) {
-      packet = await buildGenerationPacket({
-        creativeId,
-        brandId: campaign.brandId,
-        templateId: campaign.templateId,
-        platform: variant.platform,
-        selectedAssetIds,
-      });
-      referenceImages = await buildReferenceImages(packet);
-    }
-
-    const ctx = await assembleContext({
-      brandId: campaign.brandId,
-      templateId: campaign.templateId,
-      selectedAssets,
-      selectedHashtagSetIds: (campaign.selectedHashtagSets || []) as string[],
-      briefText: campaign.briefText || undefined,
-      referenceAnalysis: campaign.referenceAnalysis as Record<string, unknown> | null,
-      generationPacket: packet,
-    });
-
-    const imgResult = await generateImage(ctx, variant.platform, referenceImages, varyMode);
-
-    ensureDir(UPLOADS_DIR);
-
-    varyTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "sparq-vary-"));
-    const ts = Date.now();
-    const rawFilename = `${creativeId}_${variant.platform}_${ts}_vary_raw.png`;
-    const rawTmpPath = path.join(varyTmpDir, rawFilename);
-    fs.writeFileSync(rawTmpPath, imgResult.imageBuffer);
-
-    const layoutSpec = ctx.template.layoutSpec as Record<string, unknown> | null;
-    const [logoBuffer, brandFontFamily] = await Promise.all([
-      fetchLogoBuffer(campaign.brandId),
-      fetchBrandFontFamily(campaign.brandId),
-    ]);
-
-    let compositedBuffer: Buffer;
-    let compositingFailed = false;
-    try {
-      const result = await compositeImage({
-        rawImageBuffer: imgResult.imageBuffer,
-        layoutSpec: layoutSpec as LayoutSpec | null,
-        headlineText: variant.headlineText || null,
-        logoBuffer,
-        width: config.width,
-        height: config.height,
-        fontFamily: brandFontFamily,
-      });
-      compositedBuffer = result.buffer;
-    } catch (err) {
-      console.error(`Compositing failed during vary for ${variant.platform}, using raw image:`, err instanceof Error ? err.message : err);
-      compositedBuffer = imgResult.imageBuffer;
-      compositingFailed = true;
-    }
-
-    const compFilename = `${creativeId}_${variant.platform}_${ts}_vary_composited.png`;
-    const compTmpPath = path.join(varyTmpDir, compFilename);
-    fs.writeFileSync(compTmpPath, compositedBuffer);
-
-    const rawFinalPath = path.join(UPLOADS_DIR, rawFilename);
-    const compFinalPath = path.join(UPLOADS_DIR, compFilename);
-
-    try {
-      fs.copyFileSync(rawTmpPath, rawFinalPath);
-      fs.copyFileSync(compTmpPath, compFinalPath);
-    } catch (copyErr) {
-      try { fs.unlinkSync(rawFinalPath); } catch {}
-      try { fs.unlinkSync(compFinalPath); } catch {}
-      throw new Error("Failed to save generated files. Please try again.");
-    }
-
-    let created;
-    try {
-      [created] = await db.transaction(async (tx) => {
-        const [result] = await tx.insert(creativeVariantsTable)
-          .values({
-            creativeId,
-            platform: variant.platform,
-            aspectRatio: variant.aspectRatio,
-            rawImageUrl: `/api/files/generated/${rawFilename}`,
-            compositedImageUrl: `/api/files/generated/${compFilename}`,
-            caption: variant.caption,
-            originalCaption: variant.caption,
-            headlineText: variant.headlineText,
-            originalHeadline: variant.headlineText,
-            status: "generated",
-            compositingFailed: compositingFailed ? `Compositing failed during vary for ${variant.platform}. Using raw image as fallback.` : null,
-            sourceVariantId: variantId,
-            varyMode,
-          })
-          .returning();
-
-        if (reservationId) {
-          await tx.delete(costLogsTable).where(eq(costLogsTable.id, reservationId));
-        }
-
-        const cost = estimateImagenCost(1);
-        await tx.insert(costLogsTable).values({
+  await runVariantImageGeneration(req, res, campaign, variant, config, {
+    briefText: campaign.briefText || undefined,
+    varyMode,
+    fileTag: "vary",
+    tmpPrefix: "sparq-vary-",
+    failureVerb: "vary",
+    costOperation: "single_variant_vary",
+    statusCode: 201,
+    errorLabel: "Vary failed",
+    persist: async (tx, files) => {
+      const [result] = await tx.insert(creativeVariantsTable)
+        .values({
           creativeId,
-          service: "gemini",
-          operation: "single_variant_vary",
-          model: AI_MODELS.GEMINI_FLASH_IMAGE,
-          costUsd: cost,
-        });
-
-        return [result];
-      });
-    } catch (dbErr) {
-      try { fs.unlinkSync(rawFinalPath); } catch {}
-      try { fs.unlinkSync(compFinalPath); } catch {}
-      throw dbErr;
-    }
-    fs.rmSync(varyTmpDir, { recursive: true, force: true });
-    varyTmpDir = null;
-
-    res.status(201).json(created);
-  } catch (error) {
-    if (varyTmpDir) {
-      try { fs.rmSync(varyTmpDir, { recursive: true, force: true }); } catch {}
-    }
-    if (reservationId) {
-      try {
-        await db.delete(costLogsTable).where(eq(costLogsTable.id, reservationId));
-      } catch {}
-    }
-    const message = error instanceof Error ? error.message : String(error);
-    res.status(500).json({ error: `Vary failed: ${message}` });
-  }
+          platform: variant.platform,
+          aspectRatio: variant.aspectRatio,
+          rawImageUrl: `/api/files/generated/${files.rawFilename}`,
+          compositedImageUrl: `/api/files/generated/${files.compFilename}`,
+          caption: variant.caption,
+          originalCaption: variant.caption,
+          headlineText: variant.headlineText,
+          originalHeadline: variant.headlineText,
+          status: "generated",
+          compositingFailed: files.compositingFailed ? `Compositing failed during vary for ${variant.platform}. Using raw image as fallback.` : null,
+          sourceVariantId: variantId,
+          varyMode,
+        })
+        .returning();
+      return result;
+    },
+  });
 });
 
 // Beat 2 (Board) "Takes": generate a result set of N (default 3) exploratory
 // takes of the creative's concept at the Board working format. These are
 // originals (no source/vary lineage); platforms are assigned later at Fan-out.
-router.post("/creatives/:id/takes", generationLimiter, async (req: Request, res: Response): Promise<void> => {
+router.post("/creatives/:id/takes", generationLimiter, validateRequest({ params: CreativeParams, body: TakesBody }), async (req: Request, res: Response): Promise<void> => {
   const creativeId = str(req.params.id);
-  const requested = Number(req.body?.count);
-  const count = Number.isInteger(requested) && requested >= 1 && requested <= MAX_TAKE_COUNT ? requested : DEFAULT_TAKE_COUNT;
+  const count = req.body.count as number;
 
   const [campaign] = await db.select().from(creativesTable).where(eq(creativesTable.id, creativeId));
   if (!campaign) {
@@ -1376,19 +1254,20 @@ router.post("/creatives/:id/takes", generationLimiter, async (req: Request, res:
   }
 });
 
-const FANOUT_PLATFORMS = ["instagram_feed", "instagram_story", "twitter", "linkedin", "tiktok"];
+const FANOUT_PLATFORMS = ["instagram_feed", "instagram_story", "twitter", "linkedin", "tiktok"] as const;
+
+const FanOutBody = z.object({
+  platforms: z.array(z.enum(FANOUT_PLATFORMS)).nonempty(),
+});
 
 // Beat 4 (Fan-out / N1): take ONE winning take and deterministically reframe it
 // (zero image regeneration) to every selected platform — cropped around the
 // vision-detected subject focal point, with per-platform voice-adapted captions.
 // Spends only on focal detection (1 vision call, cached on the take) + captions
 // (1 Claude call); the reframes are free sharp crops of the winner's raw image.
-router.post("/creatives/:id/variants/:variantId/fan-out", generationLimiter, async (req: Request, res: Response): Promise<void> => {
+router.post("/creatives/:id/variants/:variantId/fan-out", generationLimiter, validateRequest({ params: CreativeVariantParams, body: FanOutBody }), async (req: Request, res: Response): Promise<void> => {
   const creativeId = str(req.params.id), variantId = str(req.params.variantId);
-  const requested = Array.isArray(req.body?.platforms)
-    ? (req.body.platforms as unknown[]).filter((p): p is string => typeof p === "string" && FANOUT_PLATFORMS.includes(p))
-    : [];
-  const platforms = requested.length > 0 ? requested : FANOUT_PLATFORMS;
+  const platforms = req.body.platforms as string[];
 
   const [campaign] = await db.select().from(creativesTable).where(eq(creativesTable.id, creativeId));
   if (!campaign) {
@@ -1421,7 +1300,7 @@ router.post("/creatives/:id/variants/:variantId/fan-out", generationLimiter, asy
   // call (only when the take has no cached focal/box) and a Claude captions
   // call. Reserve the sum of their real estimates.
   const needsSubjectDetection = !(winner.focalX != null && winner.focalY != null && winner.subjectBox);
-  const estimatedSubjectCost = needsSubjectDetection ? estimateClaudeCost() : 0;
+  const estimatedSubjectCost = needsSubjectDetection ? estimateGeminiTextCost() : 0;
   const estimatedCaptionsCost = estimateClaudeCost();
 
   const budget = await reserveBudget(creativeId, estimatedSubjectCost + estimatedCaptionsCost);
@@ -1685,7 +1564,7 @@ router.put("/creatives/:id/variants/:variantId/refocus", validateRequest({ param
 // Beat 4 escalation (generative, +1 image call): extend the source take's
 // background to this platform's aspect so the subject is no longer clipped, then
 // recompose. Updates the platform variant in place.
-router.post("/creatives/:id/variants/:variantId/outpaint", generationLimiter, async (req: Request, res: Response): Promise<void> => {
+router.post("/creatives/:id/variants/:variantId/outpaint", generationLimiter, validateRequest({ params: CreativeVariantParams }), async (req: Request, res: Response): Promise<void> => {
   const creativeId = str(req.params.id), variantId = str(req.params.variantId);
 
   const [campaign] = await db.select().from(creativesTable).where(eq(creativesTable.id, creativeId));
