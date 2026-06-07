@@ -5,9 +5,10 @@ import { db, creativesTable, creativeVariantsTable, costLogsTable, refinementLog
 import { sql, gte } from "drizzle-orm";
 import { assembleContext, type SelectedAssetRef } from "../services/context-assembly.js";
 import { generateCaptions } from "../services/claude.js";
-import { generateAllImages, generateImage, PLATFORM_CONFIGS, type ReferenceImage } from "../services/imagen.js";
+import { generateAllImages, generateImage, outpaintImage, PLATFORM_CONFIGS, type ReferenceImage, type VaryMode } from "../services/imagen.js";
 import { AI_MODELS, estimateClaudeCost, estimateImagenCost } from "../lib/ai-config.js";
-import { compositeImage, type LayoutSpec } from "../services/compositing.js";
+import { compositeImage, reframeImage, imageDimensions, type LayoutSpec } from "../services/compositing.js";
+import { detectSubject, predictClip, type SubjectBox } from "../services/focal-point.js";
 import { checkBrandReadiness } from "../lib/brand-readiness.js";
 import { buildGenerationPacket } from "../services/packet-assembly.js";
 import * as fs from "fs";
@@ -34,6 +35,11 @@ const UpdateCaptionBody = z.object({
 
 const UpdateHeadlineBody = z.object({
   headline: z.string().min(1),
+});
+
+const RefocusBody = z.object({
+  focalX: z.number().min(0).max(1),
+  focalY: z.number().min(0).max(1),
 });
 
 const router: IRouter = Router();
@@ -884,6 +890,889 @@ router.post("/creatives/:id/variants/:variantId/regenerate", generationLimiter, 
     }
     const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: `Regeneration failed: ${message}` });
+  }
+});
+
+// Board working format + shared helpers for the new /vary and /takes routes.
+// Takes are explored at 1:1 (the instagram_feed config); fan-out to real
+// platforms happens at Beat 4. Reusing an existing PLATFORM_CONFIGS key keeps
+// /vary + compositing working on takes with zero config changes (and no impact
+// on the /generate fan-out, which only adds a format when no platforms are
+// passed). NOTE: /vary above still inlines the equivalent of these helpers —
+// fold it in during the regenerate/vary/takes dedup. /generate + /regenerate
+// are intentionally left untouched.
+const BOARD_FORMAT = "instagram_feed";
+const DEFAULT_TAKE_COUNT = 3;
+const MAX_TAKE_COUNT = 4;
+
+// Reserve daily-budget headroom for `imageCount` images (advisory-locked, same
+// scheme as /generate and /regenerate). Returns the reservation id to settle
+// later, or an `ok:false` result the caller turns into a 429.
+async function reserveImageBudget(
+  creativeId: string,
+  imageCount: number,
+): Promise<{ ok: true; reservationId: string | null } | { ok: false; todaySpend: number; threshold: number }> {
+  const [thresholdRow] = await db.select().from(appSettingsTable).where(eq(appSettingsTable.key, "dailyCostThreshold"));
+  const budgetThreshold = thresholdRow ? parseFloat(thresholdRow.value) : null;
+  if (budgetThreshold === null || isNaN(budgetThreshold) || budgetThreshold <= 0) {
+    return { ok: true, reservationId: null };
+  }
+
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const estimatedGenerationCost = estimateImagenCost(imageCount);
+  const reservationId = crypto.randomUUID();
+
+  const result = await db.transaction(async (tx) => {
+    const BUDGET_LOCK_KEY = 100001;
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(${BUDGET_LOCK_KEY})`);
+    const [todayResult] = await tx.select({
+      totalCost: sql<number>`COALESCE(SUM(${costLogsTable.costUsd}), 0)`,
+    }).from(costLogsTable).where(gte(costLogsTable.createdAt, todayStart));
+    const currentSpend = Number(todayResult?.totalCost || 0);
+    if (currentSpend + estimatedGenerationCost > budgetThreshold) {
+      return { exceeded: true as const, todaySpend: currentSpend };
+    }
+    await tx.insert(costLogsTable).values({
+      id: reservationId,
+      creativeId,
+      service: "system",
+      operation: "budget_reservation",
+      model: null,
+      costUsd: estimatedGenerationCost,
+    });
+    return { exceeded: false as const, todaySpend: currentSpend };
+  });
+
+  if (result.exceeded) return { ok: false, todaySpend: result.todaySpend, threshold: budgetThreshold };
+  return { ok: true, reservationId };
+}
+
+function budgetExceededBody(todaySpend: number, threshold: number) {
+  return {
+    error: "Daily budget exceeded",
+    todaySpend,
+    threshold,
+    message: `Today's spend ($${todaySpend.toFixed(2)}) has reached the daily budget limit ($${threshold.toFixed(2)}). Increase the limit in Cost Dashboard settings or wait until tomorrow.`,
+  };
+}
+
+// Generate one image at `platform` for `campaign`, composite the overlay, and
+// promote both files to UPLOADS_DIR; returns the public filenames. Cleans its
+// own temp dir. On success the caller owns the promoted files (unlink them if a
+// later DB write fails).
+async function generateVariantImage(
+  campaign: typeof creativesTable.$inferSelect,
+  platform: string,
+  opts: { varyMode?: VaryMode; headlineText?: string | null } = {},
+): Promise<{ rawFilename: string; compFilename: string; compositingFailed: boolean }> {
+  const config = PLATFORM_CONFIGS[platform];
+  if (!config) throw new Error(`Unknown platform: ${platform}`);
+  if (!campaign.templateId) throw new Error("Creative must have a template");
+
+  const selectedAssets = (campaign.selectedAssets || []) as import("../services/context-assembly.js").SelectedAssetRef[];
+  const selectedAssetIds = selectedAssets.map(a => a.assetId);
+
+  let packet: Awaited<ReturnType<typeof buildGenerationPacket>> | null = null;
+  let referenceImages: ReferenceImage[] = [];
+  if (selectedAssetIds.length > 0) {
+    packet = await buildGenerationPacket({
+      creativeId: campaign.id,
+      brandId: campaign.brandId,
+      templateId: campaign.templateId,
+      platform,
+      selectedAssetIds,
+    });
+    referenceImages = await buildReferenceImages(packet);
+  }
+
+  const ctx = await assembleContext({
+    brandId: campaign.brandId,
+    templateId: campaign.templateId,
+    selectedAssets,
+    selectedHashtagSetIds: (campaign.selectedHashtagSets || []) as string[],
+    briefText: campaign.briefText || undefined,
+    referenceAnalysis: campaign.referenceAnalysis as Record<string, unknown> | null,
+    generationPacket: packet,
+  });
+
+  const imgResult = await generateImage(ctx, platform, referenceImages, opts.varyMode);
+
+  ensureDir(UPLOADS_DIR);
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "sparq-variant-"));
+  try {
+    const token = `${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
+    const tag = opts.varyMode ? "vary" : "take";
+    const rawFilename = `${campaign.id}_${platform}_${token}_${tag}_raw.png`;
+    fs.writeFileSync(path.join(tmpDir, rawFilename), imgResult.imageBuffer);
+
+    const layoutSpec = ctx.template.layoutSpec as Record<string, unknown> | null;
+    const [logoBuffer, brandFontFamily] = await Promise.all([
+      fetchLogoBuffer(campaign.brandId),
+      fetchBrandFontFamily(campaign.brandId),
+    ]);
+
+    let compositedBuffer: Buffer;
+    let compositingFailed = false;
+    try {
+      const result = await compositeImage({
+        rawImageBuffer: imgResult.imageBuffer,
+        layoutSpec: layoutSpec as LayoutSpec | null,
+        headlineText: opts.headlineText ?? null,
+        logoBuffer,
+        width: config.width,
+        height: config.height,
+        fontFamily: brandFontFamily,
+      });
+      compositedBuffer = result.buffer;
+    } catch (err) {
+      console.error(`Compositing failed for ${platform}, using raw image:`, err instanceof Error ? err.message : err);
+      compositedBuffer = imgResult.imageBuffer;
+      compositingFailed = true;
+    }
+
+    const compFilename = `${campaign.id}_${platform}_${token}_${tag}_composited.png`;
+    fs.writeFileSync(path.join(tmpDir, compFilename), compositedBuffer);
+
+    const rawFinalPath = path.join(UPLOADS_DIR, rawFilename);
+    const compFinalPath = path.join(UPLOADS_DIR, compFilename);
+    try {
+      fs.copyFileSync(path.join(tmpDir, rawFilename), rawFinalPath);
+      fs.copyFileSync(path.join(tmpDir, compFilename), compFinalPath);
+    } catch {
+      try { fs.unlinkSync(rawFinalPath); } catch {}
+      try { fs.unlinkSync(compFinalPath); } catch {}
+      throw new Error("Failed to save generated files. Please try again.");
+    }
+
+    return { rawFilename, compFilename, compositingFailed };
+  } finally {
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+  }
+}
+
+const VARY_MODES: VaryMode[] = ["more_like_this", "keep_style", "keep_subject"];
+
+// Beat 2 (Board) "Vary": generate a NEW variant from an existing one under a
+// constraint mode, recording lineage (source_variant_id + vary_mode). Mirrors
+// the /regenerate pipeline but inserts a new row instead of overwriting.
+// NOTE: intentional near-duplicate of /regenerate — kept separate to avoid
+// touching the working regenerate path; dedupe into a shared helper once there
+// is runtime test coverage.
+router.post("/creatives/:id/variants/:variantId/vary", generationLimiter, async (req: Request, res: Response): Promise<void> => {
+  const creativeId = str(req.params.id), variantId = str(req.params.variantId);
+  const varyMode = req.body?.varyMode as VaryMode | undefined;
+
+  if (!varyMode || !VARY_MODES.includes(varyMode)) {
+    res.status(400).json({ error: `varyMode must be one of: ${VARY_MODES.join(", ")}` });
+    return;
+  }
+
+  const [campaign] = await db.select().from(creativesTable).where(eq(creativesTable.id, creativeId));
+  if (!campaign) {
+    res.status(404).json({ error: "Creative not found" });
+    return;
+  }
+  if (!campaign.templateId) {
+    res.status(400).json({ error: "Creative must have a template" });
+    return;
+  }
+
+  const [variant] = await db.select().from(creativeVariantsTable).where(eq(creativeVariantsTable.id, variantId));
+  if (!variant || variant.creativeId !== creativeId) {
+    res.status(404).json({ error: "Variant not found" });
+    return;
+  }
+
+  const config = PLATFORM_CONFIGS[variant.platform];
+  if (!config) {
+    res.status(400).json({ error: "Unknown platform" });
+    return;
+  }
+
+  const [thresholdRow] = await db.select().from(appSettingsTable).where(eq(appSettingsTable.key, "dailyCostThreshold"));
+  const budgetThreshold = thresholdRow ? parseFloat(thresholdRow.value) : null;
+  let reservationId: string | null = null;
+
+  if (budgetThreshold !== null && !isNaN(budgetThreshold) && budgetThreshold > 0) {
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+
+    const estimatedGenerationCost = estimateImagenCost(1);
+    reservationId = crypto.randomUUID();
+
+    const budgetCheckResult = await db.transaction(async (tx) => {
+      const BUDGET_LOCK_KEY = 100001;
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(${BUDGET_LOCK_KEY})`);
+      const [todayResult] = await tx.select({
+        totalCost: sql<number>`COALESCE(SUM(${costLogsTable.costUsd}), 0)`,
+      }).from(costLogsTable).where(gte(costLogsTable.createdAt, todayStart));
+      const currentSpend = Number(todayResult?.totalCost || 0);
+
+      if (currentSpend + estimatedGenerationCost > budgetThreshold) {
+        return { exceeded: true as const, todaySpend: currentSpend };
+      }
+
+      await tx.insert(costLogsTable).values({
+        id: reservationId!,
+        creativeId,
+        service: "system",
+        operation: "budget_reservation",
+        model: null,
+        costUsd: estimatedGenerationCost,
+      });
+      return { exceeded: false as const, todaySpend: currentSpend };
+    });
+
+    if (budgetCheckResult.exceeded) {
+      res.status(429).json({
+        error: "Daily budget exceeded",
+        todaySpend: budgetCheckResult.todaySpend,
+        threshold: budgetThreshold,
+        message: `Today's spend ($${budgetCheckResult.todaySpend.toFixed(2)}) has reached the daily budget limit ($${budgetThreshold.toFixed(2)}). Increase the limit in Cost Dashboard settings or wait until tomorrow.`,
+      });
+      return;
+    }
+  }
+
+  let varyTmpDir: string | null = null;
+  try {
+    const selectedAssets = (campaign.selectedAssets || []) as import("../services/context-assembly.js").SelectedAssetRef[];
+    const selectedAssetIds = selectedAssets.map(a => a.assetId);
+
+    let packet: Awaited<ReturnType<typeof buildGenerationPacket>> | null = null;
+    let referenceImages: ReferenceImage[] = [];
+
+    if (selectedAssetIds.length > 0) {
+      packet = await buildGenerationPacket({
+        creativeId,
+        brandId: campaign.brandId,
+        templateId: campaign.templateId,
+        platform: variant.platform,
+        selectedAssetIds,
+      });
+      referenceImages = await buildReferenceImages(packet);
+    }
+
+    const ctx = await assembleContext({
+      brandId: campaign.brandId,
+      templateId: campaign.templateId,
+      selectedAssets,
+      selectedHashtagSetIds: (campaign.selectedHashtagSets || []) as string[],
+      briefText: campaign.briefText || undefined,
+      referenceAnalysis: campaign.referenceAnalysis as Record<string, unknown> | null,
+      generationPacket: packet,
+    });
+
+    const imgResult = await generateImage(ctx, variant.platform, referenceImages, varyMode);
+
+    ensureDir(UPLOADS_DIR);
+
+    varyTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "sparq-vary-"));
+    const ts = Date.now();
+    const rawFilename = `${creativeId}_${variant.platform}_${ts}_vary_raw.png`;
+    const rawTmpPath = path.join(varyTmpDir, rawFilename);
+    fs.writeFileSync(rawTmpPath, imgResult.imageBuffer);
+
+    const layoutSpec = ctx.template.layoutSpec as Record<string, unknown> | null;
+    const [logoBuffer, brandFontFamily] = await Promise.all([
+      fetchLogoBuffer(campaign.brandId),
+      fetchBrandFontFamily(campaign.brandId),
+    ]);
+
+    let compositedBuffer: Buffer;
+    let compositingFailed = false;
+    try {
+      const result = await compositeImage({
+        rawImageBuffer: imgResult.imageBuffer,
+        layoutSpec: layoutSpec as LayoutSpec | null,
+        headlineText: variant.headlineText || null,
+        logoBuffer,
+        width: config.width,
+        height: config.height,
+        fontFamily: brandFontFamily,
+      });
+      compositedBuffer = result.buffer;
+    } catch (err) {
+      console.error(`Compositing failed during vary for ${variant.platform}, using raw image:`, err instanceof Error ? err.message : err);
+      compositedBuffer = imgResult.imageBuffer;
+      compositingFailed = true;
+    }
+
+    const compFilename = `${creativeId}_${variant.platform}_${ts}_vary_composited.png`;
+    const compTmpPath = path.join(varyTmpDir, compFilename);
+    fs.writeFileSync(compTmpPath, compositedBuffer);
+
+    const rawFinalPath = path.join(UPLOADS_DIR, rawFilename);
+    const compFinalPath = path.join(UPLOADS_DIR, compFilename);
+
+    try {
+      fs.copyFileSync(rawTmpPath, rawFinalPath);
+      fs.copyFileSync(compTmpPath, compFinalPath);
+    } catch (copyErr) {
+      try { fs.unlinkSync(rawFinalPath); } catch {}
+      try { fs.unlinkSync(compFinalPath); } catch {}
+      throw new Error("Failed to save generated files. Please try again.");
+    }
+
+    let created;
+    try {
+      [created] = await db.transaction(async (tx) => {
+        const [result] = await tx.insert(creativeVariantsTable)
+          .values({
+            creativeId,
+            platform: variant.platform,
+            aspectRatio: variant.aspectRatio,
+            rawImageUrl: `/api/files/generated/${rawFilename}`,
+            compositedImageUrl: `/api/files/generated/${compFilename}`,
+            caption: variant.caption,
+            originalCaption: variant.caption,
+            headlineText: variant.headlineText,
+            originalHeadline: variant.headlineText,
+            status: "generated",
+            compositingFailed: compositingFailed ? `Compositing failed during vary for ${variant.platform}. Using raw image as fallback.` : null,
+            sourceVariantId: variantId,
+            varyMode,
+          })
+          .returning();
+
+        if (reservationId) {
+          await tx.delete(costLogsTable).where(eq(costLogsTable.id, reservationId));
+        }
+
+        const cost = estimateImagenCost(1);
+        await tx.insert(costLogsTable).values({
+          creativeId,
+          service: "gemini",
+          operation: "single_variant_vary",
+          model: AI_MODELS.GEMINI_FLASH_IMAGE,
+          costUsd: cost,
+        });
+
+        return [result];
+      });
+    } catch (dbErr) {
+      try { fs.unlinkSync(rawFinalPath); } catch {}
+      try { fs.unlinkSync(compFinalPath); } catch {}
+      throw dbErr;
+    }
+    fs.rmSync(varyTmpDir, { recursive: true, force: true });
+    varyTmpDir = null;
+
+    res.status(201).json(created);
+  } catch (error) {
+    if (varyTmpDir) {
+      try { fs.rmSync(varyTmpDir, { recursive: true, force: true }); } catch {}
+    }
+    if (reservationId) {
+      try {
+        await db.delete(costLogsTable).where(eq(costLogsTable.id, reservationId));
+      } catch {}
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: `Vary failed: ${message}` });
+  }
+});
+
+// Beat 2 (Board) "Takes": generate a result set of N (default 3) exploratory
+// takes of the creative's concept at the Board working format. These are
+// originals (no source/vary lineage); platforms are assigned later at Fan-out.
+router.post("/creatives/:id/takes", generationLimiter, async (req: Request, res: Response): Promise<void> => {
+  const creativeId = str(req.params.id);
+  const requested = Number(req.body?.count);
+  const count = Number.isInteger(requested) && requested >= 1 && requested <= MAX_TAKE_COUNT ? requested : DEFAULT_TAKE_COUNT;
+
+  const [campaign] = await db.select().from(creativesTable).where(eq(creativesTable.id, creativeId));
+  if (!campaign) {
+    res.status(404).json({ error: "Creative not found" });
+    return;
+  }
+  if (!campaign.templateId) {
+    res.status(400).json({ error: "Creative must have a template" });
+    return;
+  }
+
+  const budget = await reserveImageBudget(creativeId, count);
+  if (!budget.ok) {
+    res.status(429).json(budgetExceededBody(budget.todaySpend, budget.threshold));
+    return;
+  }
+  const reservationId = budget.reservationId;
+
+  try {
+    // Each take is an independent sampling of the same concept (Gemini is
+    // stochastic), so they read as distinct takes without per-take prompting.
+    const settled = await Promise.allSettled(
+      Array.from({ length: count }, () => generateVariantImage(campaign, BOARD_FORMAT, {})),
+    );
+    const produced = settled
+      .filter((s): s is PromiseFulfilledResult<{ rawFilename: string; compFilename: string; compositingFailed: boolean }> => s.status === "fulfilled")
+      .map(s => s.value);
+
+    if (produced.length === 0) {
+      if (reservationId) {
+        try { await db.delete(costLogsTable).where(eq(costLogsTable.id, reservationId)); } catch {}
+      }
+      res.status(502).json({ error: "Could not generate takes. Please try again." });
+      return;
+    }
+
+    const config = PLATFORM_CONFIGS[BOARD_FORMAT];
+    let created;
+    try {
+      created = await db.transaction(async (tx) => {
+        const rows: (typeof creativeVariantsTable.$inferSelect)[] = [];
+        for (const p of produced) {
+          const [row] = await tx.insert(creativeVariantsTable)
+            .values({
+              creativeId,
+              platform: BOARD_FORMAT,
+              aspectRatio: config.aspectRatio,
+              rawImageUrl: `/api/files/generated/${p.rawFilename}`,
+              compositedImageUrl: `/api/files/generated/${p.compFilename}`,
+              status: "generated",
+              compositingFailed: p.compositingFailed ? `Compositing failed for ${BOARD_FORMAT}. Using raw image as fallback.` : null,
+            })
+            .returning();
+          rows.push(row);
+        }
+        if (reservationId) {
+          await tx.delete(costLogsTable).where(eq(costLogsTable.id, reservationId));
+        }
+        await tx.insert(costLogsTable).values({
+          creativeId,
+          service: "gemini",
+          operation: "board_takes",
+          model: AI_MODELS.GEMINI_FLASH_IMAGE,
+          costUsd: estimateImagenCost(produced.length),
+        });
+        return rows;
+      });
+    } catch (dbErr) {
+      for (const p of produced) {
+        try { fs.unlinkSync(path.join(UPLOADS_DIR, p.rawFilename)); } catch {}
+        try { fs.unlinkSync(path.join(UPLOADS_DIR, p.compFilename)); } catch {}
+      }
+      throw dbErr;
+    }
+
+    res.status(201).json({ takes: created });
+  } catch (error) {
+    if (reservationId) {
+      try { await db.delete(costLogsTable).where(eq(costLogsTable.id, reservationId)); } catch {}
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: `Take generation failed: ${message}` });
+  }
+});
+
+const FANOUT_PLATFORMS = ["instagram_feed", "instagram_story", "twitter", "linkedin", "tiktok"];
+
+// Beat 4 (Fan-out / N1): take ONE winning take and deterministically reframe it
+// (zero image regeneration) to every selected platform — cropped around the
+// vision-detected subject focal point, with per-platform voice-adapted captions.
+// Spends only on focal detection (1 vision call, cached on the take) + captions
+// (1 Claude call); the reframes are free sharp crops of the winner's raw image.
+router.post("/creatives/:id/variants/:variantId/fan-out", generationLimiter, async (req: Request, res: Response): Promise<void> => {
+  const creativeId = str(req.params.id), variantId = str(req.params.variantId);
+  const requested = Array.isArray(req.body?.platforms)
+    ? (req.body.platforms as unknown[]).filter((p): p is string => typeof p === "string" && FANOUT_PLATFORMS.includes(p))
+    : [];
+  const platforms = requested.length > 0 ? requested : FANOUT_PLATFORMS;
+
+  const [campaign] = await db.select().from(creativesTable).where(eq(creativesTable.id, creativeId));
+  if (!campaign) {
+    res.status(404).json({ error: "Creative not found" });
+    return;
+  }
+  if (!campaign.templateId) {
+    res.status(400).json({ error: "Creative must have a template" });
+    return;
+  }
+
+  const [winner] = await db.select().from(creativeVariantsTable).where(eq(creativeVariantsTable.id, variantId));
+  if (!winner || winner.creativeId !== creativeId) {
+    res.status(404).json({ error: "Variant not found" });
+    return;
+  }
+  if (!winner.rawImageUrl) {
+    res.status(400).json({ error: "Winning take has no source image to reframe" });
+    return;
+  }
+
+  const winnerRawFilename = winner.rawImageUrl.replace("/api/files/generated/", "");
+  const winnerRawPath = path.join(UPLOADS_DIR, winnerRawFilename);
+  if (!fs.existsSync(winnerRawPath)) {
+    res.status(400).json({ error: "Source image file not found" });
+    return;
+  }
+
+  const budget = await reserveImageBudget(creativeId, 1);
+  if (!budget.ok) {
+    res.status(429).json(budgetExceededBody(budget.todaySpend, budget.threshold));
+    return;
+  }
+  const reservationId = budget.reservationId;
+
+  const writtenFiles: string[] = [];
+  try {
+    const rawBuffer = fs.readFileSync(winnerRawPath);
+    const { width: rawW, height: rawH } = await imageDimensions(rawBuffer);
+    const sourceAspect = rawW && rawH ? rawW / rawH : 1;
+
+    // Subject focal + bounding box: reuse the take's stored detection, else detect
+    // once (vision) and cache it on the take. The box drives clip prediction.
+    let focal: { x: number; y: number };
+    let box: SubjectBox;
+    if (winner.focalX != null && winner.focalY != null && winner.subjectBox) {
+      focal = { x: winner.focalX, y: winner.focalY };
+      box = winner.subjectBox as SubjectBox;
+    } else {
+      const detected = await detectSubject(rawBuffer);
+      focal = detected.focal;
+      box = detected.box;
+      await db.update(creativeVariantsTable)
+        .set({ focalX: focal.x, focalY: focal.y, subjectBox: box, updatedAt: new Date() })
+        .where(eq(creativeVariantsTable.id, variantId));
+    }
+
+    // Per-platform captions (one Claude call covering all platforms).
+    const selectedAssets = (campaign.selectedAssets || []) as import("../services/context-assembly.js").SelectedAssetRef[];
+    const ctx = await assembleContext({
+      brandId: campaign.brandId,
+      templateId: campaign.templateId,
+      selectedAssets,
+      selectedHashtagSetIds: (campaign.selectedHashtagSets || []) as string[],
+      briefText: campaign.briefText || undefined,
+      referenceAnalysis: campaign.referenceAnalysis as Record<string, unknown> | null,
+    });
+    const captions = await generateCaptions(ctx);
+    const captionsByPlatform = captions as unknown as Record<string, { caption?: string; headline?: string }>;
+
+    const [logoBuffer, fontFamily] = await Promise.all([
+      fetchLogoBuffer(campaign.brandId),
+      fetchBrandFontFamily(campaign.brandId),
+    ]);
+
+    ensureDir(UPLOADS_DIR);
+    const ts = Date.now();
+    const produced: {
+      platform: string; aspectRatio: string; rawFn: string; compFn: string;
+      caption: string; headline: string; warn: string | null; clip: boolean;
+    }[] = [];
+
+    for (const platform of platforms) {
+      const config = PLATFORM_CONFIGS[platform];
+      if (!config) continue;
+      const cap = captionsByPlatform[platform] || {};
+      const caption = cap.caption || "";
+      const headline = cap.headline || "";
+
+      // Reframe the winner's raw image to this platform's aspect around the focal
+      // point (zero regeneration), then overlay headline/logo/gradient.
+      const reframedRaw = await reframeImage(rawBuffer, config.width, config.height, focal);
+      const composited = await compositeImage({
+        rawImageBuffer: reframedRaw,
+        layoutSpec: ctx.template.layoutSpec as LayoutSpec | null,
+        headlineText: headline || null,
+        logoBuffer,
+        width: config.width,
+        height: config.height,
+        fontFamily,
+        aspectRatio: config.aspectRatio,
+      });
+
+      const token = `${ts}_${crypto.randomUUID().slice(0, 8)}`;
+      const rawFn = `${creativeId}_${platform}_${token}_fanout_raw.png`;
+      const compFn = `${creativeId}_${platform}_${token}_fanout_composited.png`;
+      fs.writeFileSync(path.join(UPLOADS_DIR, rawFn), reframedRaw);
+      fs.writeFileSync(path.join(UPLOADS_DIR, compFn), composited.buffer);
+      writtenFiles.push(rawFn, compFn);
+
+      produced.push({
+        platform,
+        aspectRatio: config.aspectRatio,
+        rawFn,
+        compFn,
+        caption,
+        headline,
+        warn: composited.warnings.length ? composited.warnings.join("; ") : null,
+        clip: predictClip(box, focal, sourceAspect, config.width / config.height),
+      });
+    }
+
+    if (produced.length === 0) {
+      if (reservationId) {
+        try { await db.delete(costLogsTable).where(eq(costLogsTable.id, reservationId)); } catch {}
+      }
+      res.status(400).json({ error: "No valid platforms selected" });
+      return;
+    }
+
+    const focalPoint = focal;
+    let created;
+    try {
+      created = await db.transaction(async (tx) => {
+        const rows: (typeof creativeVariantsTable.$inferSelect)[] = [];
+        for (const p of produced) {
+          const [row] = await tx.insert(creativeVariantsTable).values({
+            creativeId,
+            platform: p.platform,
+            aspectRatio: p.aspectRatio,
+            rawImageUrl: `/api/files/generated/${p.rawFn}`,
+            compositedImageUrl: `/api/files/generated/${p.compFn}`,
+            caption: p.caption,
+            originalCaption: p.caption,
+            headlineText: p.headline || null,
+            originalHeadline: p.headline || null,
+            status: "generated",
+            sourceVariantId: variantId,
+            focalX: focalPoint.x,
+            focalY: focalPoint.y,
+            clipWarning: p.clip,
+            compositingFailed: p.warn,
+          }).returning();
+          rows.push(row);
+        }
+        if (reservationId) {
+          await tx.delete(costLogsTable).where(eq(costLogsTable.id, reservationId));
+        }
+        await tx.insert(costLogsTable).values({
+          creativeId,
+          service: "gemini",
+          operation: "fan_out",
+          model: AI_MODELS.GEMINI_FLASH_TEXT,
+          costUsd: estimateClaudeCost(),
+        });
+        return rows;
+      });
+    } catch (dbErr) {
+      for (const fn of writtenFiles) {
+        try { fs.unlinkSync(path.join(UPLOADS_DIR, fn)); } catch {}
+      }
+      throw dbErr;
+    }
+
+    res.status(201).json({ variants: created, focalPoint });
+  } catch (error) {
+    for (const fn of writtenFiles) {
+      try { fs.unlinkSync(path.join(UPLOADS_DIR, fn)); } catch {}
+    }
+    if (reservationId) {
+      try { await db.delete(costLogsTable).where(eq(costLogsTable.id, reservationId)); } catch {}
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: `Fan-out failed: ${message}` });
+  }
+});
+
+// Beat 4 escalation (free): re-aim a platform variant's crop at a new focal point,
+// re-reframing from the original winning take — no model call.
+router.put("/creatives/:id/variants/:variantId/refocus", validateRequest({ params: CreativeVariantParams, body: RefocusBody }), async (req: Request, res: Response): Promise<void> => {
+  const creativeId = str(req.params.id), variantId = str(req.params.variantId);
+  const { focalX, focalY } = req.body as { focalX: number; focalY: number };
+
+  const [campaign] = await db.select().from(creativesTable).where(eq(creativesTable.id, creativeId));
+  if (!campaign || !campaign.templateId) {
+    res.status(404).json({ error: "Creative not found" });
+    return;
+  }
+  const [variant] = await db.select().from(creativeVariantsTable).where(eq(creativeVariantsTable.id, variantId));
+  if (!variant || variant.creativeId !== creativeId) {
+    res.status(404).json({ error: "Variant not found" });
+    return;
+  }
+  if (!variant.sourceVariantId) {
+    res.status(400).json({ error: "Variant has no source take to reframe from" });
+    return;
+  }
+  const config = PLATFORM_CONFIGS[variant.platform];
+  if (!config) {
+    res.status(400).json({ error: "Unknown platform" });
+    return;
+  }
+  const [winner] = await db.select().from(creativeVariantsTable).where(eq(creativeVariantsTable.id, variant.sourceVariantId));
+  if (!winner || !winner.rawImageUrl) {
+    res.status(400).json({ error: "Source take image not available" });
+    return;
+  }
+  const srcPath = path.join(UPLOADS_DIR, winner.rawImageUrl.replace("/api/files/generated/", ""));
+  if (!fs.existsSync(srcPath)) {
+    res.status(400).json({ error: "Source image file not found" });
+    return;
+  }
+
+  try {
+    const rawBuffer = fs.readFileSync(srcPath);
+    const { width: rawW, height: rawH } = await imageDimensions(rawBuffer);
+    const sourceAspect = rawW && rawH ? rawW / rawH : 1;
+    const focal = { x: focalX, y: focalY };
+
+    const ctx = await assembleContext({ brandId: campaign.brandId, templateId: campaign.templateId, selectedAssets: [] });
+    const [logoBuffer, fontFamily] = await Promise.all([
+      fetchLogoBuffer(campaign.brandId),
+      fetchBrandFontFamily(campaign.brandId),
+    ]);
+
+    const reframedRaw = await reframeImage(rawBuffer, config.width, config.height, focal);
+    const composited = await compositeImage({
+      rawImageBuffer: reframedRaw,
+      layoutSpec: ctx.template.layoutSpec as LayoutSpec | null,
+      headlineText: variant.headlineText,
+      logoBuffer,
+      width: config.width,
+      height: config.height,
+      fontFamily,
+      aspectRatio: config.aspectRatio,
+    });
+
+    ensureDir(UPLOADS_DIR);
+    const token = `${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
+    const rawFn = `${creativeId}_${variant.platform}_${token}_refocus_raw.png`;
+    const compFn = `${creativeId}_${variant.platform}_${token}_refocus_composited.png`;
+    fs.writeFileSync(path.join(UPLOADS_DIR, rawFn), reframedRaw);
+    fs.writeFileSync(path.join(UPLOADS_DIR, compFn), composited.buffer);
+
+    const box = (winner.subjectBox as SubjectBox | null) ?? null;
+    const clip = box ? predictClip(box, focal, sourceAspect, config.width / config.height) : false;
+
+    const [updated] = await db.update(creativeVariantsTable)
+      .set({
+        rawImageUrl: `/api/files/generated/${rawFn}`,
+        compositedImageUrl: `/api/files/generated/${compFn}`,
+        focalX,
+        focalY,
+        clipWarning: clip,
+        compositingFailed: composited.warnings.length ? composited.warnings.join("; ") : null,
+        updatedAt: new Date(),
+      })
+      .where(eq(creativeVariantsTable.id, variantId))
+      .returning();
+
+    res.json(updated);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: `Refocus failed: ${message}` });
+  }
+});
+
+// Beat 4 escalation (generative, +1 image call): extend the source take's
+// background to this platform's aspect so the subject is no longer clipped, then
+// recompose. Updates the platform variant in place.
+router.post("/creatives/:id/variants/:variantId/outpaint", generationLimiter, async (req: Request, res: Response): Promise<void> => {
+  const creativeId = str(req.params.id), variantId = str(req.params.variantId);
+
+  const [campaign] = await db.select().from(creativesTable).where(eq(creativesTable.id, creativeId));
+  if (!campaign || !campaign.templateId) {
+    res.status(404).json({ error: "Creative not found" });
+    return;
+  }
+  const [variant] = await db.select().from(creativeVariantsTable).where(eq(creativeVariantsTable.id, variantId));
+  if (!variant || variant.creativeId !== creativeId) {
+    res.status(404).json({ error: "Variant not found" });
+    return;
+  }
+  const config = PLATFORM_CONFIGS[variant.platform];
+  if (!config) {
+    res.status(400).json({ error: "Unknown platform" });
+    return;
+  }
+  const sourceId = variant.sourceVariantId || variantId;
+  const [winner] = await db.select().from(creativeVariantsTable).where(eq(creativeVariantsTable.id, sourceId));
+  if (!winner || !winner.rawImageUrl) {
+    res.status(400).json({ error: "Source take image not available" });
+    return;
+  }
+  const srcPath = path.join(UPLOADS_DIR, winner.rawImageUrl.replace("/api/files/generated/", ""));
+  if (!fs.existsSync(srcPath)) {
+    res.status(400).json({ error: "Source image file not found" });
+    return;
+  }
+
+  const budget = await reserveImageBudget(creativeId, 1);
+  if (!budget.ok) {
+    res.status(429).json(budgetExceededBody(budget.todaySpend, budget.threshold));
+    return;
+  }
+  const reservationId = budget.reservationId;
+
+  const writtenFiles: string[] = [];
+  try {
+    const rawBuffer = fs.readFileSync(srcPath);
+    const extended = await outpaintImage(rawBuffer, "image/png", config.aspectRatio, campaign.briefText || undefined);
+
+    const ctx = await assembleContext({ brandId: campaign.brandId, templateId: campaign.templateId, selectedAssets: [] });
+    const [logoBuffer, fontFamily] = await Promise.all([
+      fetchLogoBuffer(campaign.brandId),
+      fetchBrandFontFamily(campaign.brandId),
+    ]);
+
+    // The outpaint targets the platform aspect with the subject kept centered;
+    // reframe centered to the exact pixel size, then overlay.
+    const reframedRaw = await reframeImage(extended, config.width, config.height, null);
+    const composited = await compositeImage({
+      rawImageBuffer: reframedRaw,
+      layoutSpec: ctx.template.layoutSpec as LayoutSpec | null,
+      headlineText: variant.headlineText,
+      logoBuffer,
+      width: config.width,
+      height: config.height,
+      fontFamily,
+      aspectRatio: config.aspectRatio,
+    });
+
+    ensureDir(UPLOADS_DIR);
+    const token = `${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
+    const rawFn = `${creativeId}_${variant.platform}_${token}_outpaint_raw.png`;
+    const compFn = `${creativeId}_${variant.platform}_${token}_outpaint_composited.png`;
+    fs.writeFileSync(path.join(UPLOADS_DIR, rawFn), reframedRaw);
+    fs.writeFileSync(path.join(UPLOADS_DIR, compFn), composited.buffer);
+    writtenFiles.push(rawFn, compFn);
+
+    let updated;
+    try {
+      [updated] = await db.transaction(async (tx) => {
+        const [row] = await tx.update(creativeVariantsTable)
+          .set({
+            rawImageUrl: `/api/files/generated/${rawFn}`,
+            compositedImageUrl: `/api/files/generated/${compFn}`,
+            focalX: 0.5,
+            focalY: 0.5,
+            clipWarning: false,
+            compositingFailed: composited.warnings.length ? composited.warnings.join("; ") : null,
+            updatedAt: new Date(),
+          })
+          .where(eq(creativeVariantsTable.id, variantId))
+          .returning();
+        if (reservationId) {
+          await tx.delete(costLogsTable).where(eq(costLogsTable.id, reservationId));
+        }
+        await tx.insert(costLogsTable).values({
+          creativeId,
+          service: "gemini",
+          operation: "outpaint",
+          model: AI_MODELS.GEMINI_FLASH_IMAGE,
+          costUsd: estimateImagenCost(1),
+        });
+        return [row];
+      });
+    } catch (dbErr) {
+      for (const fn of writtenFiles) {
+        try { fs.unlinkSync(path.join(UPLOADS_DIR, fn)); } catch {}
+      }
+      throw dbErr;
+    }
+
+    res.json(updated);
+  } catch (error) {
+    for (const fn of writtenFiles) {
+      try { fs.unlinkSync(path.join(UPLOADS_DIR, fn)); } catch {}
+    }
+    if (reservationId) {
+      try { await db.delete(costLogsTable).where(eq(costLogsTable.id, reservationId)); } catch {}
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: `Outpaint failed: ${message}` });
   }
 });
 

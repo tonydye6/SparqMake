@@ -12,13 +12,16 @@ import {
   Menu,
   X,
   ClipboardList,
-  MessageSquareText
+  MessageSquareText,
+  Sparkles,
+  Palette
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn, apiFetch } from "@/lib/utils";
 import { useGetCreatives, getCalendarEntries } from "@workspace/api-client-react";
 import { useAuth } from "@/hooks/useAuth";
+import { FEATURES } from "@/lib/features";
 
 type SidebarMode = "mobile" | "tablet" | "desktop";
 
@@ -78,6 +81,9 @@ export function Sidebar({ mobileOpen, onMobileClose }: SidebarProps) {
 
   const NAV_ITEMS = [
     { href: "/", label: "Creative Studio", icon: LayoutDashboard },
+    ...(FEATURES.studioNext ? [{ href: "/studio-next", label: "Studio Next", icon: Sparkles }] : []),
+    ...(FEATURES.studioNext ? [{ href: "/brand-next", label: "Brand", icon: Palette }] : []),
+    ...(FEATURES.studioNext ? [{ href: "/calendar-next", label: "Calendar (new)", icon: CalendarIcon }] : []),
     { href: "/assets", label: "Asset Library", icon: Library, badge: pendingAssetCount || undefined },
     { href: "/calendar", label: "Calendar", icon: CalendarIcon, badge: calendarCount || undefined },
     { href: "/content-plan", label: "Content Plan", icon: ClipboardList },

@@ -37,32 +37,49 @@ interface CompositingInput {
   width: number;
   height: number;
   fontFamily?: string;
+  // N1 fan-out: normalized (0..1) subject focal point. When set, the source is
+  // reframed by cropping around this point (keeping the subject in frame) before
+  // resizing; when null, falls back to the legacy centered cover-crop.
+  focalPoint?: { x: number; y: number } | null;
+  // Aspect-ratio key (e.g. "9:16") used to look up layout_spec.aspect_ratio_overrides.
+  // Defaults to `${width}:${height}` when omitted.
+  aspectRatio?: string;
 }
 
-function resolveLayout(layoutSpec: LayoutSpec | null, _aspectRatio: string): LayoutSpec {
-  if (!layoutSpec) {
-    return {
-      headline_zone: {
-        position: "lower_third",
-        alignment: "left",
-        max_width_percent: 80,
-        padding_px: 24,
-        font_size_px: 48,
-        color: "#FFFFFF",
-        max_lines: 2,
-      },
-      gradient_overlay: {
-        type: "linear",
-        direction: "bottom_to_top",
-        color: "#000000",
-        start_opacity: 0.7,
-        end_opacity: 0.0,
-        height_percent: 40,
-      },
-    };
-  }
+const DEFAULT_LAYOUT: LayoutSpec = {
+  headline_zone: {
+    position: "lower_third",
+    alignment: "left",
+    max_width_percent: 80,
+    padding_px: 24,
+    font_size_px: 48,
+    color: "#FFFFFF",
+    max_lines: 2,
+  },
+  gradient_overlay: {
+    type: "linear",
+    direction: "bottom_to_top",
+    color: "#000000",
+    start_opacity: 0.7,
+    end_opacity: 0.0,
+    height_percent: 40,
+  },
+};
 
-  return layoutSpec;
+// Resolve the effective layout for a given aspect ratio, applying any per-ratio
+// override from layout_spec.aspect_ratio_overrides on top of the base (the
+// nested zones are merged one level deep so a partial override is additive).
+function resolveLayout(layoutSpec: LayoutSpec | null, aspectRatio: string): LayoutSpec {
+  const base = layoutSpec ?? DEFAULT_LAYOUT;
+  const override = base.aspect_ratio_overrides?.[aspectRatio];
+  if (!override) return base;
+  return {
+    ...base,
+    ...override,
+    headline_zone: { ...base.headline_zone, ...override.headline_zone },
+    logo_placement: { ...base.logo_placement, ...override.logo_placement },
+    gradient_overlay: { ...base.gradient_overlay, ...override.gradient_overlay },
+  };
 }
 
 function createGradientSvg(width: number, height: number, gradient: LayoutSpec["gradient_overlay"]): Buffer {
@@ -172,13 +189,62 @@ export interface CompositingResult {
   warnings: string[];
 }
 
+// Reframe the source to width×height. With a focal point, crop the largest
+// target-aspect window centered on that point (clamped to the image bounds) so
+// the subject stays in frame; without one, fall back to the legacy centered
+// cover-crop. Deterministic — no model call.
+async function reframe(
+  rawImageBuffer: Buffer,
+  width: number,
+  height: number,
+  focalPoint: { x: number; y: number } | null,
+  warnings: string[],
+): Promise<sharp.Sharp> {
+  if (!focalPoint) {
+    return sharp(rawImageBuffer, SHARP_LIMITS).resize(width, height, { fit: "cover" });
+  }
+  try {
+    const meta = await sharp(rawImageBuffer, SHARP_LIMITS).metadata();
+    const rawW = meta.width ?? 0;
+    const rawH = meta.height ?? 0;
+    if (!rawW || !rawH) {
+      return sharp(rawImageBuffer, SHARP_LIMITS).resize(width, height, { fit: "cover" });
+    }
+
+    const targetAspect = width / height;
+    let cropW: number;
+    let cropH: number;
+    if (rawW / rawH > targetAspect) {
+      cropH = rawH;
+      cropW = Math.round(rawH * targetAspect);
+    } else {
+      cropW = rawW;
+      cropH = Math.round(rawW / targetAspect);
+    }
+    cropW = Math.min(Math.max(1, cropW), rawW);
+    cropH = Math.min(Math.max(1, cropH), rawH);
+
+    let left = Math.round(focalPoint.x * rawW - cropW / 2);
+    let top = Math.round(focalPoint.y * rawH - cropH / 2);
+    left = Math.min(Math.max(0, left), rawW - cropW);
+    top = Math.min(Math.max(0, top), rawH - cropH);
+
+    return sharp(rawImageBuffer, SHARP_LIMITS)
+      .extract({ left, top, width: cropW, height: cropH })
+      .resize(width, height);
+  } catch (err) {
+    warnings.push(`Focal reframe failed, using centered crop: ${err instanceof Error ? err.message : err}`);
+    return sharp(rawImageBuffer, SHARP_LIMITS).resize(width, height, { fit: "cover" });
+  }
+}
+
 export async function compositeImage(input: CompositingInput): Promise<CompositingResult> {
-  const { rawImageBuffer, layoutSpec, headlineText, logoBuffer, width, height, fontFamily } = input;
+  const { rawImageBuffer, layoutSpec, headlineText, logoBuffer, width, height, fontFamily, focalPoint, aspectRatio } = input;
   const warnings: string[] = [];
 
-  const resolved = resolveLayout(layoutSpec, `${width}:${height}`);
+  const resolved = resolveLayout(layoutSpec, aspectRatio ?? `${width}:${height}`);
 
-  let image = sharp(rawImageBuffer, SHARP_LIMITS).resize(width, height, { fit: "cover" });
+  let image = await reframe(rawImageBuffer, width, height, focalPoint ?? null, warnings);
 
   const overlays: sharp.OverlayOptions[] = [];
 
@@ -248,4 +314,24 @@ export async function recompositeWithNewHeadline(
     width,
     height,
   });
+}
+
+// Width/height of an encoded image (0,0 if unreadable). Used for clip prediction.
+export async function imageDimensions(buffer: Buffer): Promise<{ width: number; height: number }> {
+  const meta = await sharp(buffer, SHARP_LIMITS).metadata();
+  return { width: meta.width ?? 0, height: meta.height ?? 0 };
+}
+
+// N1 fan-out: produce a reframed RAW (no overlay) cropped to width×height around
+// the focal point. Used as the per-platform base image so downstream overlays
+// (and instant headline recomposites) operate on the already-correct aspect.
+export async function reframeImage(
+  rawImageBuffer: Buffer,
+  width: number,
+  height: number,
+  focalPoint: { x: number; y: number } | null,
+): Promise<Buffer> {
+  const warnings: string[] = [];
+  const img = await reframe(rawImageBuffer, width, height, focalPoint, warnings);
+  return img.png().toBuffer();
 }

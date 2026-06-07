@@ -20,6 +20,10 @@ import NotFound from "@/pages/not-found";
 import Terms from "@/pages/Terms";
 import Privacy from "@/pages/Privacy";
 import Feedback from "@/pages/Feedback";
+import StudioNext from "@/pages/StudioNext";
+import BrandNext from "@/pages/BrandNext";
+import CalendarNext from "@/pages/CalendarNext";
+import { FEATURES } from "@/lib/features";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -140,6 +144,27 @@ function Router() {
         <Route path="/feedback">
           <AppLayout><Feedback /></AppLayout>
         </Route>
+        {FEATURES.studioNext && (
+          <Route path="/studio-next">
+            <FirstRunGuard>
+              <AppLayout><StudioNext /></AppLayout>
+            </FirstRunGuard>
+          </Route>
+        )}
+        {FEATURES.studioNext && (
+          <Route path="/brand-next">
+            <FirstRunGuard>
+              <AppLayout><BrandNext /></AppLayout>
+            </FirstRunGuard>
+          </Route>
+        )}
+        {FEATURES.studioNext && (
+          <Route path="/calendar-next">
+            <FirstRunGuard>
+              <AppLayout><CalendarNext /></AppLayout>
+            </FirstRunGuard>
+          </Route>
+        )}
         <Route>
           <AppLayout><NotFound /></AppLayout>
         </Route>
