@@ -117,7 +117,7 @@ export default function StudioNext() {
           );
         })}
         <span className="ml-auto text-xs text-muted-foreground">
-          Studio Next · P1 spine
+          Creative Studio
         </span>
       </div>
 

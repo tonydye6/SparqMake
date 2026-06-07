@@ -7,9 +7,7 @@ import { useState, useEffect } from "react";
 
 import { AppLayout } from "@/components/layout/AppLayout";
 import { useAuth, AuthProvider } from "@/hooks/useAuth";
-import CreativeStudio from "@/pages/CreativeStudio";
 import AssetLibrary from "@/pages/AssetLibrary";
-import Calendar from "@/pages/Calendar";
 import ReviewQueue from "@/pages/ReviewQueue";
 import Settings from "@/pages/Settings";
 import CostDashboard from "@/pages/CostDashboard";
@@ -23,7 +21,6 @@ import Feedback from "@/pages/Feedback";
 import StudioNext from "@/pages/StudioNext";
 import BrandNext from "@/pages/BrandNext";
 import CalendarNext from "@/pages/CalendarNext";
-import { FEATURES } from "@/lib/features";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -120,14 +117,21 @@ function Router() {
         </Route>
         <Route path="/">
           <FirstRunGuard>
-            <AppLayout><CreativeStudio /></AppLayout>
+            <AppLayout><StudioNext /></AppLayout>
+          </FirstRunGuard>
+        </Route>
+        <Route path="/brand">
+          <FirstRunGuard>
+            <AppLayout><BrandNext /></AppLayout>
           </FirstRunGuard>
         </Route>
         <Route path="/assets">
           <AppLayout><AssetLibrary /></AppLayout>
         </Route>
         <Route path="/calendar">
-          <AppLayout><Calendar /></AppLayout>
+          <FirstRunGuard>
+            <AppLayout><CalendarNext /></AppLayout>
+          </FirstRunGuard>
         </Route>
         <Route path="/content-plan">
           <AppLayout><ContentPlan /></AppLayout>
@@ -144,27 +148,6 @@ function Router() {
         <Route path="/feedback">
           <AppLayout><Feedback /></AppLayout>
         </Route>
-        {FEATURES.studioNext && (
-          <Route path="/studio-next">
-            <FirstRunGuard>
-              <AppLayout><StudioNext /></AppLayout>
-            </FirstRunGuard>
-          </Route>
-        )}
-        {FEATURES.studioNext && (
-          <Route path="/brand-next">
-            <FirstRunGuard>
-              <AppLayout><BrandNext /></AppLayout>
-            </FirstRunGuard>
-          </Route>
-        )}
-        {FEATURES.studioNext && (
-          <Route path="/calendar-next">
-            <FirstRunGuard>
-              <AppLayout><CalendarNext /></AppLayout>
-            </FirstRunGuard>
-          </Route>
-        )}
         <Route>
           <AppLayout><NotFound /></AppLayout>
         </Route>
