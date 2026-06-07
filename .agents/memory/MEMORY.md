@@ -4,3 +4,4 @@
 - [api-zod multipart collision](api-zod-multipart-collision.md) — new multipart endpoints emit a `<Op>Body` in both api-zod generated/api and generated/types; add it to the explicit re-export in api-zod index or typecheck fails TS2308.
 - [api-server local testing](api-server-local-testing.md) — routes need an `Origin` header even with DEV_AUTH_BYPASS; curl with `Origin: http://localhost`.
 - [Drizzle migration baseline](drizzle-migration-baseline.md) — push-built DB with empty `__drizzle_migrations` makes `migrate` replay 0000 and die (heap_create_with_catalog); insert one baseline journal row at 0000's `when`, then migrate. Breaks every merge + prod deploy until fixed.
+- [Prod publish schema diff](prod-publish-schema-diff.md) — prod schema is set by Replit's publish-time diff (not our drizzle migrations); it can't do text→integer casts; compare dev vs prod data before any wholesale copy.
