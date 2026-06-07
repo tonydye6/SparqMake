@@ -284,11 +284,11 @@ export default function CreativeStudio() {
     setActivityLog(prev => [{ time, text, status }, ...prev]);
   }, []);
 
-  const updateLastLog = useCallback((status: ActivityLog["status"]) => {
+  const updateLastLog = useCallback((status: ActivityLog["status"], text?: string) => {
     setActivityLog(prev => {
       if (prev.length === 0) return prev;
       const updated = [...prev];
-      updated[0] = { ...updated[0], status };
+      updated[0] = { ...updated[0], status, ...(text ? { text } : {}) };
       return updated;
     });
   }, []);
@@ -679,7 +679,8 @@ export default function CreativeStudio() {
         } else if (status === "completed") {
           updateLastLog("done");
         } else if (status === "failed") {
-          updateLastLog("error");
+          const error = data.error as string | undefined;
+          updateLastLog("error", `${label} image failed${error ? `: ${error}` : ""}`);
         }
         break;
       }

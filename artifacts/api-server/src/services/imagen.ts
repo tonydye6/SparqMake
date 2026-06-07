@@ -88,6 +88,61 @@ export interface ImageGenerationResult {
   mimeType: string;
 }
 
+// The Gemini image model is stochastic and intermittently returns a response
+// with no image part (TEXT-only). That is a transient, retryable failure — not
+// a real error — so we re-sample a few times before giving up. Used by every
+// flow that calls generateImage (generate, regenerate, vary, takes), keeping
+// the retry behavior consistent across the app.
+const MAX_IMAGE_ATTEMPTS = 3;
+const IMAGE_RETRY_BASE_DELAY_MS = 750;
+
+// Thrown when the image model returns a response containing no image data.
+// Distinct type so callers (and the retry loop) can tell a transient empty
+// response apart from a genuine API/transport error.
+export class NoImageDataError extends Error {
+  constructor(public readonly platformKey: string, public readonly attempts: number) {
+    super(
+      `The image model returned no image for ${platformKey} after ${attempts} attempt${attempts === 1 ? "" : "s"}. ` +
+      `This is usually a transient hiccup — please retry.`,
+    );
+    this.name = "NoImageDataError";
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function requestImage(
+  contentParts: Array<{ text: string } | { inlineData: { data: string; mimeType: string } }>,
+): Promise<{ data: string; mimeType?: string } | null> {
+  const abortController = new AbortController();
+  const timeoutId = setTimeout(() => abortController.abort(), 120_000);
+  let response;
+  try {
+    response = await ai.models.generateContent({
+      model: AI_MODELS.GEMINI_FLASH_IMAGE,
+      contents: [{ role: "user", parts: contentParts }],
+      config: {
+        responseModalities: [Modality.TEXT, Modality.IMAGE],
+        abortSignal: abortController.signal,
+      },
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
+  const candidate = response.candidates?.[0];
+  const imagePart = candidate?.content?.parts?.find(
+    (part: { inlineData?: { data?: string; mimeType?: string } }) => part.inlineData
+  );
+
+  if (!imagePart?.inlineData?.data) {
+    return null;
+  }
+  return { data: imagePart.inlineData.data, mimeType: imagePart.inlineData.mimeType };
+}
+
 export async function generateImage(
   ctx: AssembledContext,
   platformKey: string,
@@ -118,37 +173,27 @@ export async function generateImage(
 
   contentParts.push({ text: fullPrompt });
 
-  const abortController = new AbortController();
-  const timeoutId = setTimeout(() => abortController.abort(), 120_000);
-  let response;
-  try {
-    response = await ai.models.generateContent({
-      model: AI_MODELS.GEMINI_FLASH_IMAGE,
-      contents: [{ role: "user", parts: contentParts }],
-      config: {
-        responseModalities: [Modality.TEXT, Modality.IMAGE],
-        abortSignal: abortController.signal,
-      },
-    });
-  } finally {
-    clearTimeout(timeoutId);
+  for (let attempt = 1; attempt <= MAX_IMAGE_ATTEMPTS; attempt++) {
+    const image = await requestImage(contentParts);
+    if (image) {
+      return {
+        platform: config.platform,
+        aspectRatio: config.aspectRatio,
+        imageBuffer: Buffer.from(image.data, "base64"),
+        mimeType: image.mimeType || "image/png",
+      };
+    }
+
+    // Empty (TEXT-only) response: retry with a short linear backoff unless we
+    // have exhausted our attempts. Transport/API errors are NOT caught here, so
+    // they propagate immediately rather than burning retries.
+    if (attempt < MAX_IMAGE_ATTEMPTS) {
+      console.warn(`Image model returned no image data for ${platformKey} (attempt ${attempt}/${MAX_IMAGE_ATTEMPTS}); retrying...`);
+      await sleep(IMAGE_RETRY_BASE_DELAY_MS * attempt);
+    }
   }
 
-  const candidate = response.candidates?.[0];
-  const imagePart = candidate?.content?.parts?.find(
-    (part: { inlineData?: { data?: string; mimeType?: string } }) => part.inlineData
-  );
-
-  if (!imagePart?.inlineData?.data) {
-    throw new Error(`No image data in response for ${platformKey}`);
-  }
-
-  return {
-    platform: config.platform,
-    aspectRatio: config.aspectRatio,
-    imageBuffer: Buffer.from(imagePart.inlineData.data, "base64"),
-    mimeType: imagePart.inlineData.mimeType || "image/png",
-  };
+  throw new NoImageDataError(platformKey, MAX_IMAGE_ATTEMPTS);
 }
 
 export async function generateAllImages(
