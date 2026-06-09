@@ -4,6 +4,7 @@ import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 import multer from "multer";
+import { Client as ObjectStorageClient } from "@replit/object-storage";
 import { validateUploadedFile, type FileCategory } from "../services/fileValidation.js";
 
 const router: IRouter = Router();
@@ -109,6 +110,33 @@ router.post("/upload", (req, res, _next) => {
   });
 });
 
+const EXT_TO_MIME: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+  ".mp4": "video/mp4",
+  ".webm": "video/webm",
+  ".mov": "video/quicktime",
+  ".woff2": "font/woff2",
+  ".ttf": "font/ttf",
+  ".mp3": "audio/mpeg",
+  ".wav": "audio/wav",
+  ".pdf": "application/pdf",
+};
+
+function setServeHeaders(filename: string, res: any): void {
+  const ext = path.extname(filename).toLowerCase();
+  const contentType = EXT_TO_MIME[ext] || "application/octet-stream";
+  res.setHeader("Content-Type", contentType);
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Cache-Control", "public, max-age=86400");
+  if (!contentType.startsWith("image/") && !contentType.startsWith("video/") && !contentType.startsWith("audio/")) {
+    res.setHeader("Content-Disposition", `attachment; filename="${path.basename(filename)}"`);
+  }
+}
+
 function serveFile(baseDir: string, filename: string, res: any): void {
   if (!filename || filename.includes("..") || filename.includes("/")) {
     res.status(400).json({ error: "Invalid filename" });
@@ -122,31 +150,55 @@ function serveFile(baseDir: string, filename: string, res: any): void {
     return;
   }
 
-  const ext = path.extname(filename).toLowerCase();
-  const mimeTypes: Record<string, string> = {
-    ".png": "image/png",
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".webp": "image/webp",
-    ".gif": "image/gif",
-    ".mp4": "video/mp4",
-    ".webm": "video/webm",
-    ".mov": "video/quicktime",
-    ".woff2": "font/woff2",
-    ".ttf": "font/ttf",
-    ".mp3": "audio/mpeg",
-    ".wav": "audio/wav",
-    ".pdf": "application/pdf",
-  };
-
-  const contentType = mimeTypes[ext] || "application/octet-stream";
-  res.setHeader("Content-Type", contentType);
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("Cache-Control", "public, max-age=86400");
-  if (!contentType.startsWith("image/") && !contentType.startsWith("video/") && !contentType.startsWith("audio/")) {
-    res.setHeader("Content-Disposition", `attachment; filename="${path.basename(filename)}"`);
-  }
+  setServeHeaders(filename, res);
   res.sendFile(filePath);
+}
+
+// Replit Object Storage (App Storage). When a bucket is provisioned, Replit
+// sets DEFAULT_OBJECT_STORAGE_BUCKET_ID and the SDK authenticates through the
+// Repl sidecar with no manual credentials. The deployment filesystem is
+// ephemeral (rebuilt on every republish), so curated asset-library media
+// lives in the bucket under "assets/<filename>". Local dev, where no bucket
+// is configured, keeps serving from uploads/assets/ on disk.
+const OBJECT_STORAGE_CONFIGURED = Boolean(process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID);
+let objectStorageClient: ObjectStorageClient | null = null;
+
+function getObjectStorageClient(): ObjectStorageClient {
+  if (!objectStorageClient) {
+    objectStorageClient = new ObjectStorageClient();
+  }
+  return objectStorageClient;
+}
+
+async function serveAssetFromBucket(filename: string, res: any): Promise<void> {
+  if (!filename || filename.includes("..") || filename.includes("/")) {
+    res.status(400).json({ error: "Invalid filename" });
+    return;
+  }
+
+  const objectName = `assets/${filename}`;
+  try {
+    const client = getObjectStorageClient();
+    const found = await client.exists(objectName);
+    if (!found.ok || !found.value) {
+      res.status(404).json({ error: "File not found" });
+      return;
+    }
+    setServeHeaders(filename, res);
+    const stream = client.downloadAsStream(objectName);
+    stream.on("error", () => {
+      if (!res.headersSent) {
+        res.status(500).json({ error: "Failed to read asset" });
+      } else {
+        res.end();
+      }
+    });
+    stream.pipe(res);
+  } catch {
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Failed to read asset" });
+    }
+  }
 }
 
 // Public router — mounted BEFORE requireAuth in app.ts.
@@ -172,10 +224,15 @@ router.get("/files/brand-assets/:filename", (req, res): void => {
   serveFile(path.join(UPLOAD_DIR, "brand-assets"), filename, res);
 });
 
-// Curated asset-library media lives in its own subdir (NOT brand-assets) so the
-// idempotent importer's reset can never delete app-uploaded brand logos.
+// Curated asset-library media lives in its own namespace (NOT brand-assets) so
+// the idempotent importer's reset can never delete app-uploaded brand logos.
+// Served from Object Storage when a bucket is configured, local disk otherwise.
 router.get("/files/assets/:filename", (req, res): void => {
   const filename = Array.isArray(req.params.filename) ? req.params.filename[0] : req.params.filename;
+  if (OBJECT_STORAGE_CONFIGURED) {
+    void serveAssetFromBucket(filename, res);
+    return;
+  }
   serveFile(path.join(UPLOAD_DIR, "assets"), filename, res);
 });
 
