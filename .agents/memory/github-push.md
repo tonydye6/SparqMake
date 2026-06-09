@@ -16,3 +16,11 @@ Both `github/main` and `github/master` have historically been ancestors of local
 print a non-fatal "cannot lock ref" error *after* the remote already updated —
 the remote push still succeeds. Clear the lock and `git update-ref` the tracking
 ref manually; confirm success via `ls-remote`, not the local error message.
+
+**Fetch-side trap (bit me once):** the same stale `.lock` files make `git fetch`
+silently *fail to update* `github/main` ("unable to update local ref"), so the
+local tracking ref stays pinned at a weeks-old commit. Every downstream check
+(merge-base, ancestry, "already up to date") is then computed against the wrong
+tip and looks nonsensical. If a push dry-run says "non-fast-forward" but local
+ancestry says it should be clean, suspect a pinned tracking ref: `rm` the stale
+`.git/refs/remotes/github/*.lock`, re-fetch, and re-verify before concluding.
