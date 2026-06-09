@@ -43,6 +43,13 @@
       "when": 1780809906150,
       "tag": "0005_rich_mephisto",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1780810906150,
+      "tag": "0006_brand_design_systems",
+      "breakpoints": true
     }
   ]
 }
