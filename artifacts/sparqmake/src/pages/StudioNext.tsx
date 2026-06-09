@@ -1,4 +1,4 @@
-import { useReducer, useEffect, useState, useCallback, useRef } from "react";
+import { useReducer, useEffect, useState, useCallback, useRef, useMemo } from "react";
 import type { Dispatch, MouseEvent } from "react";
 import { Sparkles, LayoutGrid, Wand2, RefreshCw, ArrowRight, Check, Plus, Loader2, Share2, AlertTriangle, Send } from "lucide-react";
 import { FaInstagram, FaXTwitter, FaTiktok, FaLinkedin } from "react-icons/fa6";
@@ -14,6 +14,15 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
+
+// Client-side cache-buster. When a variant's image is re-composited in place the
+// server reuses the same image *path*, so the browser keeps showing the cached
+// old bytes. Appending a bumped `?v=N` (or `&v=N` when the URL already has a
+// query) forces a re-fetch. Kept local to the card components.
+function withImageVersion(url: string, version: number): string {
+  if (version <= 0) return url;
+  return `${url}${url.includes("?") ? "&" : "?"}v=${version}`;
+}
 
 // Studio beats: the P1 spine (Home → Board → Finish) plus Fan-out (P2). Send/Brand are P3.
 type Beat = "home" | "board" | "finish" | "fanout";
@@ -35,6 +44,10 @@ interface StudioState {
   selectedConcept: Concept | null;
   // The take chosen on the Board, carried into Finish.
   selectedVariantId: string | null;
+  // Fan-out approve-selection (variant ids checked but not yet approved). Held in
+  // the reducer so it survives BeatFanout unmounting when the user navigates
+  // between beats; without this the selection is silently lost on every switch.
+  fanoutApproved: string[];
 }
 
 type StudioAction =
@@ -43,7 +56,9 @@ type StudioAction =
   | { type: "setBrief"; briefText: string }
   | { type: "selectConcept"; concept: Concept | null }
   | { type: "setCreative"; creativeId: string }
-  | { type: "selectVariant"; variantId: string };
+  | { type: "selectVariant"; variantId: string }
+  | { type: "toggleFanoutApprove"; id: string }
+  | { type: "setFanoutApproved"; ids: string[] };
 
 const initialState: StudioState = {
   beat: "home",
@@ -52,6 +67,7 @@ const initialState: StudioState = {
   briefText: "",
   selectedConcept: null,
   selectedVariantId: null,
+  fanoutApproved: [],
 };
 
 function reducer(state: StudioState, action: StudioAction): StudioState {
@@ -66,6 +82,7 @@ function reducer(state: StudioState, action: StudioAction): StudioState {
         selectedConcept: null,
         creativeId: null,
         selectedVariantId: null,
+        fanoutApproved: [],
       };
     case "setBrief":
       return { ...state, briefText: action.briefText };
@@ -75,6 +92,17 @@ function reducer(state: StudioState, action: StudioAction): StudioState {
       return { ...state, creativeId: action.creativeId };
     case "selectVariant":
       return { ...state, selectedVariantId: action.variantId };
+    case "toggleFanoutApprove": {
+      const has = state.fanoutApproved.includes(action.id);
+      return {
+        ...state,
+        fanoutApproved: has
+          ? state.fanoutApproved.filter((x) => x !== action.id)
+          : [...state.fanoutApproved, action.id],
+      };
+    }
+    case "setFanoutApproved":
+      return { ...state, fanoutApproved: action.ids };
     default:
       return state;
   }
@@ -87,6 +115,26 @@ const BEATS: { id: Beat; label: string; icon: typeof Sparkles }[] = [
   { id: "fanout", label: "Fan-out", icon: Share2 },
 ];
 
+// Which beats are reachable from the current state, mirroring the in-beat
+// advance gates. Beats unmount on switch, so jumping forward into a beat that
+// has no data discards unsaved work and lands the user on an empty screen.
+// Gating the stepper to reachable targets prevents that: Board needs a concept
+// or brief (Board self-creates the creative on entry); Finish needs a chosen
+// take; Fan-out is reachable once Finish is (Finish → Fan-out has no extra gate).
+function canReachBeat(beat: Beat, state: StudioState): boolean {
+  switch (beat) {
+    case "home":
+      return true;
+    case "board":
+      return Boolean(state.creativeId || state.selectedConcept || state.briefText.trim());
+    case "finish":
+    case "fanout":
+      return Boolean(state.creativeId && state.selectedVariantId);
+    default:
+      return false;
+  }
+}
+
 export default function StudioNext() {
   const [state, dispatch] = useReducer(reducer, initialState);
   const activeIndex = BEATS.findIndex((b) => b.id === state.beat);
@@ -98,10 +146,12 @@ export default function StudioNext() {
         {BEATS.map((b, i) => {
           const active = b.id === state.beat;
           const done = i < activeIndex;
+          const reachable = active || canReachBeat(b.id, state);
           return (
             <button
               key={b.id}
               onClick={() => dispatch({ type: "goto", beat: b.id })}
+              disabled={!reachable}
               className={cn(
                 "flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors",
                 active
@@ -109,6 +159,7 @@ export default function StudioNext() {
                   : done
                     ? "text-foreground"
                     : "text-muted-foreground hover:text-foreground",
+                !reachable && "opacity-40 cursor-not-allowed hover:text-muted-foreground",
               )}
             >
               <b.icon size={16} />
@@ -140,7 +191,7 @@ export default function StudioNext() {
         {state.beat === "finish" && (
           <BeatFinish state={state} onAdvance={() => dispatch({ type: "goto", beat: "fanout" })} />
         )}
-        {state.beat === "fanout" && <BeatFanout state={state} />}
+        {state.beat === "fanout" && <BeatFanout state={state} dispatch={dispatch} />}
       </div>
     </div>
   );
@@ -297,8 +348,16 @@ function BeatHome({
             : concepts.map((concept) => (
                 <Card
                   key={concept.id}
-                  className="p-4 flex flex-col gap-2 cursor-pointer transition-colors hover:border-primary"
+                  role="button"
+                  tabIndex={0}
+                  className="p-4 flex flex-col gap-2 cursor-pointer transition-colors hover:border-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
                   onClick={() => pickConcept(concept)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      pickConcept(concept);
+                    }
+                  }}
                   data-testid={`studio-next-concept-${concept.id}`}
                 >
                   <h3 className="font-display font-semibold text-foreground leading-snug">
@@ -605,6 +664,7 @@ function BeatFinish({ state, onAdvance }: { state: StudioState; onAdvance: () =>
   const [savingHeadline, setSavingHeadline] = useState(false);
   const [savingCaption, setSavingCaption] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
+  const [imgV, setImgV] = useState(0);
   const startedRef = useRef(false);
 
   // Load the take chosen on the Board (variants live on the server).
@@ -641,6 +701,8 @@ function BeatFinish({ state, onAdvance }: { state: StudioState; onAdvance: () =>
     try {
       const updated = await putJson(`${API_BASE}/api/creatives/${state.creativeId}/variants/${variant.id}/headline`, { headline: headline.trim() });
       setVariant(updated as BoardVariant);
+      // Headline recomposite reuses the same image path — bump to bust the cache.
+      setImgV((v) => v + 1);
       toast({ title: "Headline updated" });
     } catch (err) {
       toast({ variant: "destructive", title: "Update failed", description: err instanceof Error ? err.message : "Please try again." });
@@ -669,6 +731,7 @@ function BeatFinish({ state, onAdvance }: { state: StudioState; onAdvance: () =>
     try {
       const updated = await postJson(`${API_BASE}/api/creatives/${state.creativeId}/variants/${variant.id}/regenerate`, {});
       setVariant(updated as BoardVariant);
+      setImgV((v) => v + 1);
       toast({ title: "Regenerated" });
     } catch (err) {
       toast({ variant: "destructive", title: "Regenerate failed", description: err instanceof Error ? err.message : "Please try again." });
@@ -700,7 +763,7 @@ function BeatFinish({ state, onAdvance }: { state: StudioState; onAdvance: () =>
       <div className="space-y-2">
         <Card className="overflow-hidden p-0 bg-muted">
           {img ? (
-            <img src={img} alt="Finished composite" className="w-full aspect-square object-cover" />
+            <img src={withImageVersion(img, imgV)} alt="Finished composite" className="w-full aspect-square object-cover" />
           ) : (
             <div className="aspect-square flex items-center justify-center text-muted-foreground">No image</div>
           )}
@@ -784,12 +847,14 @@ const PLATFORM_META: Record<string, { group: string; sub?: string; Icon: IconTyp
   FANOUT_PLATFORMS.map((p) => [p.key, { group: p.group, sub: p.sub, Icon: p.Icon }]),
 );
 
-function BeatFanout({ state }: { state: StudioState }) {
+function BeatFanout({ state, dispatch }: { state: StudioState; dispatch: Dispatch<StudioAction> }) {
   const { toast } = useToast();
   const [phase, setPhase] = useState<"select" | "working" | "ready">("select");
   const [selected, setSelected] = useState<Set<string>>(() => new Set(FANOUT_PLATFORMS.map((p) => p.key)));
   const [variants, setVariants] = useState<BoardVariant[]>([]);
-  const [approveIds, setApproveIds] = useState<Set<string>>(new Set());
+  // Approve-selection lives in the reducer so it survives this beat unmounting
+  // on navigation (see StudioState.fanoutApproved).
+  const approveIds = useMemo(() => new Set(state.fanoutApproved), [state.fanoutApproved]);
   const [approving, setApproving] = useState(false);
   const startedRef = useRef(false);
 
@@ -836,6 +901,8 @@ function BeatFanout({ state }: { state: StudioState }) {
         { platforms: Array.from(selected) },
       );
       setVariants((res.variants || []) as BoardVariant[]);
+      // Fresh variant ids — drop any stale approve-selection.
+      dispatch({ type: "setFanoutApproved", ids: [] });
       setPhase("ready");
     } catch (err) {
       toast({ variant: "destructive", title: "Fan-out failed", description: err instanceof Error ? err.message : "Please try again." });
@@ -848,12 +915,7 @@ function BeatFanout({ state }: { state: StudioState }) {
   }
 
   function toggleApprove(id: string) {
-    setApproveIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+    dispatch({ type: "toggleFanoutApprove", id });
   }
 
   async function approveSelected() {
@@ -865,7 +927,7 @@ function BeatFanout({ state }: { state: StudioState }) {
         status: "approved",
       });
       setVariants((prev) => prev.map((v) => (approveIds.has(v.id) ? { ...v, status: "approved" } : v)));
-      setApproveIds(new Set());
+      dispatch({ type: "setFanoutApproved", ids: [] });
       toast({ title: "Approved", description: "Selected platform posts are approved." });
     } catch (err) {
       toast({ variant: "destructive", title: "Approve failed", description: err instanceof Error ? err.message : "Please try again." });
@@ -986,6 +1048,7 @@ function FanoutCard({
   const [scheduling, setScheduling] = useState(false);
   const [scheduled, setScheduled] = useState(false);
   const [caption, setCaption] = useState(variant.caption || "");
+  const [imgV, setImgV] = useState(0);
   const img = variant.compositedImageUrl || variant.rawImageUrl;
   const approved = variant.status === "approved";
 
@@ -999,6 +1062,7 @@ function FanoutCard({
     try {
       const updated = await putJson(`${API_BASE}/api/creatives/${creativeId}/variants/${variant.id}/refocus`, { focalX: x, focalY: y });
       onPatched(updated as BoardVariant);
+      setImgV((v) => v + 1);
     } catch (err) {
       toast({ variant: "destructive", title: "Nudge failed", description: err instanceof Error ? err.message : "Please try again." });
     } finally {
@@ -1012,6 +1076,7 @@ function FanoutCard({
     try {
       const updated = await postJson(`${API_BASE}/api/creatives/${creativeId}/variants/${variant.id}/outpaint`, {});
       onPatched(updated as BoardVariant);
+      setImgV((v) => v + 1);
     } catch (err) {
       toast({ variant: "destructive", title: "Extend background failed", description: err instanceof Error ? err.message : "Please try again." });
     } finally {
@@ -1063,7 +1128,7 @@ function FanoutCard({
         title={variant.clipWarning ? "Subject clipped — click it to recenter the crop" : "Click to recenter the crop"}
       >
         {img ? (
-          <img src={img} alt={`${meta?.group || variant.platform || "platform"} variant`} className="w-full h-full object-cover" />
+          <img src={withImageVersion(img, imgV)} alt={`${meta?.group || variant.platform || "platform"} variant`} className="w-full h-full object-cover" />
         ) : (
           <div className="w-full h-full flex items-center justify-center text-xs text-muted-foreground">No image</div>
         )}
