@@ -19,6 +19,16 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogFooter,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogCancel,
+  AlertDialogAction,
+} from "@/components/ui/alert-dialog";
 import { useForm } from "react-hook-form";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn, apiFetch } from "@/lib/utils";
@@ -71,6 +81,7 @@ export default function AssetLibrary() {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkLoading, setBulkLoading] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   
   const { data: brands } = useGetBrands();
 
@@ -252,6 +263,29 @@ export default function AssetLibrary() {
     }
   };
 
+  const bulkDelete = async () => {
+    if (selectedIds.size === 0) return;
+    const count = selectedIds.size;
+    setBulkLoading(true);
+    try {
+      const res = await apiFetch(`${API_BASE}/api/assets/bulk-delete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: Array.from(selectedIds) }),
+      });
+      if (!res.ok) throw new Error("Bulk delete failed");
+      const data = await res.json();
+      queryClient.invalidateQueries({ queryKey: ["/api/assets"] });
+      clearSelection();
+      setDeleteConfirmOpen(false);
+      toast({ title: `${data.deleted ?? count} asset(s) deleted` });
+    } catch {
+      toast({ variant: "destructive", title: "Bulk delete failed" });
+    } finally {
+      setBulkLoading(false);
+    }
+  };
+
   const bulkMode = selectedIds.size > 0;
 
   return (
@@ -327,11 +361,36 @@ export default function AssetLibrary() {
                 <Archive className="w-3.5 h-3.5 mr-1.5" /> Archive Selected
               </Button>
               <BulkTagDialog onApply={(tags) => bulkUpdate({ tags })} disabled={bulkLoading} />
+              <Button size="sm" onClick={() => setDeleteConfirmOpen(true)} disabled={bulkLoading} className="bg-destructive hover:bg-destructive/90 text-destructive-foreground">
+                <Trash2 className="w-3.5 h-3.5 mr-1.5" /> Delete Selected
+              </Button>
               <Button size="sm" variant="ghost" onClick={clearSelection} className="text-muted-foreground">
                 <X className="w-3.5 h-3.5 mr-1" /> Clear
               </Button>
             </div>
           )}
+
+          <AlertDialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Delete {selectedIds.size} asset(s)?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This permanently deletes the selected asset(s) and cannot be undone.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel disabled={bulkLoading}>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={(e) => { e.preventDefault(); bulkDelete(); }}
+                  disabled={bulkLoading}
+                  className="bg-destructive hover:bg-destructive/90 text-destructive-foreground"
+                >
+                  {bulkLoading ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Trash2 className="w-4 h-4 mr-1.5" />}
+                  Delete
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
 
           <div 
             {...getRootProps()} 

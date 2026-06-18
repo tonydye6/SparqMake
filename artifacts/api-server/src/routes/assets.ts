@@ -153,6 +153,22 @@ router.post("/assets/bulk-update", async (req, res): Promise<void> => {
   res.json({ updated: results.length, assets: results });
 });
 
+router.post("/assets/bulk-delete", async (req, res): Promise<void> => {
+  const { ids } = req.body as { ids?: string[] };
+
+  if (!ids || !Array.isArray(ids) || ids.length === 0) {
+    res.status(400).json({ error: "ids array is required and must not be empty" });
+    return;
+  }
+
+  const deleted = await db
+    .delete(assetsTable)
+    .where(inArray(assetsTable.id, ids))
+    .returning();
+
+  res.json({ deleted: deleted.length });
+});
+
 router.get("/assets/recommended", async (req, res): Promise<void> => {
   const { brandId, templateId, role } = req.query as { brandId?: string; templateId?: string; role?: string };
 
