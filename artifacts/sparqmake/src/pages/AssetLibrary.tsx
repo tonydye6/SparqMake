@@ -549,6 +549,7 @@ function VisualAssetCard({ asset, selected, onToggleSelect, bulkMode }: { asset:
   const updateMutation = useUpdateAsset();
   const deleteMutation = useDeleteAsset();
   const [editMode, setEditMode] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [formData, setFormData] = useState({ name: asset.name, description: asset.description || "", tags: asset.tags?.join(", ") || "", characterIdentityNote: asset.characterIdentityNote || "" });
   const [usageData, setUsageData] = useState<CreativeUsage[] | null>(null);
   const [usageLoading, setUsageLoading] = useState(false);
@@ -578,18 +579,17 @@ function VisualAssetCard({ asset, selected, onToggleSelect, bulkMode }: { asset:
   };
 
   const handleDelete = () => {
-    if(confirm("Are you sure you want to delete this asset?")) {
-      deleteMutation.mutate({ id: asset.id }, {
-        onSuccess: () => {
-          queryClient.invalidateQueries({ queryKey: ["/api/assets"] });
-          setIsOpen(false);
-          toast({ title: "Asset deleted" });
-        },
-        onError: () => {
-          toast({ variant: "destructive", title: "Failed to delete asset" });
-        }
-      });
-    }
+    deleteMutation.mutate({ id: asset.id }, {
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: ["/api/assets"] });
+        setDeleteConfirmOpen(false);
+        setIsOpen(false);
+        toast({ title: "Asset deleted" });
+      },
+      onError: () => {
+        toast({ variant: "destructive", title: "Failed to delete asset" });
+      }
+    });
   };
 
   const saveEdits = () => {
@@ -811,12 +811,33 @@ function VisualAssetCard({ asset, selected, onToggleSelect, bulkMode }: { asset:
                 </Button>
               )}
             </div>
-            <Button variant="outline" className="w-full text-destructive hover:bg-destructive/10 hover:text-destructive border-border" onClick={handleDelete} disabled={deleteMutation.isPending}>
+            <Button variant="outline" className="w-full text-destructive hover:bg-destructive/10 hover:text-destructive border-border" onClick={() => setDeleteConfirmOpen(true)} disabled={deleteMutation.isPending}>
               <Trash2 className="w-4 h-4 mr-2" /> Delete Asset
             </Button>
           </div>
         </SheetContent>
       </Sheet>
+      <AlertDialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this asset?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently deletes the asset and cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteMutation.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => { e.preventDefault(); handleDelete(); }}
+              disabled={deleteMutation.isPending}
+              className="bg-destructive hover:bg-destructive/90 text-destructive-foreground"
+            >
+              {deleteMutation.isPending ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Trash2 className="w-4 h-4 mr-1.5" />}
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }
