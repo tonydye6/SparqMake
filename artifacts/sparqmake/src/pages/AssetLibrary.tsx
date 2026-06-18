@@ -848,6 +848,47 @@ function BriefsTab({ briefs, brands, isLoading }: { briefs: Asset[], brands: any
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkLoading, setBulkLoading] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+
+  const toggleSelection = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const selectAll = () => setSelectedIds(new Set(briefs.map(b => b.id)));
+  const clearSelection = () => setSelectedIds(new Set());
+
+  const bulkDelete = async () => {
+    if (selectedIds.size === 0) return;
+    const count = selectedIds.size;
+    setBulkLoading(true);
+    try {
+      const res = await apiFetch(`${API_BASE}/api/assets/bulk-delete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: Array.from(selectedIds) }),
+      });
+      if (!res.ok) throw new Error("Bulk delete failed");
+      const data = await res.json();
+      queryClient.invalidateQueries({ queryKey: ["/api/assets"] });
+      clearSelection();
+      setDeleteConfirmOpen(false);
+      toast({ title: `${data.deleted ?? count} brief(s) deleted` });
+    } catch {
+      toast({ variant: "destructive", title: "Bulk delete failed" });
+    } finally {
+      setBulkLoading(false);
+    }
+  };
+
+  const bulkMode = selectedIds.size > 0;
+
   const createMutation = useCreateAsset({
     mutation: {
       onSuccess: () => {
@@ -874,6 +915,44 @@ function BriefsTab({ briefs, brands, isLoading }: { briefs: Asset[], brands: any
 
   return (
     <div className="space-y-6">
+      {bulkMode && (
+        <div className="flex items-center gap-3 bg-primary/10 border border-primary/30 rounded-xl px-4 py-3 sticky top-0 z-10 backdrop-blur-sm">
+          <span className="text-sm font-semibold text-primary">{selectedIds.size} selected</span>
+          <div className="flex-1" />
+          <Button size="sm" variant="outline" onClick={selectAll} className="border-primary/30 text-primary hover:bg-primary/20">
+            Select All
+          </Button>
+          <Button size="sm" onClick={() => setDeleteConfirmOpen(true)} disabled={bulkLoading} className="bg-destructive hover:bg-destructive/90 text-destructive-foreground">
+            <Trash2 className="w-3.5 h-3.5 mr-1.5" /> Delete Selected
+          </Button>
+          <Button size="sm" variant="ghost" onClick={clearSelection} className="text-muted-foreground">
+            <X className="w-3.5 h-3.5 mr-1" /> Clear
+          </Button>
+        </div>
+      )}
+
+      <AlertDialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {selectedIds.size} brief(s)?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently deletes the selected brief(s) and cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={bulkLoading}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => { e.preventDefault(); bulkDelete(); }}
+              disabled={bulkLoading}
+              className="bg-destructive hover:bg-destructive/90 text-destructive-foreground"
+            >
+              {bulkLoading ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Trash2 className="w-4 h-4 mr-1.5" />}
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       <div className="flex justify-end">
         <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
           <DialogTrigger asChild>
@@ -915,8 +994,24 @@ function BriefsTab({ briefs, brands, isLoading }: { briefs: Asset[], brands: any
         </div>
       ) : briefs.length > 0 ? (
         <div className="grid gap-4">
-          {briefs.map(brief => (
-            <div key={brief.id} className="bg-card border border-border rounded-xl p-4 flex flex-col md:flex-row gap-4 hover:border-primary/50 transition-colors">
+          {briefs.map(brief => {
+            const isSelected = selectedIds.has(brief.id);
+            return (
+            <div key={brief.id} className={cn(
+              "bg-card border rounded-xl p-4 flex flex-col md:flex-row gap-4 transition-colors",
+              isSelected ? "border-primary ring-1 ring-primary/50" : "border-border hover:border-primary/50"
+            )}>
+              <button
+                type="button"
+                onClick={() => toggleSelection(brief.id)}
+                className={cn(
+                  "shrink-0 self-start mt-1 transition-colors",
+                  isSelected ? "text-primary" : "text-muted-foreground/50 hover:text-primary"
+                )}
+                aria-label={isSelected ? "Deselect brief" : "Select brief"}
+              >
+                {isSelected ? <CheckSquare className="w-5 h-5" /> : <Square className="w-5 h-5" />}
+              </button>
               <div className="flex-1">
                 <div className="flex items-center gap-2 mb-2">
                   <h4 className="font-bold text-lg text-foreground">{brief.name}</h4>
@@ -935,7 +1030,8 @@ function BriefsTab({ briefs, brands, isLoading }: { briefs: Asset[], brands: any
                 <Button variant="ghost" size="sm"><Edit2 className="w-4 h-4 mr-2" /> Edit</Button>
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       ) : (
         <div className="flex flex-col items-center justify-center h-64 text-center border border-border border-dashed rounded-xl bg-card/30">
