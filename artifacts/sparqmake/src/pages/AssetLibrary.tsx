@@ -1206,6 +1206,7 @@ function IntelligenceEditor({ asset, onUpdate, isPending }: { asset: Asset; onUp
 
 function HashtagsTab({ sets, brands }: { sets: HashtagSet[], brands: any[] }) {
   const [isAddOpen, setIsAddOpen] = useState(false);
+  const [setToDelete, setSetToDelete] = useState<HashtagSet | null>(null);
   const { register, handleSubmit, reset } = useForm();
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -1226,6 +1227,7 @@ function HashtagsTab({ sets, brands }: { sets: HashtagSet[], brands: any[] }) {
       onSuccess: () => {
         queryClient.invalidateQueries({ queryKey: ["/api/hashtag-sets"] });
         toast({ title: "Deleted" });
+        setSetToDelete(null);
       }
     }
   });
@@ -1317,9 +1319,7 @@ function HashtagsTab({ sets, brands }: { sets: HashtagSet[], brands: any[] }) {
                         variant="ghost" 
                         size="icon" 
                         className="opacity-0 group-hover:opacity-100 text-destructive hover:bg-destructive/10 hover:text-destructive h-8 w-8"
-                        onClick={() => {
-                          if(confirm("Delete this set?")) deleteMutation.mutate({ id: set.id });
-                        }}
+                        onClick={() => setSetToDelete(set)}
                       >
                         <Trash2 size={14} />
                       </Button>
@@ -1336,6 +1336,30 @@ function HashtagsTab({ sets, brands }: { sets: HashtagSet[], brands: any[] }) {
           );
         })
       )}
+
+      <AlertDialog open={!!setToDelete} onOpenChange={(open) => { if(!open) setSetToDelete(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this set?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete the hashtag set{setToDelete ? ` "${setToDelete.name}"` : ""}. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteMutation.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={deleteMutation.isPending}
+              onClick={(e) => {
+                e.preventDefault();
+                if(setToDelete) deleteMutation.mutate({ id: setToDelete.id });
+              }}
+            >
+              {deleteMutation.isPending ? "Deleting..." : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
