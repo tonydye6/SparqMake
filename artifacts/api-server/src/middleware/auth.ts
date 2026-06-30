@@ -33,10 +33,27 @@ async function ensureDevUser() {
   }
 }
 
+function isDeployedEnvironment(): boolean {
+  // `REPLIT_DEPLOYMENT` is injected by the platform at deploy time and cannot be
+  // set from project env config, so it is a trustworthy production signal.
+  // `NODE_ENV` is included as a secondary signal for non-Replit/local prod runs.
+  return !!process.env.REPLIT_DEPLOYMENT || process.env.NODE_ENV === "production";
+}
+
+let prodFlagWarned = false;
+
 export function isDevBypass(): boolean {
   if (process.env.DEV_AUTH_BYPASS !== "true") return false;
-  if (process.env.NODE_ENV === "production") {
-    logger.error("DEV_AUTH_BYPASS is enabled in production — ignoring. Set DEV_AUTH_BYPASS=false or remove it.");
+  if (isDeployedEnvironment()) {
+    // Defense-in-depth: never honor the bypass in a deployed environment, even
+    // if the flag leaks in. Warn once instead of erroring per-request so a
+    // misconfiguration cannot flood the logs.
+    if (!prodFlagWarned) {
+      prodFlagWarned = true;
+      logger.warn(
+        "DEV_AUTH_BYPASS=true detected in a deployed environment — ignoring it. Authentication is NOT bypassed. Remove this flag from the production environment.",
+      );
+    }
     return false;
   }
   return true;
@@ -45,9 +62,6 @@ export function isDevBypass(): boolean {
 if (isDevBypass()) {
   logger.warn("⚠️  STARTUP WARNING: DEV_AUTH_BYPASS=true — authentication is bypassed. Do NOT deploy with this setting.");
 } else {
-  if (process.env.DEV_AUTH_BYPASS === "true") {
-    logger.error("⚠️  STARTUP WARNING: DEV_AUTH_BYPASS=true detected in production! Auth bypass is DISABLED for safety.");
-  }
   db.delete(usersTable)
     .where(eq(usersTable.id, DEV_USER.id))
     .returning()
