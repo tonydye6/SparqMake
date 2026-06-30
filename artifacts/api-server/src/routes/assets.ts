@@ -1,6 +1,6 @@
 import { str } from "../lib/http-params.js";
 import { Router, type IRouter } from "express";
-import { eq, and, ilike, or, inArray, desc, sql, arrayContains } from "drizzle-orm";
+import { eq, ne, and, ilike, or, inArray, desc, sql, arrayContains } from "drizzle-orm";
 import { db, assetsTable, creativesTable } from "@workspace/db";
 import {
   GetAssetsQueryParams,
@@ -32,7 +32,13 @@ router.get("/assets", async (req, res): Promise<void> => {
   if (query.success) {
     if (query.data.brandId) conditions.push(eq(assetsTable.brandId, query.data.brandId));
     if (query.data.type) conditions.push(eq(assetsTable.type, query.data.type));
-    if (query.data.status) conditions.push(eq(assetsTable.status, query.data.status));
+    if (query.data.status) {
+      conditions.push(eq(assetsTable.status, query.data.status));
+    } else {
+      // Archived assets are hidden by default; only returned when explicitly
+      // requested via ?status=archived.
+      conditions.push(ne(assetsTable.status, "archived"));
+    }
     if (query.data.search) {
       conditions.push(
         or(
