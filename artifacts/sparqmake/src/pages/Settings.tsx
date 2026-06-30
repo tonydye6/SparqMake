@@ -81,10 +81,20 @@ import {
   Plus, Save, Hexagon, Shield, Hash, Type, Trash2, Edit2, LayoutTemplate,
   Share2, RefreshCw, Unplug, AlertTriangle, CheckCircle, CheckCircle2, XCircle,
   BarChart3, Sparkles, History, ChevronDown, ChevronUp, Check, X as XIcon,
-  Image as ImageIcon, Layers, FileType, Upload, ArrowRight, Clock
+  Image as ImageIcon, Layers, FileType, Upload, ArrowRight, Clock, Loader2
 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogFooter,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogCancel,
+  AlertDialogAction,
+} from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -307,6 +317,7 @@ function ConnectedAccountsTab() {
   const { data: accounts, isLoading } = useGetSocialAccounts();
   const { data: brands } = useGetBrands();
   const [connectBrandId, setConnectBrandId] = useState<string>("");
+  const [disconnectAccount, setDisconnectAccount] = useState<{ id: string; accountName: string } | null>(null);
   const baseUrl = import.meta.env.VITE_API_URL || "";
 
   useEffect(() => {
@@ -451,11 +462,7 @@ function ConnectedAccountsTab() {
                       variant="ghost"
                       size="sm"
                       className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                      onClick={() => {
-                        if (confirm(`Disconnect ${account.accountName}?`)) {
-                          deleteMutation.mutate({ id: account.id });
-                        }
-                      }}
+                      onClick={() => setDisconnectAccount({ id: account.id, accountName: account.accountName })}
                       disabled={deleteMutation.isPending}
                     >
                       <Unplug className="h-4 w-4 mr-1" /> Disconnect
@@ -518,6 +525,34 @@ function ConnectedAccountsTab() {
           })}
         </div>
       </section>
+
+      <AlertDialog open={disconnectAccount !== null} onOpenChange={(open) => { if (!open) setDisconnectAccount(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Disconnect {disconnectAccount?.accountName}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently disconnects the account and cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteMutation.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                if (disconnectAccount) {
+                  deleteMutation.mutate({ id: disconnectAccount.id });
+                  setDisconnectAccount(null);
+                }
+              }}
+              disabled={deleteMutation.isPending}
+              className="bg-destructive hover:bg-destructive/90 text-destructive-foreground"
+            >
+              {deleteMutation.isPending ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Unplug className="w-4 h-4 mr-1.5" />}
+              Disconnect
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -565,6 +600,7 @@ function BrandEditor({ brand }: { brand: Brand }) {
   const { toast } = useToast();
   const { data: brandReadiness } = useBrandReadiness(brand.id);
   const [activeSection, setActiveSection] = useState("section-readiness");
+  const [deleteBrandOpen, setDeleteBrandOpen] = useState(false);
 
   useEffect(() => {
     const observers: IntersectionObserver[] = [];
@@ -743,11 +779,7 @@ function BrandEditor({ brand }: { brand: Brand }) {
                   type="button"
                   variant="destructive"
                   size="sm"
-                  onClick={() => {
-                    if(confirm("Are you sure you want to delete this brand?")) {
-                      deleteBrandMutation.mutate({ id: brand.id });
-                    }
-                  }}
+                  onClick={() => setDeleteBrandOpen(true)}
                   disabled={deleteBrandMutation.isPending}
                 >
                   <Trash2 className="h-4 w-4 mr-2" /> Delete Brand
@@ -907,6 +939,32 @@ function BrandEditor({ brand }: { brand: Brand }) {
 
         </form>
       </div>
+
+      <AlertDialog open={deleteBrandOpen} onOpenChange={setDeleteBrandOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this brand?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently deletes the brand and cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteBrandMutation.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                deleteBrandMutation.mutate({ id: brand.id });
+                setDeleteBrandOpen(false);
+              }}
+              disabled={deleteBrandMutation.isPending}
+              className="bg-destructive hover:bg-destructive/90 text-destructive-foreground"
+            >
+              {deleteBrandMutation.isPending ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Trash2 className="w-4 h-4 mr-1.5" />}
+              Delete Brand
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -1081,6 +1139,8 @@ function BrandFontManagement({ brandId }: { brandId: string }) {
   const [editingFont, setEditingFont] = useState<string | null>(null);
   const [fontNameEdit, setFontNameEdit] = useState("");
   const [fontWeightEdit, setFontWeightEdit] = useState("");
+  const [deleteFontId, setDeleteFontId] = useState<string | null>(null);
+  const [isDeletingFont, setIsDeletingFont] = useState(false);
 
   const onDrop = useCallback((files: File[]) => {
     files.forEach(file => {
@@ -1139,7 +1199,7 @@ function BrandFontManagement({ brandId }: { brandId: string }) {
   };
 
   const deleteFont = async (assetId: string) => {
-    if (!confirm("Delete this font?")) return;
+    setIsDeletingFont(true);
     try {
       const res = await apiFetch(`${apiBase}/api/assets/${assetId}`, { method: "DELETE" });
       if (res.ok) {
@@ -1148,6 +1208,9 @@ function BrandFontManagement({ brandId }: { brandId: string }) {
       }
     } catch {
       toast({ variant: "destructive", title: "Failed to delete font" });
+    } finally {
+      setIsDeletingFont(false);
+      setDeleteFontId(null);
     }
   };
 
@@ -1217,7 +1280,7 @@ function BrandFontManagement({ brandId }: { brandId: string }) {
                     <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => { setEditingFont(font.id); setFontNameEdit((font as any).fontName || font.name); setFontWeightEdit((font as any).fontWeight || "400"); }}>
                       <Edit2 size={14} />
                     </Button>
-                    <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive" onClick={() => deleteFont(font.id)}>
+                    <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive" onClick={() => setDeleteFontId(font.id)}>
                       <Trash2 size={14} />
                     </Button>
                   </div>
@@ -1229,6 +1292,28 @@ function BrandFontManagement({ brandId }: { brandId: string }) {
       ) : (
         <p className="text-sm text-muted-foreground text-center py-4">No fonts uploaded yet. Upload .woff2, .ttf, or .otf files to use in compositing.</p>
       )}
+
+      <AlertDialog open={deleteFontId !== null} onOpenChange={(open) => { if (!open) setDeleteFontId(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this font?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently deletes the font and cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeletingFont}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => { e.preventDefault(); if (deleteFontId) deleteFont(deleteFontId); }}
+              disabled={isDeletingFont}
+              className="bg-destructive hover:bg-destructive/90 text-destructive-foreground"
+            >
+              {isDeletingFont ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Trash2 className="w-4 h-4 mr-1.5" />}
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </section>
   );
 }
@@ -1268,6 +1353,7 @@ function BrandTemplates({ brandId, brandColors, brandLogoUrl }: {
 }) {
   const { data: templates } = useGetTemplates({ brandId });
   const [isAddOpen, setIsAddOpen] = useState(false);
+  const [deleteTemplateId, setDeleteTemplateId] = useState<string | null>(null);
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
@@ -1405,14 +1491,38 @@ function BrandTemplates({ brandId, brandColors, brandLogoUrl }: {
 
       <div className="space-y-4">
         {templates?.data?.map(t => (
-          <TemplateCard key={t.id} template={t} onDelete={() => {
-            if (confirm("Delete template?")) {
-              deleteTemplateMutation.mutate({ id: t.id });
-            }
-          }} />
+          <TemplateCard key={t.id} template={t} onDelete={() => setDeleteTemplateId(t.id)} />
         ))}
         {templates?.data?.length === 0 && <p className="text-sm text-muted-foreground italic">No templates configured.</p>}
       </div>
+
+      <AlertDialog open={deleteTemplateId !== null} onOpenChange={(open) => { if (!open) setDeleteTemplateId(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this template?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently deletes the template and cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteTemplateMutation.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                if (deleteTemplateId) {
+                  deleteTemplateMutation.mutate({ id: deleteTemplateId });
+                  setDeleteTemplateId(null);
+                }
+              }}
+              disabled={deleteTemplateMutation.isPending}
+              className="bg-destructive hover:bg-destructive/90 text-destructive-foreground"
+            >
+              {deleteTemplateMutation.isPending ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Trash2 className="w-4 h-4 mr-1.5" />}
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
