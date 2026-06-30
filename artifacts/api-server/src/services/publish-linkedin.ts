@@ -1,4 +1,5 @@
 import { logger } from "../lib/logger";
+import { resolveUrl, readBuffer } from "./storage.js";
 
 const LINKEDIN_API_VERSION = "202401";
 
@@ -28,12 +29,16 @@ function ensurePersonUrn(accountId: string): string {
 
 async function uploadImage(accessToken: string, authorUrn: string, imagePath: string): Promise<string | null> {
   try {
-    const fs = await import("fs");
-    const path = await import("path");
+    const filename = imagePath.split("/").pop() || imagePath;
+    const loc = resolveUrl(`/api/files/generated/${filename}`);
+    if (!loc) {
+      logger.warn({ imagePath }, "Invalid image path for LinkedIn upload");
+      return null;
+    }
 
-    const fullPath = path.resolve(imagePath);
-    if (!fs.existsSync(fullPath)) {
-      logger.warn({ imagePath: fullPath }, "Image file not found for LinkedIn upload");
+    const imageBuffer = await readBuffer(loc);
+    if (!imageBuffer) {
+      logger.warn({ imagePath }, "Image file not found for LinkedIn upload");
       return null;
     }
 
@@ -68,7 +73,6 @@ async function uploadImage(accessToken: string, authorUrn: string, imagePath: st
     const uploadUrl = initData.value.uploadUrl;
     const imageUrn = initData.value.image;
 
-    const imageBuffer = fs.readFileSync(fullPath);
     const uploadResp = await fetch(uploadUrl, {
       method: "PUT",
       headers: {

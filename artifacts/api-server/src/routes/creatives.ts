@@ -273,8 +273,9 @@ router.post("/creatives/:id/analyze-url", async (req, res): Promise<void> => {
       referenceScreenshots: screenshotUrls,
     });
 
-    const screenshotPaths = screenshots.map(s => s.filepath);
-    const analysis = await analyzeReference(screenshotPaths);
+    const analysis = await analyzeReference(
+      screenshots.map(s => ({ buffer: s.buffer, mimeType: s.mimeType })),
+    );
 
     await db.update(creativesTable)
       .set({
@@ -347,7 +348,9 @@ router.post("/creatives/:id/analyze-upload", upload.single("screenshot"), async 
       referenceScreenshots: screenshotUrls,
     });
 
-    const analysis = await analyzeReference([screenshot.filepath]);
+    const analysis = await analyzeReference([
+      { buffer: screenshot.buffer, mimeType: screenshot.mimeType },
+    ]);
 
     await db.update(creativesTable)
       .set({

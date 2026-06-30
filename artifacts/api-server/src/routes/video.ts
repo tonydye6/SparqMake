@@ -6,6 +6,7 @@ import { assembleContext, type SelectedAssetRef } from "../services/context-asse
 import { generateVideo, estimateVideoCost, VIDEO_CONFIGS } from "../services/video-generation.js";
 import { generateMusic, generateSFX, estimateElevenLabsCost } from "../services/elevenlabs.js";
 import { mergeAudioVideo, type MergeMode } from "../services/audio-merge.js";
+import { writeBuffer, writeFromFile, readBuffer } from "../services/storage.js";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
@@ -98,8 +99,6 @@ router.post("/creatives/:id/generate-video", generationLimiter, async (req: Requ
       referenceAnalysis: campaign.referenceAnalysis as Record<string, unknown> | null,
     });
 
-    ensureDir(UPLOADS_DIR);
-
     for (const orientation of selectedOrientations) {
       if (clientDisconnected) break;
 
@@ -125,9 +124,9 @@ router.post("/creatives/:id/generate-video", generationLimiter, async (req: Requ
         const matchingVariant = existingVariants.find(v => v.platform === platform);
 
         try {
-          fs.copyFileSync(videoTmpPath, path.join(UPLOADS_DIR, videoFilename));
+          await writeFromFile("generated", videoFilename, videoTmpPath);
         } catch (copyErr) {
-          console.error(`Video file copy failed for ${orientation}:`, copyErr instanceof Error ? copyErr.message : copyErr);
+          console.error(`Video file save failed for ${orientation}:`, copyErr instanceof Error ? copyErr.message : copyErr);
           fs.rmSync(videoTmpDir, { recursive: true, force: true });
           videoTmpDir = null;
           throw new Error(`Failed to save video file for ${orientation}. Please try again.`);
@@ -233,13 +232,10 @@ router.post("/creatives/:id/variants/:variantId/audio", generationLimiter, async
       audioSource = "mute";
     }
 
-    ensureDir(UPLOADS_DIR);
-
     let audioUrl: string | null = null;
     if (audioBuffer) {
       const audioFilename = `${creativeId}_${variantId}_audio_${Date.now()}.mp3`;
-      const audioPath = path.join(UPLOADS_DIR, audioFilename);
-      fs.writeFileSync(audioPath, audioBuffer);
+      await writeBuffer("generated", audioFilename, audioBuffer);
       audioUrl = `/api/files/generated/${audioFilename}`;
 
       await db.insert(costLogsTable).values({
@@ -252,14 +248,13 @@ router.post("/creatives/:id/variants/:variantId/audio", generationLimiter, async
     }
 
     const videoFilename = variant.videoUrl.replace("/api/files/generated/", "");
-    const videoPath = path.join(UPLOADS_DIR, videoFilename);
+    const videoBuffer = await readBuffer({ namespace: "generated", filename: videoFilename });
 
-    if (!fs.existsSync(videoPath)) {
+    if (!videoBuffer) {
       res.status(400).json({ error: "Video file not found" });
       return;
     }
 
-    const videoBuffer = fs.readFileSync(videoPath);
     const mergeMode: MergeMode = type === "mute" ? "mute" : (mode || "replace") as MergeMode;
 
     const mergedBuffer = await mergeAudioVideo({
@@ -271,8 +266,7 @@ router.post("/creatives/:id/variants/:variantId/audio", generationLimiter, async
     });
 
     const mergedFilename = `${creativeId}_${variantId}_merged_${Date.now()}.mp4`;
-    const mergedPath = path.join(UPLOADS_DIR, mergedFilename);
-    fs.writeFileSync(mergedPath, mergedBuffer);
+    await writeBuffer("generated", mergedFilename, mergedBuffer);
     const mergedVideoUrl = `/api/files/generated/${mergedFilename}`;
 
     const [updated] = await db.update(creativeVariantsTable)
@@ -325,22 +319,17 @@ router.post("/creatives/:id/variants/:variantId/audio-upload", generationLimiter
   }
 
   try {
-    ensureDir(UPLOADS_DIR);
-
     const audioFilename = `${creativeId}_${variantId}_custom_${Date.now()}.mp3`;
-    const audioPath = path.join(UPLOADS_DIR, audioFilename);
-    fs.writeFileSync(audioPath, req.file.buffer);
+    await writeBuffer("generated", audioFilename, req.file.buffer);
     const audioUrl = `/api/files/generated/${audioFilename}`;
 
     const videoFilename = variant.videoUrl.replace("/api/files/generated/", "");
-    const videoPath = path.join(UPLOADS_DIR, videoFilename);
+    const videoBuffer = await readBuffer({ namespace: "generated", filename: videoFilename });
 
-    if (!fs.existsSync(videoPath)) {
+    if (!videoBuffer) {
       res.status(400).json({ error: "Video file not found" });
       return;
     }
-
-    const videoBuffer = fs.readFileSync(videoPath);
 
     const mergedBuffer = await mergeAudioVideo({
       videoBuffer,
@@ -349,8 +338,7 @@ router.post("/creatives/:id/variants/:variantId/audio-upload", generationLimiter
     });
 
     const mergedFilename = `${creativeId}_${variantId}_merged_${Date.now()}.mp4`;
-    const mergedPath = path.join(UPLOADS_DIR, mergedFilename);
-    fs.writeFileSync(mergedPath, mergedBuffer);
+    await writeBuffer("generated", mergedFilename, mergedBuffer);
     const mergedVideoUrl = `/api/files/generated/${mergedFilename}`;
 
     const [updated] = await db.update(creativeVariantsTable)

@@ -1,8 +1,6 @@
-import * as fs from "fs";
 import * as path from "path";
 import * as net from "net";
-
-const UPLOADS_DIR = path.resolve(process.cwd(), "uploads", "generated");
+import { writeBuffer, contentTypeFor } from "./storage.js";
 
 const BLOCKED_HOSTNAMES = [
   "localhost",
@@ -91,17 +89,12 @@ export function validateUrl(url: string): void {
   }
 }
 
-function ensureDir(dir: string) {
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-}
-
 export interface ScreenshotResult {
   filename: string;
-  filepath: string;
   url: string;
   viewport: string;
+  buffer: Buffer;
+  mimeType: string;
 }
 
 export async function captureScreenshots(
@@ -112,8 +105,6 @@ export async function captureScreenshots(
   if (!apiKey) {
     throw new Error("ScreenshotOne API key not configured (SparqMake_ScreenshotOne_API_Key)");
   }
-
-  ensureDir(UPLOADS_DIR);
 
   const viewports = [
     { width: 1440, height: 900, label: "desktop" },
@@ -150,15 +141,15 @@ export async function captureScreenshots(
 
     const timestamp = Date.now();
     const filename = `ref-${creativeId}-${vp.label}-${timestamp}.png`;
-    const filepath = path.join(UPLOADS_DIR, filename);
 
-    fs.writeFileSync(filepath, buffer);
+    await writeBuffer("generated", filename, buffer);
 
     results.push({
       filename,
-      filepath,
       url: `/api/files/generated/${filename}`,
       viewport: vp.label,
+      buffer,
+      mimeType: "image/png",
     });
   }
 
@@ -170,19 +161,17 @@ export async function captureFromUpload(
   creativeId: string,
   originalName: string,
 ): Promise<ScreenshotResult> {
-  ensureDir(UPLOADS_DIR);
-
   const ext = path.extname(originalName) || ".png";
   const timestamp = Date.now();
   const filename = `ref-${creativeId}-upload-${timestamp}${ext}`;
-  const filepath = path.join(UPLOADS_DIR, filename);
 
-  fs.writeFileSync(filepath, fileBuffer);
+  await writeBuffer("generated", filename, fileBuffer);
 
   return {
     filename,
-    filepath,
     url: `/api/files/generated/${filename}`,
     viewport: "upload",
+    buffer: fileBuffer,
+    mimeType: contentTypeFor(filename),
   };
 }

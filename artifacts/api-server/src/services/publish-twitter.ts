@@ -1,6 +1,7 @@
 import OAuth from "oauth-1.0a";
 import crypto from "crypto";
 import { logger } from "../lib/logger";
+import { resolveUrl, readBuffer } from "./storage.js";
 
 interface PublishTwitterOptions {
   accessToken: string;
@@ -61,18 +62,21 @@ function createOAuth1Header(
 
 async function uploadMedia(accessToken: string, imagePath: string): Promise<string | null> {
   try {
-    const fs = await import("fs");
-    const path = await import("path");
-
-    const fullPath = path.resolve(imagePath);
-    if (!fs.existsSync(fullPath)) {
-      logger.warn({ imagePath: fullPath }, "Image file not found for Twitter upload");
+    const filename = imagePath.split("/").pop() || imagePath;
+    const loc = resolveUrl(`/api/files/generated/${filename}`);
+    if (!loc) {
+      logger.warn({ imagePath }, "Invalid image path for Twitter upload");
       return null;
     }
 
-    const imageBuffer = fs.readFileSync(fullPath);
+    const imageBuffer = await readBuffer(loc);
+    if (!imageBuffer) {
+      logger.warn({ imagePath }, "Image file not found for Twitter upload");
+      return null;
+    }
+
     const base64 = imageBuffer.toString("base64");
-    const mimeType = fullPath.endsWith(".png") ? "image/png" : "image/jpeg";
+    const mimeType = filename.endsWith(".png") ? "image/png" : "image/jpeg";
 
     const oauth1Creds = getOAuth1Credentials();
     if (!oauth1Creds) {

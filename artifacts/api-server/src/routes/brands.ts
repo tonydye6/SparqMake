@@ -19,11 +19,13 @@ import { z } from "zod";
 import multer from "multer";
 import * as fs from "fs";
 import * as path from "path";
+import * as os from "os";
 import { validateUploadedFile, validateFontFileBytes } from "../services/fileValidation.js";
+import { writeFromFile, deleteObject, resolveUrl } from "../services/storage.js";
 
 const router: IRouter = Router();
 
-const UPLOADS_DIR = path.resolve(process.cwd(), "uploads");
+const TMP_DIR = path.join(os.tmpdir(), "sparqmake-brand-uploads");
 
 function ensureDir(dir: string) {
   if (!fs.existsSync(dir)) {
@@ -34,9 +36,8 @@ function ensureDir(dir: string) {
 const upload = multer({
   storage: multer.diskStorage({
     destination: (_req, _file, cb) => {
-      const dir = path.join(UPLOADS_DIR, "brand-assets");
-      ensureDir(dir);
-      cb(null, dir);
+      ensureDir(TMP_DIR);
+      cb(null, TMP_DIR);
     },
     filename: (_req, file, cb) => {
       const ext = path.extname(file.originalname);
@@ -149,6 +150,9 @@ router.post("/brands/:id/logos", upload.single("file"), async (req, res): Promis
     return;
   }
 
+  await writeFromFile("brand-assets", file.filename, file.path);
+  try { fs.unlinkSync(file.path); } catch { /* ignore */ }
+
   const role = req.body.role || "primary";
   const name = req.body.name || `${brand.name} Logo (${role})`;
   const fileUrl = `/api/files/brand-assets/${file.filename}`;
@@ -204,6 +208,12 @@ router.delete("/brands/:id/logos/:assetId", async (req, res): Promise<void> => {
   }
 
   await db.delete(assetsTable).where(eq(assetsTable.id, assetId));
+
+  const loc = resolveUrl(asset.fileUrl);
+  if (loc) {
+    try { await deleteObject(loc); } catch { /* ignore */ }
+  }
+
   res.json({ message: "Logo deleted" });
 });
 
@@ -248,6 +258,9 @@ router.post("/brands/:id/fonts", upload.single("file"), async (req, res): Promis
     res.status(400).json({ error: fontValidation.error });
     return;
   }
+
+  await writeFromFile("brand-assets", file.filename, file.path);
+  try { fs.unlinkSync(file.path); } catch { /* ignore */ }
 
   const name = req.body.name || path.basename(file.originalname, ext);
   const weight = req.body.weight || "400";
@@ -309,6 +322,11 @@ router.delete("/brands/:id/fonts/:assetId", async (req, res): Promise<void> => {
   }
 
   await db.delete(assetsTable).where(eq(assetsTable.id, assetId));
+
+  const loc = resolveUrl(asset.fileUrl);
+  if (loc) {
+    try { await deleteObject(loc); } catch { /* ignore */ }
+  }
 
   const [brand] = await db.select().from(brandsTable).where(eq(brandsTable.id, brandId));
   if (brand?.brandFonts) {

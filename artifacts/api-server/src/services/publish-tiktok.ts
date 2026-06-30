@@ -1,4 +1,5 @@
 import { logger } from "../lib/logger";
+import { resolveUrl, readBuffer } from "./storage.js";
 
 interface PublishTikTokOptions {
   accessToken: string;
@@ -182,9 +183,6 @@ export async function publishToTikTok(options: PublishTikTokOptions): Promise<Pu
   const { accessToken, caption, imagePath, videoPath, postType } = options;
 
   try {
-    const fs = await import("fs");
-    const path = await import("path");
-
     const mediaPath = videoPath || imagePath;
     const isVideo = postType === "video" || (videoPath && !imagePath) ||
       (mediaPath && /\.(mp4|mov|avi|webm)$/i.test(mediaPath));
@@ -193,14 +191,18 @@ export async function publishToTikTok(options: PublishTikTokOptions): Promise<Pu
       return { success: false, error: "TikTok requires a media file (video or image)", httpStatus: 400 };
     }
 
-    const fullPath = path.resolve(mediaPath);
-    if (!fs.existsSync(fullPath)) {
-      logger.warn({ mediaPath: fullPath }, "Media file not found for TikTok upload");
-      return { success: false, error: `Media file not found: ${mediaPath}`, httpStatus: 400 };
+    const filename = mediaPath.split("/").pop() || mediaPath;
+    const loc = resolveUrl(`/api/files/generated/${filename}`);
+    if (!loc) {
+      return { success: false, error: `Invalid media path: ${mediaPath}`, httpStatus: 400 };
     }
 
     if (isVideo) {
-      const fileBuffer = fs.readFileSync(fullPath);
+      const fileBuffer = await readBuffer(loc);
+      if (!fileBuffer) {
+        logger.warn({ mediaPath }, "Media file not found for TikTok upload");
+        return { success: false, error: `Media file not found: ${mediaPath}`, httpStatus: 400 };
+      }
       const initResult = await initVideoUpload(accessToken, fileBuffer.length, caption);
 
       if ("error" in initResult) {
@@ -237,12 +239,17 @@ export async function publishToTikTok(options: PublishTikTokOptions): Promise<Pu
       logger.warn({ publishId: initResult.publishId }, "TikTok video publish status unknown after polling timeout");
       return { success: false, error: "TikTok publish timed out waiting for confirmation", httpStatus: 504 };
     } else {
+      const photoBuffer = await readBuffer(loc);
+      if (!photoBuffer) {
+        logger.warn({ mediaPath }, "Media file not found for TikTok upload");
+        return { success: false, error: `Media file not found: ${mediaPath}`, httpStatus: 400 };
+      }
+
       const appUrl = process.env.APP_URL;
       const devDomain = process.env.REPLIT_DEV_DOMAIN;
       const domains = process.env.REPLIT_DOMAINS;
       let publicUrl: string;
 
-      const filename = path.basename(fullPath);
       const apiFilePath = `/api/files/generated/${filename}`;
 
       if (appUrl) {

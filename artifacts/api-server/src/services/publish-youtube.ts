@@ -1,4 +1,5 @@
 import { logger } from "../lib/logger";
+import { resolveUrl, readBuffer } from "./storage.js";
 
 interface PublishYouTubeOptions {
   accessToken: string;
@@ -54,19 +55,22 @@ export async function publishToYouTube(options: PublishYouTubeOptions): Promise<
   const { accessToken, title, description, tags, videoPath, publishAt } = options;
 
   try {
-    const fs = await import("fs");
-    const path = await import("path");
+    const filename = videoPath.split("/").pop() || videoPath;
+    const loc = resolveUrl(`/api/files/generated/${filename}`);
+    if (!loc) {
+      return { success: false, error: "Invalid video path" };
+    }
 
-    const fullPath = path.resolve(videoPath);
-    if (!fs.existsSync(fullPath)) {
-      logger.error({ videoPath: fullPath }, "Video file not found for YouTube upload");
+    const videoBuffer = await readBuffer(loc);
+    if (!videoBuffer) {
+      logger.error({ videoPath }, "Video file not found for YouTube upload");
       return { success: false, error: "Video file not found" };
     }
 
-    const stat = fs.statSync(fullPath);
-    const fileSize = stat.size;
+    const fileSize = videoBuffer.length;
 
-    const ext = path.extname(fullPath).toLowerCase();
+    const dotIdx = filename.lastIndexOf(".");
+    const ext = dotIdx >= 0 ? filename.slice(dotIdx).toLowerCase() : "";
     const mimeMap: Record<string, string> = {
       ".mp4": "video/mp4",
       ".mov": "video/quicktime",
@@ -122,8 +126,6 @@ export async function publishToYouTube(options: PublishYouTubeOptions): Promise<
     if (!uploadUrl) {
       return { success: false, error: "YouTube did not return a resumable upload URL" };
     }
-
-    const videoBuffer = fs.readFileSync(fullPath);
 
     const uploadResponse = await fetch(uploadUrl, {
       method: "PUT",

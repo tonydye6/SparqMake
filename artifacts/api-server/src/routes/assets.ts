@@ -16,6 +16,17 @@ import {
 } from "@workspace/api-zod";
 import { backfillAssetClassifications } from "../services/backfill-assets.js";
 import { validateRequest } from "../middleware/validate.js";
+import { deleteObject, resolveUrl } from "../services/storage.js";
+
+/** Soft-delete the storage objects backing an asset row (fileUrl + thumbnailUrl). */
+async function deleteAssetObjects(rows: { fileUrl: string | null; thumbnailUrl: string | null }[]): Promise<void> {
+  for (const row of rows) {
+    for (const url of [row.fileUrl, row.thumbnailUrl]) {
+      const loc = resolveUrl(url);
+      if (loc) await deleteObject(loc);
+    }
+  }
+}
 
 interface AuthenticatedUser {
   id: string;
@@ -172,6 +183,8 @@ router.post("/assets/bulk-delete", async (req, res): Promise<void> => {
     .where(inArray(assetsTable.id, ids))
     .returning();
 
+  await deleteAssetObjects(deleted);
+
   res.json({ deleted: deleted.length });
 });
 
@@ -325,6 +338,8 @@ router.delete("/assets/:id", validateRequest({ params: DeleteAssetParams }), asy
     res.status(404).json({ error: "Asset not found" });
     return;
   }
+
+  await deleteAssetObjects([asset]);
 
   res.json(DeleteAssetResponse.parse({ message: "Asset deleted" }));
 });

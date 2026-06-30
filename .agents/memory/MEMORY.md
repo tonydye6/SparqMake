@@ -6,3 +6,5 @@
 - [api-server local testing](api-server-local-testing.md) — routes need an `Origin` header even with DEV_AUTH_BYPASS; curl with `Origin: http://localhost`.
 - [Drizzle migration baseline](drizzle-migration-baseline.md) — push-built DB with empty `__drizzle_migrations` makes `migrate` replay 0000 and die (heap_create_with_catalog); insert one baseline journal row at 0000's `when`, then migrate. Breaks every merge + prod deploy until fixed.
 - [Prod publish schema diff](prod-publish-schema-diff.md) — prod schema is set by Replit's publish-time diff (not our drizzle migrations); it can't do text→integer casts; compare dev vs prod data before any wholesale copy.
+- [api-server storage tests + ownership](api-server-storage-tests.md) — chdir-before-import for disk-backend vitest; file ownership is reference-based (no user→brand tenant model).
+- [Object Storage cleanup & aging](object-storage-cleanup.md) — `@replit/object-storage` StorageObject has no timestamp; bucket objects cannot be age-gated, so cleanup/sweep use disk mtime + opt-in + trash recovery.

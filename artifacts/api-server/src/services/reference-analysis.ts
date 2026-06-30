@@ -1,5 +1,4 @@
 import { ai } from "@workspace/integrations-gemini-ai";
-import * as fs from "fs";
 import { AI_MODELS } from "../lib/ai-config.js";
 
 export interface ReferenceAnalysisResult {
@@ -13,48 +12,33 @@ export interface ReferenceAnalysisResult {
   sparq_application: string;
 }
 
-function getMimeType(filepath: string): string {
-  const ext = filepath.toLowerCase().split(".").pop();
-  switch (ext) {
-    case "jpg":
-    case "jpeg":
-      return "image/jpeg";
-    case "webp":
-      return "image/webp";
-    case "gif":
-      return "image/gif";
-    default:
-      return "image/png";
-  }
-}
-
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
 
+export interface ReferenceImageInput {
+  buffer: Buffer;
+  mimeType: string;
+}
+
 export async function analyzeReference(
-  screenshotPaths: string[],
+  images: ReferenceImageInput[],
 ): Promise<ReferenceAnalysisResult> {
-  const imageParts = screenshotPaths
-    .filter((p) => {
-      if (!fs.existsSync(p)) return false;
-      const stats = fs.statSync(p);
-      if (stats.size > MAX_FILE_SIZE_BYTES) {
-        console.warn(`Skipping reference file ${p}: size ${(stats.size / 1024 / 1024).toFixed(1)}MB exceeds 10MB limit`);
+  const imageParts = images
+    .filter((img) => {
+      if (img.buffer.length > MAX_FILE_SIZE_BYTES) {
+        console.warn(`Skipping reference image: size ${(img.buffer.length / 1024 / 1024).toFixed(1)}MB exceeds 10MB limit`);
         return false;
       }
       return true;
     })
-    .map((p) => {
-      const data = fs.readFileSync(p);
-      return {
-        inlineData: {
-          data: data.toString("base64"),
-          mimeType: getMimeType(p),
-        },
-      };
-    });
+    .map((img) => ({
+      inlineData: {
+        data: img.buffer.toString("base64"),
+        mimeType: img.mimeType,
+      },
+    }));
 
   if (imageParts.length === 0) {
-    throw new Error("No valid screenshot files found for analysis");
+    throw new Error("No valid screenshot images found for analysis");
   }
 
   const prompt = `You are a visual design and brand strategy analyst for a sports marketing platform called Sparq.

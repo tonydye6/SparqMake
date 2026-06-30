@@ -3,17 +3,21 @@ import { Router, type IRouter, type Request, type Response } from "express";
 import { eq } from "drizzle-orm";
 import { db, creativesTable, creativeVariantsTable, brandsTable, templatesTable } from "@workspace/db";
 import archiver from "archiver";
-import * as fs from "fs";
 import * as path from "path";
 import { z } from "zod";
 import { validateRequest } from "../middleware/validate.js";
+import { resolveUrl, readBuffer } from "../services/storage.js";
 
 const DownloadParams = z.object({ id: z.string().uuid() });
 const VariantDownloadParams = z.object({ id: z.string().uuid(), variantId: z.string().uuid() });
 
 const router: IRouter = Router();
 
-const UPLOADS_DIR = path.resolve(process.cwd(), "uploads", "generated");
+async function readByUrl(fileUrl: string): Promise<Buffer | null> {
+  const loc = resolveUrl(fileUrl);
+  if (!loc) return null;
+  return readBuffer(loc);
+}
 
 router.get("/creatives/:id/download", validateRequest({ params: DownloadParams }), async (req: Request, res: Response): Promise<void> => {
   const creativeId = str(req.params.id);
@@ -50,7 +54,7 @@ router.get("/creatives/:id/download", validateRequest({ params: DownloadParams }
   res.setHeader("Content-Disposition", `attachment; filename="${zipName}.zip"`);
 
   const archive = archiver("zip", { zlib: { level: 6 } });
-  archive.on("error", (err) => {
+  archive.on("error", () => {
     if (!res.headersSent) {
       res.status(500).json({ error: "Failed to create ZIP archive" });
     } else {
@@ -59,35 +63,26 @@ router.get("/creatives/:id/download", validateRequest({ params: DownloadParams }
   });
   archive.pipe(res);
 
-  const MAX_ARCHIVE_BYTES = 500 * 1024 * 1024;
-  let archiveSize = 0;
-
-  function safeResolvePath(baseDir: string, userFilename: string): string | null {
-    const resolved = path.resolve(baseDir, userFilename);
-    if (!resolved.startsWith(baseDir + path.sep) && resolved !== baseDir) return null;
-    return resolved;
-  }
-
   for (const variant of variants) {
     const platformDir = variant.platform.replace(/_/g, "_");
 
     if (variant.compositedImageUrl) {
       const filename = variant.compositedImageUrl.replace("/api/files/generated/", "");
-      const filePath = safeResolvePath(UPLOADS_DIR, filename);
-      if (filePath && fs.existsSync(filePath)) {
+      const buffer = await readByUrl(variant.compositedImageUrl);
+      if (buffer) {
         const ext = path.extname(filename) || ".png";
         const ratioStr = variant.aspectRatio.replace(":", "x");
-        archive.file(filePath, { name: `${zipName}/${platformDir}/final_${ratioStr}${ext}` });
+        archive.append(buffer, { name: `${zipName}/${platformDir}/final_${ratioStr}${ext}` });
       }
     }
 
     if (variant.rawImageUrl) {
       const filename = variant.rawImageUrl.replace("/api/files/generated/", "");
-      const filePath = safeResolvePath(UPLOADS_DIR, filename);
-      if (filePath && fs.existsSync(filePath)) {
+      const buffer = await readByUrl(variant.rawImageUrl);
+      if (buffer) {
         const ext = path.extname(filename) || ".png";
         const ratioStr = variant.aspectRatio.replace(":", "x");
-        archive.file(filePath, { name: `${zipName}/${platformDir}/raw_${ratioStr}${ext}` });
+        archive.append(buffer, { name: `${zipName}/${platformDir}/raw_${ratioStr}${ext}` });
       }
     }
 
@@ -110,20 +105,18 @@ router.get("/creatives/:id/download", validateRequest({ params: DownloadParams }
     for (const variant of videoVariants) {
       const videoFileUrl = variant.mergedVideoUrl || variant.videoUrl;
       if (videoFileUrl) {
-        const filename = videoFileUrl.replace("/api/files/generated/", "");
-        const filePath = safeResolvePath(UPLOADS_DIR, filename);
-        if (filePath && fs.existsSync(filePath)) {
+        const buffer = await readByUrl(videoFileUrl);
+        if (buffer) {
           const safeplatform = variant.platform.replace(/[^a-zA-Z0-9_-]/g, "_");
-          archive.file(filePath, { name: `${zipName}/video/${safeplatform}_${variant.aspectRatio.replace(":", "x")}.mp4` });
+          archive.append(buffer, { name: `${zipName}/video/${safeplatform}_${variant.aspectRatio.replace(":", "x")}.mp4` });
         }
       }
 
       if (variant.audioUrl) {
-        const audioFilename = variant.audioUrl.replace("/api/files/generated/", "");
-        const audioPath = safeResolvePath(UPLOADS_DIR, audioFilename);
-        if (audioPath && fs.existsSync(audioPath)) {
+        const buffer = await readByUrl(variant.audioUrl);
+        if (buffer) {
           const safeplatform2 = variant.platform.replace(/[^a-zA-Z0-9_-]/g, "_");
-          archive.file(audioPath, { name: `${zipName}/video/${safeplatform2}_${variant.aspectRatio.replace(":", "x")}_audio.mp3` });
+          archive.append(buffer, { name: `${zipName}/video/${safeplatform2}_${variant.aspectRatio.replace(":", "x")}_audio.mp3` });
         }
       }
     }
@@ -172,13 +165,8 @@ router.get("/creatives/:id/variants/:variantId/download", validateRequest({ para
     return;
   }
 
-  const filename = fileUrl.replace("/api/files/generated/", "");
-  const filePath = path.resolve(UPLOADS_DIR, filename);
-  if (!filePath.startsWith(UPLOADS_DIR + path.sep) && filePath !== UPLOADS_DIR) {
-    res.status(400).json({ error: "Invalid file path" });
-    return;
-  }
-  if (!fs.existsSync(filePath)) {
+  const buffer = await readByUrl(fileUrl);
+  if (!buffer) {
     res.status(404).json({ error: "File not found" });
     return;
   }
@@ -188,7 +176,7 @@ router.get("/creatives/:id/variants/:variantId/download", validateRequest({ para
   const ext = isVideo ? ".mp4" : ".png";
   res.setHeader("Content-Type", mimeType);
   res.setHeader("Content-Disposition", `attachment; filename="${variant.platform}_${variant.aspectRatio.replace(":", "x")}${ext}"`);
-  fs.createReadStream(filePath).pipe(res);
+  res.send(buffer);
 });
 
 export default router;

@@ -11,6 +11,7 @@ import { compositeImage, reframeImage, imageDimensions, type LayoutSpec } from "
 import { detectSubject, predictClip, type SubjectBox } from "../services/focal-point.js";
 import { checkBrandReadiness } from "../lib/brand-readiness.js";
 import { buildGenerationPacket } from "../services/packet-assembly.js";
+import { writeBuffer, writeFromFile, readBuffer, deleteObject, resolveUrl } from "../services/storage.js";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
@@ -56,13 +57,15 @@ function ensureDir(dir: string) {
   }
 }
 
-function resolveLocalFilePath(fileUrl: string): string | null {
-  if (!fileUrl || fileUrl.startsWith("http")) return null;
-  const resolved = path.resolve(process.cwd(), fileUrl.replace(/^\/api\/files\//, "uploads/"));
-  const uploadsRoot = path.resolve(process.cwd(), "uploads");
-  const prefix = uploadsRoot.endsWith(path.sep) ? uploadsRoot : uploadsRoot + path.sep;
-  if (resolved !== uploadsRoot && !resolved.startsWith(prefix)) return null;
-  return resolved;
+/** Read a stored file's bytes by its public "/api/files/..." URL (any backend). */
+async function readFileByUrl(fileUrl: string | null | undefined): Promise<Buffer | null> {
+  const loc = resolveUrl(fileUrl);
+  return loc ? readBuffer(loc) : null;
+}
+
+/** Soft-delete a generated artifact by filename (used to clean up after failures). */
+async function deleteGenerated(filename: string): Promise<void> {
+  await deleteObject({ namespace: "generated", filename });
 }
 
 async function fetchLogoBuffer(brandId: string): Promise<Buffer | null> {
@@ -83,19 +86,15 @@ async function fetchLogoBuffer(brandId: string): Promise<Buffer | null> {
       });
 
     if (logoAsset?.fileUrl) {
-      const logoPath = resolveLocalFilePath(logoAsset.fileUrl);
-      if (logoPath && fs.existsSync(logoPath)) {
-        return fs.readFileSync(logoPath);
-      }
+      const buf = await readFileByUrl(logoAsset.fileUrl);
+      if (buf) return buf;
     }
 
     const [brand] = await db.select().from(brandsTable)
       .where(eq(brandsTable.id, brandId));
     if (brand?.logoFileUrl) {
-      const logoPath = resolveLocalFilePath(brand.logoFileUrl);
-      if (logoPath && fs.existsSync(logoPath)) {
-        return fs.readFileSync(logoPath);
-      }
+      const buf = await readFileByUrl(brand.logoFileUrl);
+      if (buf) return buf;
     }
   } catch (err) {
     logger.error({ err, brandId }, "Failed to fetch logo buffer");
@@ -123,11 +122,7 @@ async function buildReferenceImages(packet: Awaited<ReturnType<typeof buildGener
     if (!entry.asset.fileUrl) continue;
 
     try {
-      let buffer: Buffer | null = null;
-      const localPath = resolveLocalFilePath(entry.asset.fileUrl);
-      if (localPath && fs.existsSync(localPath)) {
-        buffer = fs.readFileSync(localPath);
-      }
+      const buffer: Buffer | null = await readFileByUrl(entry.asset.fileUrl);
 
       if (buffer) {
         refs.push({
@@ -347,10 +342,8 @@ router.post("/creatives/:id/generate", generationLimiter, async (req: Request, r
       sendEvent("progress", { step: "compositing", message: "Brand logo loaded for compositing" });
     }
 
-    ensureDir(UPLOADS_DIR);
-
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `sparqmake-gen-${creativeId}-`));
-    const stagedFiles: Array<{ tmpPath: string; finalPath: string }> = [];
+    const stagedFiles: Array<{ tmpPath: string; filename: string }> = [];
 
     const variantRecords: (typeof creativeVariantsTable.$inferInsert)[] = [];
 
@@ -362,7 +355,7 @@ router.post("/creatives/:id/generate", generationLimiter, async (req: Request, r
       const rawFilename = `${creativeId}_${img.platform}_raw.png`;
       const rawTmpPath = path.join(tmpDir, rawFilename);
       fs.writeFileSync(rawTmpPath, img.imageBuffer);
-      stagedFiles.push({ tmpPath: rawTmpPath, finalPath: path.join(UPLOADS_DIR, rawFilename) });
+      stagedFiles.push({ tmpPath: rawTmpPath, filename: rawFilename });
 
       let compositedBuffer: Buffer;
       let compositingFailed = false;
@@ -416,7 +409,7 @@ router.post("/creatives/:id/generate", generationLimiter, async (req: Request, r
       const compFilename = `${creativeId}_${img.platform}_composited.png`;
       const compTmpPath = path.join(tmpDir, compFilename);
       fs.writeFileSync(compTmpPath, compositedBuffer);
-      stagedFiles.push({ tmpPath: compTmpPath, finalPath: path.join(UPLOADS_DIR, compFilename) });
+      stagedFiles.push({ tmpPath: compTmpPath, filename: compFilename });
 
       variantRecords.push({
         creativeId,
@@ -497,9 +490,9 @@ router.post("/creatives/:id/generate", generationLimiter, async (req: Request, r
     const failedCopies: string[] = [];
     for (const staged of stagedFiles) {
       try {
-        fs.copyFileSync(staged.tmpPath, staged.finalPath);
+        await writeFromFile("generated", staged.filename, staged.tmpPath);
       } catch (err) {
-        console.error(`Failed to copy staged file ${staged.tmpPath}:`, err instanceof Error ? err.message : err);
+        console.error(`Failed to promote staged file ${staged.tmpPath}:`, err instanceof Error ? err.message : err);
         failedCopies.push(staged.tmpPath);
       }
     }
@@ -625,10 +618,8 @@ router.put("/creatives/:id/variants/:variantId/headline", validateRequest({ para
   let compositedUrl = variant.compositedImageUrl;
   if (variant.rawImageUrl) {
     try {
-      const rawFilename = variant.rawImageUrl.replace("/api/files/generated/", "");
-      const rawPath = path.join(UPLOADS_DIR, rawFilename);
-      if (fs.existsSync(rawPath)) {
-        const rawBuffer = fs.readFileSync(rawPath);
+      const rawBuffer = await readFileByUrl(variant.rawImageUrl);
+      if (rawBuffer) {
         const ctx = await assembleContext({
           brandId: campaign.brandId,
           templateId: campaign.templateId,
@@ -651,8 +642,7 @@ router.put("/creatives/:id/variants/:variantId/headline", validateRequest({ para
         });
 
         const compFilename = `${creativeId}_${variant.platform}_composited.png`;
-        const compPath = path.join(UPLOADS_DIR, compFilename);
-        fs.writeFileSync(compPath, newResult.buffer);
+        await writeBuffer("generated", compFilename, newResult.buffer);
         compositedUrl = `/api/files/generated/${compFilename}`;
       }
     } catch (err) {
@@ -864,7 +854,6 @@ async function generateVariantImage(
 
   const imgResult = await generateImage(ctx, platform, referenceImages, opts.varyMode);
 
-  ensureDir(UPLOADS_DIR);
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "sparq-variant-"));
   try {
     const token = `${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
@@ -900,14 +889,12 @@ async function generateVariantImage(
     const compFilename = `${campaign.id}_${platform}_${token}_${tag}_composited.png`;
     fs.writeFileSync(path.join(tmpDir, compFilename), compositedBuffer);
 
-    const rawFinalPath = path.join(UPLOADS_DIR, rawFilename);
-    const compFinalPath = path.join(UPLOADS_DIR, compFilename);
     try {
-      fs.copyFileSync(path.join(tmpDir, rawFilename), rawFinalPath);
-      fs.copyFileSync(path.join(tmpDir, compFilename), compFinalPath);
+      await writeFromFile("generated", rawFilename, path.join(tmpDir, rawFilename));
+      await writeFromFile("generated", compFilename, path.join(tmpDir, compFilename));
     } catch {
-      try { fs.unlinkSync(rawFinalPath); } catch {}
-      try { fs.unlinkSync(compFinalPath); } catch {}
+      await deleteGenerated(rawFilename);
+      await deleteGenerated(compFilename);
       throw new Error("Failed to save generated files. Please try again.");
     }
 
@@ -996,8 +983,6 @@ async function runVariantImageGeneration(
 
     const imgResult = await generateImage(ctx, variant.platform, referenceImages, opts.varyMode);
 
-    ensureDir(UPLOADS_DIR);
-
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), opts.tmpPrefix));
     const ts = Date.now();
     const tag = opts.fileTag ? `_${opts.fileTag}` : "";
@@ -1034,15 +1019,12 @@ async function runVariantImageGeneration(
     const compTmpPath = path.join(tmpDir, compFilename);
     fs.writeFileSync(compTmpPath, compositedBuffer);
 
-    const rawFinalPath = path.join(UPLOADS_DIR, rawFilename);
-    const compFinalPath = path.join(UPLOADS_DIR, compFilename);
-
     try {
-      fs.copyFileSync(rawTmpPath, rawFinalPath);
-      fs.copyFileSync(compTmpPath, compFinalPath);
+      await writeFromFile("generated", rawFilename, rawTmpPath);
+      await writeFromFile("generated", compFilename, compTmpPath);
     } catch (copyErr) {
-      try { fs.unlinkSync(rawFinalPath); } catch {}
-      try { fs.unlinkSync(compFinalPath); } catch {}
+      await deleteGenerated(rawFilename);
+      await deleteGenerated(compFilename);
       throw new Error("Failed to save generated files. Please try again.");
     }
 
@@ -1071,8 +1053,8 @@ async function runVariantImageGeneration(
         return [result];
       });
     } catch (dbErr) {
-      try { fs.unlinkSync(rawFinalPath); } catch {}
-      try { fs.unlinkSync(compFinalPath); } catch {}
+      await deleteGenerated(rawFilename);
+      await deleteGenerated(compFilename);
       throw dbErr;
     }
     fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -1238,8 +1220,8 @@ router.post("/creatives/:id/takes", generationLimiter, validateRequest({ params:
       });
     } catch (dbErr) {
       for (const p of produced) {
-        try { fs.unlinkSync(path.join(UPLOADS_DIR, p.rawFilename)); } catch {}
-        try { fs.unlinkSync(path.join(UPLOADS_DIR, p.compFilename)); } catch {}
+        await deleteGenerated(p.rawFilename);
+        await deleteGenerated(p.compFilename);
       }
       throw dbErr;
     }
@@ -1289,9 +1271,8 @@ router.post("/creatives/:id/variants/:variantId/fan-out", generationLimiter, val
     return;
   }
 
-  const winnerRawFilename = winner.rawImageUrl.replace("/api/files/generated/", "");
-  const winnerRawPath = path.join(UPLOADS_DIR, winnerRawFilename);
-  if (!fs.existsSync(winnerRawPath)) {
+  const winnerRawBuffer = await readFileByUrl(winner.rawImageUrl);
+  if (!winnerRawBuffer) {
     res.status(400).json({ error: "Source image file not found" });
     return;
   }
@@ -1312,7 +1293,7 @@ router.post("/creatives/:id/variants/:variantId/fan-out", generationLimiter, val
 
   const writtenFiles: string[] = [];
   try {
-    const rawBuffer = fs.readFileSync(winnerRawPath);
+    const rawBuffer = winnerRawBuffer;
     const { width: rawW, height: rawH } = await imageDimensions(rawBuffer);
     const sourceAspect = rawW && rawH ? rawW / rawH : 1;
 
@@ -1350,7 +1331,6 @@ router.post("/creatives/:id/variants/:variantId/fan-out", generationLimiter, val
       fetchBrandFontFamily(campaign.brandId),
     ]);
 
-    ensureDir(UPLOADS_DIR);
     const ts = Date.now();
     const produced: {
       platform: string; aspectRatio: string; rawFn: string; compFn: string;
@@ -1381,8 +1361,8 @@ router.post("/creatives/:id/variants/:variantId/fan-out", generationLimiter, val
       const token = `${ts}_${crypto.randomUUID().slice(0, 8)}`;
       const rawFn = `${creativeId}_${platform}_${token}_fanout_raw.png`;
       const compFn = `${creativeId}_${platform}_${token}_fanout_composited.png`;
-      fs.writeFileSync(path.join(UPLOADS_DIR, rawFn), reframedRaw);
-      fs.writeFileSync(path.join(UPLOADS_DIR, compFn), composited.buffer);
+      await writeBuffer("generated", rawFn, reframedRaw);
+      await writeBuffer("generated", compFn, composited.buffer);
       writtenFiles.push(rawFn, compFn);
 
       produced.push({
@@ -1453,7 +1433,7 @@ router.post("/creatives/:id/variants/:variantId/fan-out", generationLimiter, val
       });
     } catch (dbErr) {
       for (const fn of writtenFiles) {
-        try { fs.unlinkSync(path.join(UPLOADS_DIR, fn)); } catch {}
+        await deleteGenerated(fn);
       }
       throw dbErr;
     }
@@ -1461,7 +1441,7 @@ router.post("/creatives/:id/variants/:variantId/fan-out", generationLimiter, val
     res.status(201).json({ variants: created, focalPoint });
   } catch (error) {
     for (const fn of writtenFiles) {
-      try { fs.unlinkSync(path.join(UPLOADS_DIR, fn)); } catch {}
+      await deleteGenerated(fn);
     }
     if (reservationId) {
       try { await db.delete(costLogsTable).where(eq(costLogsTable.id, reservationId)); } catch {}
@@ -1501,14 +1481,13 @@ router.put("/creatives/:id/variants/:variantId/refocus", validateRequest({ param
     res.status(400).json({ error: "Source take image not available" });
     return;
   }
-  const srcPath = path.join(UPLOADS_DIR, winner.rawImageUrl.replace("/api/files/generated/", ""));
-  if (!fs.existsSync(srcPath)) {
+  const rawBuffer = await readFileByUrl(winner.rawImageUrl);
+  if (!rawBuffer) {
     res.status(400).json({ error: "Source image file not found" });
     return;
   }
 
   try {
-    const rawBuffer = fs.readFileSync(srcPath);
     const { width: rawW, height: rawH } = await imageDimensions(rawBuffer);
     const sourceAspect = rawW && rawH ? rawW / rawH : 1;
     const focal = { x: focalX, y: focalY };
@@ -1531,12 +1510,11 @@ router.put("/creatives/:id/variants/:variantId/refocus", validateRequest({ param
       aspectRatio: config.aspectRatio,
     });
 
-    ensureDir(UPLOADS_DIR);
     const token = `${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
     const rawFn = `${creativeId}_${variant.platform}_${token}_refocus_raw.png`;
     const compFn = `${creativeId}_${variant.platform}_${token}_refocus_composited.png`;
-    fs.writeFileSync(path.join(UPLOADS_DIR, rawFn), reframedRaw);
-    fs.writeFileSync(path.join(UPLOADS_DIR, compFn), composited.buffer);
+    await writeBuffer("generated", rawFn, reframedRaw);
+    await writeBuffer("generated", compFn, composited.buffer);
 
     const box = (winner.subjectBox as SubjectBox | null) ?? null;
     const clip = box ? predictClip(box, focal, sourceAspect, config.width / config.height) : false;
@@ -1588,8 +1566,8 @@ router.post("/creatives/:id/variants/:variantId/outpaint", generationLimiter, va
     res.status(400).json({ error: "Source take image not available" });
     return;
   }
-  const srcPath = path.join(UPLOADS_DIR, winner.rawImageUrl.replace("/api/files/generated/", ""));
-  if (!fs.existsSync(srcPath)) {
+  const outpaintSrcBuffer = await readFileByUrl(winner.rawImageUrl);
+  if (!outpaintSrcBuffer) {
     res.status(400).json({ error: "Source image file not found" });
     return;
   }
@@ -1603,7 +1581,7 @@ router.post("/creatives/:id/variants/:variantId/outpaint", generationLimiter, va
 
   const writtenFiles: string[] = [];
   try {
-    const rawBuffer = fs.readFileSync(srcPath);
+    const rawBuffer = outpaintSrcBuffer;
     const extended = await outpaintImage(rawBuffer, "image/png", config.aspectRatio, campaign.briefText || undefined);
 
     const ctx = await assembleContext({ brandId: campaign.brandId, templateId: campaign.templateId, selectedAssets: [] });
@@ -1626,12 +1604,11 @@ router.post("/creatives/:id/variants/:variantId/outpaint", generationLimiter, va
       aspectRatio: config.aspectRatio,
     });
 
-    ensureDir(UPLOADS_DIR);
     const token = `${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
     const rawFn = `${creativeId}_${variant.platform}_${token}_outpaint_raw.png`;
     const compFn = `${creativeId}_${variant.platform}_${token}_outpaint_composited.png`;
-    fs.writeFileSync(path.join(UPLOADS_DIR, rawFn), reframedRaw);
-    fs.writeFileSync(path.join(UPLOADS_DIR, compFn), composited.buffer);
+    await writeBuffer("generated", rawFn, reframedRaw);
+    await writeBuffer("generated", compFn, composited.buffer);
     writtenFiles.push(rawFn, compFn);
 
     let updated;
@@ -1663,7 +1640,7 @@ router.post("/creatives/:id/variants/:variantId/outpaint", generationLimiter, va
       });
     } catch (dbErr) {
       for (const fn of writtenFiles) {
-        try { fs.unlinkSync(path.join(UPLOADS_DIR, fn)); } catch {}
+        await deleteGenerated(fn);
       }
       throw dbErr;
     }
@@ -1671,7 +1648,7 @@ router.post("/creatives/:id/variants/:variantId/outpaint", generationLimiter, va
     res.json(updated);
   } catch (error) {
     for (const fn of writtenFiles) {
-      try { fs.unlinkSync(path.join(UPLOADS_DIR, fn)); } catch {}
+      await deleteGenerated(fn);
     }
     if (reservationId) {
       try { await db.delete(costLogsTable).where(eq(costLogsTable.id, reservationId)); } catch {}
