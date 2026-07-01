@@ -17,6 +17,7 @@ export interface ManagedUser {
   email: string;
   name: string | null;
   role: string;
+  updatedAt: Date;
 }
 
 const userColumns = {
@@ -24,6 +25,7 @@ const userColumns = {
   email: usersTable.email,
   name: usersTable.name,
   role: usersTable.role,
+  updatedAt: usersTable.updatedAt,
 };
 
 export type UserManagementErrorCode = "not_found" | "invalid_role" | "last_admin";

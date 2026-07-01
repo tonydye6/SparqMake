@@ -101,7 +101,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useSearch } from "wouter";
 import { useDropzone } from "react-dropzone";
 import { cn, apiFetch, isForbidden, PERMISSION_DENIED_MESSAGE } from "@/lib/utils";
-import { useIsAdmin } from "@/hooks/useAuth";
+import { useIsAdmin, useAuth } from "@/hooks/useAuth";
 import { useBrandReadiness } from "@/hooks/useBrandReadiness";
 import { LayoutSpecEditor } from "@/components/layout-editor";
 import { ScheduleProfileEditor } from "@/components/ScheduleProfileEditor";
@@ -194,6 +194,7 @@ interface ManagedUser {
   email: string;
   name: string | null;
   role: string;
+  updatedAt?: string;
 }
 
 const MANAGED_ROLES: { value: string; label: string; description: string }[] = [
@@ -202,13 +203,24 @@ const MANAGED_ROLES: { value: string; label: string; description: string }[] = [
   { value: "admin", label: "Admin", description: "Full access, including user management" },
 ];
 
+function formatLastUpdated(value?: string): string | null {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+
 function UserManagementTab() {
   const { toast } = useToast();
+  const { user: currentUser } = useAuth();
   const [users, setUsers] = useState<ManagedUser[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [savingId, setSavingId] = useState<string | null>(null);
   const baseUrl = import.meta.env.VITE_API_URL || "";
+
+  const adminCount = users.filter(u => u.role === "admin").length;
+  const isLastAdmin = adminCount === 1;
 
   const loadUsers = useCallback(async () => {
     setIsLoading(true);
@@ -295,39 +307,73 @@ function UserManagementTab() {
 
   return (
     <section className="bg-card border border-border rounded-xl p-6 shadow-sm">
-      <div className="flex items-center gap-2 mb-6 border-b border-border pb-4">
-        <Shield className="text-primary" size={20} />
-        <div>
-          <h2 className="text-xl font-bold">User Management</h2>
-          <p className="text-sm text-muted-foreground">Assign roles to control who can view and edit content.</p>
+      <div className="flex items-start justify-between gap-4 mb-6 border-b border-border pb-4">
+        <div className="flex items-center gap-2">
+          <Shield className="text-primary" size={20} />
+          <div>
+            <h2 className="text-xl font-bold">User Management</h2>
+            <p className="text-sm text-muted-foreground">Assign roles to control who can view and edit content.</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 shrink-0 text-sm text-muted-foreground" data-testid="text-admin-count">
+          <Badge variant="secondary" className="gap-1">
+            <Shield size={12} />
+            {adminCount} {adminCount === 1 ? "admin" : "admins"}
+          </Badge>
         </div>
       </div>
+      {isLastAdmin && (
+        <div className="flex items-start gap-2 mb-4 p-3 rounded-lg border border-amber-500/30 bg-amber-500/10 text-sm text-amber-600 dark:text-amber-400" data-testid="hint-last-admin">
+          <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+          <span>Only one admin remains. Their role can't be changed until another admin is added, to keep user management accessible.</span>
+        </div>
+      )}
       <div className="space-y-3">
-        {users.map(user => (
-          <div key={user.id} className="flex items-center justify-between gap-4 p-4 border border-border bg-background rounded-lg">
-            <div className="min-w-0">
-              <p className="font-semibold text-foreground truncate">{user.name || user.email}</p>
-              <p className="text-sm text-muted-foreground truncate">{user.email}</p>
+        {users.map(user => {
+          const isCurrentUser = currentUser?.id === user.id;
+          const lockLastAdmin = user.role === "admin" && isLastAdmin;
+          const lastUpdated = formatLastUpdated(user.updatedAt);
+          return (
+            <div key={user.id} className="flex items-center justify-between gap-4 p-4 border border-border bg-background rounded-lg">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <p className="font-semibold text-foreground truncate">{user.name || user.email}</p>
+                  {isCurrentUser && (
+                    <Badge variant="outline" className="shrink-0" data-testid={`badge-you-${user.id}`}>You</Badge>
+                  )}
+                </div>
+                <p className="text-sm text-muted-foreground truncate">{user.email}</p>
+                {lastUpdated && (
+                  <p className="text-xs text-muted-foreground/70 mt-1 flex items-center gap-1">
+                    <Clock size={11} />
+                    Role updated {lastUpdated}
+                  </p>
+                )}
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                {savingId === user.id && <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />}
+                <Select
+                  value={user.role}
+                  onValueChange={(role) => changeRole(user, role)}
+                  disabled={savingId === user.id || lockLastAdmin}
+                >
+                  <SelectTrigger
+                    className="w-[160px]"
+                    data-testid={`select-role-${user.id}`}
+                    title={lockLastAdmin ? "The last remaining admin's role can't be changed" : undefined}
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {MANAGED_ROLES.map(r => (
+                      <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
-            <div className="flex items-center gap-2 shrink-0">
-              {savingId === user.id && <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />}
-              <Select
-                value={user.role}
-                onValueChange={(role) => changeRole(user, role)}
-                disabled={savingId === user.id}
-              >
-                <SelectTrigger className="w-[160px]" data-testid={`select-role-${user.id}`}>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {MANAGED_ROLES.map(r => (
-                    <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-        ))}
+          );
+        })}
         {users.length === 0 && (
           <p className="text-sm text-muted-foreground text-center py-8">No users found.</p>
         )}
