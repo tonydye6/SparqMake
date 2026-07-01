@@ -217,6 +217,11 @@ function UserManagementTab() {
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [savingId, setSavingId] = useState<string | null>(null);
+  const [isInviteOpen, setIsInviteOpen] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteRole, setInviteRole] = useState<string>("viewer");
+  const [isInviting, setIsInviting] = useState(false);
+  const [inviteError, setInviteError] = useState<string | null>(null);
   const baseUrl = import.meta.env.VITE_API_URL || "";
 
   const adminCount = users.filter(u => u.role === "admin").length;
@@ -246,6 +251,50 @@ function UserManagementTab() {
   useEffect(() => {
     loadUsers();
   }, [loadUsers]);
+
+  const submitInvite = async () => {
+    const email = inviteEmail.trim();
+    if (!email) {
+      setInviteError("Enter an email address");
+      return;
+    }
+    setIsInviting(true);
+    setInviteError(null);
+    try {
+      const res = await apiFetch(`${baseUrl}/api/users`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, role: inviteRole }),
+      });
+      if (!res.ok) {
+        if (isForbidden(res)) {
+          setInviteError(PERMISSION_DENIED_MESSAGE);
+          return;
+        }
+        let message = "Failed to invite user";
+        try {
+          const errBody = await res.json();
+          if (typeof errBody?.error === "string") {
+            message = errBody.error;
+          }
+        } catch { /* keep default message */ }
+        setInviteError(message);
+        return;
+      }
+      const created: ManagedUser = await res.json();
+      setUsers(prev =>
+        [...prev, created].sort((a, b) => a.email.localeCompare(b.email)),
+      );
+      setIsInviteOpen(false);
+      setInviteEmail("");
+      setInviteRole("viewer");
+      toast({ title: "Invite sent", description: `${created.email} can now sign in as ${created.role}.` });
+    } catch {
+      setInviteError("Failed to invite user");
+    } finally {
+      setIsInviting(false);
+    }
+  };
 
   const changeRole = async (user: ManagedUser, role: string) => {
     if (role === user.role) return;
@@ -315,11 +364,86 @@ function UserManagementTab() {
             <p className="text-sm text-muted-foreground">Assign roles to control who can view and edit content.</p>
           </div>
         </div>
-        <div className="flex items-center gap-2 shrink-0 text-sm text-muted-foreground" data-testid="text-admin-count">
-          <Badge variant="secondary" className="gap-1">
-            <Shield size={12} />
-            {adminCount} {adminCount === 1 ? "admin" : "admins"}
-          </Badge>
+        <div className="flex items-center gap-3 shrink-0">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground" data-testid="text-admin-count">
+            <Badge variant="secondary" className="gap-1">
+              <Shield size={12} />
+              {adminCount} {adminCount === 1 ? "admin" : "admins"}
+            </Badge>
+          </div>
+        <Dialog
+          open={isInviteOpen}
+          onOpenChange={(open) => {
+            setIsInviteOpen(open);
+            if (!open) {
+              setInviteError(null);
+              setInviteEmail("");
+              setInviteRole("viewer");
+            }
+          }}
+        >
+          <DialogTrigger asChild>
+            <Button className="shrink-0" data-testid="button-open-invite">
+              <Plus className="mr-2 h-4 w-4" /> Invite User
+            </Button>
+          </DialogTrigger>
+          <DialogContent className="sm:max-w-[425px]">
+            <DialogHeader>
+              <DialogTitle>Invite a teammate</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4 py-2">
+              <div className="space-y-2">
+                <label htmlFor="invite-email" className="text-sm font-medium">Email</label>
+                <Input
+                  id="invite-email"
+                  type="email"
+                  placeholder="teammate@company.com"
+                  value={inviteEmail}
+                  onChange={(e) => setInviteEmail(e.target.value)}
+                  disabled={isInviting}
+                  data-testid="input-invite-email"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !isInviting) {
+                      e.preventDefault();
+                      submitInvite();
+                    }
+                  }}
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Starting role</label>
+                <Select value={inviteRole} onValueChange={setInviteRole} disabled={isInviting}>
+                  <SelectTrigger data-testid="select-invite-role">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {MANAGED_ROLES.map(r => (
+                      <SelectItem key={r.value} value={r.value}>
+                        <span className="font-medium">{r.label}</span>
+                        <span className="text-muted-foreground"> — {r.description}</span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                The teammate lands with this role the first time they sign in.
+              </p>
+              {inviteError && (
+                <p className="text-sm text-destructive" data-testid="text-invite-error">{inviteError}</p>
+              )}
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setIsInviteOpen(false)} disabled={isInviting}>
+                Cancel
+              </Button>
+              <Button onClick={submitInvite} disabled={isInviting} data-testid="button-submit-invite">
+                {isInviting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Send Invite
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
         </div>
       </div>
       {isLastAdmin && (

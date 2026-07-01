@@ -7,10 +7,14 @@ import type { Request, Response, NextFunction } from "express";
 // db.select()/db.update() call consumes the next queued result in order.
 let selectResults: unknown[][] = [];
 let updateResults: unknown[][] = [];
+// An entry may be a rows array (resolves) or an Error (rejects), so we can
+// simulate a Postgres unique-violation on insert.
+let insertResults: (unknown[] | Error)[] = [];
 let selectCall = 0;
 let updateCall = 0;
+let insertCall = 0;
 
-function thenable(getResult: () => unknown[]) {
+function thenable(getResult: () => unknown[] | Error) {
   const obj: Record<string, unknown> = {};
   const methods = [
     "from", "where", "limit", "orderBy", "returning", "set", "values",
@@ -20,7 +24,11 @@ function thenable(getResult: () => unknown[]) {
   (obj as { then: unknown }).then = (
     resolve: (v: unknown[]) => unknown,
     reject: (e: unknown) => unknown,
-  ) => Promise.resolve(getResult()).then(resolve, reject);
+  ) => {
+    const result = getResult();
+    if (result instanceof Error) return Promise.reject(result).then(resolve, reject);
+    return Promise.resolve(result).then(resolve, reject);
+  };
   return obj;
 }
 
@@ -29,6 +37,7 @@ vi.mock("@workspace/db", () => ({
   db: {
     select: () => thenable(() => selectResults[selectCall++] ?? []),
     update: () => thenable(() => updateResults[updateCall++] ?? []),
+    insert: () => thenable(() => insertResults[insertCall++] ?? []),
   },
 }));
 
@@ -39,15 +48,17 @@ vi.mock("drizzle-orm", () => ({
   count: () => ({ op: "count" }),
 }));
 
-const { listUsers, updateUserRole, isValidRole, UserManagementError } =
+const { listUsers, updateUserRole, inviteUser, isValidRole, UserManagementError } =
   await import("../services/user-management.js");
 const { requireRole } = await import("../middleware/auth.js");
 
 beforeEach(() => {
   selectResults = [];
   updateResults = [];
+  insertResults = [];
   selectCall = 0;
   updateCall = 0;
+  insertCall = 0;
 });
 
 // --- admin-only access ---------------------------------------------------
@@ -170,6 +181,45 @@ describe("updateUserRole", () => {
     expect(result.role).toBe("admin");
     // role unchanged → no admin-count guard query.
     expect(selectCall).toBe(1);
+  });
+});
+
+describe("inviteUser", () => {
+  it("rejects an invalid role", async () => {
+    await expect(inviteUser("new@b.c", "superadmin")).rejects.toMatchObject({
+      code: "invalid_role",
+    });
+  });
+
+  it("rejects a malformed email", async () => {
+    await expect(inviteUser("not-an-email", "viewer")).rejects.toMatchObject({
+      code: "invalid_email",
+    });
+  });
+
+  it("rejects a duplicate email (pre-check)", async () => {
+    selectResults = [[{ id: "u1", email: "dupe@b.c", name: null, role: "viewer" }]];
+    await expect(inviteUser("dupe@b.c", "editor")).rejects.toMatchObject({
+      code: "duplicate_email",
+    });
+    // Never reached the insert.
+    expect(insertCall).toBe(0);
+  });
+
+  it("creates a user with the assigned role, normalizing the email", async () => {
+    selectResults = [[]]; // duplicate pre-check: none
+    insertResults = [[{ id: "u9", email: "new@b.c", name: null, role: "editor" }]];
+    const created = await inviteUser("  New@B.C  ", "editor");
+    expect(created).toMatchObject({ id: "u9", email: "new@b.c", role: "editor" });
+    expect(insertCall).toBe(1);
+  });
+
+  it("maps a unique-violation race on insert to duplicate_email", async () => {
+    selectResults = [[]]; // pre-check passes
+    insertResults = [Object.assign(new Error("duplicate key"), { code: "23505" })];
+    await expect(inviteUser("racer@b.c", "viewer")).rejects.toMatchObject({
+      code: "duplicate_email",
+    });
   });
 });
 

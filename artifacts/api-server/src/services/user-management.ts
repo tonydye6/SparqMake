@@ -2,6 +2,24 @@ import { db, usersTable } from "@workspace/db";
 import { and, count, eq, ne } from "drizzle-orm";
 
 /**
+ * Pragmatic email check for admin-entered invites. This is intentionally
+ * lenient (single `@`, non-empty local/domain parts, a dotted domain) — the
+ * authoritative gate on who can actually sign in is the OAuth allow-list in
+ * lib/passport.ts, not this format check.
+ */
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function normalizeEmail(email: unknown): string | null {
+  if (typeof email !== "string") return null;
+  const trimmed = email.trim().toLowerCase();
+  if (!EMAIL_RE.test(trimmed)) return null;
+  return trimmed;
+}
+
+/** Postgres unique-violation SQLSTATE, raised if a duplicate slips past the pre-check (race). */
+const PG_UNIQUE_VIOLATION = "23505";
+
+/**
  * Roles must match the `users_role_check` DB constraint in lib/db/src/schema/users.ts.
  * Keep this list in sync with that constraint and with the ROLE_RANK in middleware/auth.ts.
  */
@@ -28,7 +46,12 @@ const userColumns = {
   updatedAt: usersTable.updatedAt,
 };
 
-export type UserManagementErrorCode = "not_found" | "invalid_role" | "last_admin";
+export type UserManagementErrorCode =
+  | "not_found"
+  | "invalid_role"
+  | "last_admin"
+  | "invalid_email"
+  | "duplicate_email";
 
 export class UserManagementError extends Error {
   constructor(
@@ -84,4 +107,53 @@ export async function updateUserRole(id: string, role: unknown): Promise<Managed
     .returning(userColumns);
 
   return updated;
+}
+
+/**
+ * Invite (pre-create) a workspace user so an admin can onboard a teammate
+ * before that person has ever signed in.
+ *
+ * The record is inserted with `name = null`; the real display name is filled in
+ * on first Google sign-in (see lib/passport.ts, which matches by email and, for
+ * an existing row, updates name/image while preserving the pre-assigned role).
+ * That is how an invited user "lands with the assigned role" — the role set here
+ * is not overwritten at login.
+ *
+ * Guards:
+ *  - the role must be one of APP_ROLES (matches the DB check constraint);
+ *  - the email must be a plausible address (normalized to lowercase/trimmed);
+ *  - the email must not already belong to a user (duplicate_email). A unique
+ *    constraint on the column is the final backstop for a concurrent insert.
+ */
+export async function inviteUser(email: unknown, role: unknown): Promise<ManagedUser> {
+  if (!isValidRole(role)) {
+    throw new UserManagementError("invalid_role", "Invalid role");
+  }
+
+  const normalizedEmail = normalizeEmail(email);
+  if (!normalizedEmail) {
+    throw new UserManagementError("invalid_email", "Enter a valid email address");
+  }
+
+  const [existing] = await db
+    .select(userColumns)
+    .from(usersTable)
+    .where(eq(usersTable.email, normalizedEmail))
+    .limit(1);
+  if (existing) {
+    throw new UserManagementError("duplicate_email", "A user with this email already exists");
+  }
+
+  try {
+    const [created] = await db
+      .insert(usersTable)
+      .values({ email: normalizedEmail, name: null, role })
+      .returning(userColumns);
+    return created;
+  } catch (err) {
+    if ((err as { code?: string })?.code === PG_UNIQUE_VIOLATION) {
+      throw new UserManagementError("duplicate_email", "A user with this email already exists");
+    }
+    throw err;
+  }
 }
