@@ -100,7 +100,8 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useSearch } from "wouter";
 import { useDropzone } from "react-dropzone";
-import { cn, apiFetch } from "@/lib/utils";
+import { cn, apiFetch, isForbidden, PERMISSION_DENIED_MESSAGE } from "@/lib/utils";
+import { useIsAdmin } from "@/hooks/useAuth";
 import { useBrandReadiness } from "@/hooks/useBrandReadiness";
 import { LayoutSpecEditor } from "@/components/layout-editor";
 import { ScheduleProfileEditor } from "@/components/ScheduleProfileEditor";
@@ -144,7 +145,10 @@ const SETTINGS_SECTIONS = [
 export default function Settings() {
   const searchString = useSearch();
   const params = new URLSearchParams(searchString);
-  const initialTab = params.get("tab") === "accounts" ? "accounts" : "brands";
+  const isAdmin = useIsAdmin();
+  const tabParam = params.get("tab");
+  const initialTab =
+    tabParam === "accounts" ? "accounts" : tabParam === "users" && isAdmin ? "users" : "brands";
   const [activeSettingsTab, setActiveSettingsTab] = useState(initialTab);
 
   return (
@@ -162,6 +166,11 @@ export default function Settings() {
           <TabsTrigger value="accounts" className="data-[state=active]:bg-background data-[state=active]:shadow-sm px-6 py-2">
             <Share2 className="mr-2 h-4 w-4" /> Connected Accounts
           </TabsTrigger>
+          {isAdmin && (
+            <TabsTrigger value="users" className="data-[state=active]:bg-background data-[state=active]:shadow-sm px-6 py-2">
+              <Shield className="mr-2 h-4 w-4" /> User Management
+            </TabsTrigger>
+          )}
         </TabsList>
 
         <TabsContent value="brands" className="flex-1 flex flex-col min-h-0 mt-0">
@@ -170,8 +179,160 @@ export default function Settings() {
         <TabsContent value="accounts" className="flex-1 overflow-y-auto mt-0 pr-4 pb-12">
           <ConnectedAccountsTab />
         </TabsContent>
+        {isAdmin && (
+          <TabsContent value="users" className="flex-1 overflow-y-auto mt-0 pr-4 pb-12">
+            <UserManagementTab />
+          </TabsContent>
+        )}
       </Tabs>
     </div>
+  );
+}
+
+interface ManagedUser {
+  id: string;
+  email: string;
+  name: string | null;
+  role: string;
+}
+
+const MANAGED_ROLES: { value: string; label: string; description: string }[] = [
+  { value: "viewer", label: "Viewer", description: "Read-only access" },
+  { value: "editor", label: "Editor", description: "Can create and edit assets" },
+  { value: "admin", label: "Admin", description: "Full access, including user management" },
+];
+
+function UserManagementTab() {
+  const { toast } = useToast();
+  const [users, setUsers] = useState<ManagedUser[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [savingId, setSavingId] = useState<string | null>(null);
+  const baseUrl = import.meta.env.VITE_API_URL || "";
+
+  const loadUsers = useCallback(async () => {
+    setIsLoading(true);
+    setLoadError(null);
+    try {
+      const res = await apiFetch(`${baseUrl}/api/users`);
+      if (!res.ok) {
+        if (isForbidden(res)) {
+          setLoadError(PERMISSION_DENIED_MESSAGE);
+          return;
+        }
+        throw new Error("Failed to load users");
+      }
+      const body = await res.json();
+      setUsers(body.data ?? []);
+    } catch {
+      setLoadError("Failed to load users");
+    } finally {
+      setIsLoading(false);
+    }
+  }, [baseUrl]);
+
+  useEffect(() => {
+    loadUsers();
+  }, [loadUsers]);
+
+  const changeRole = async (user: ManagedUser, role: string) => {
+    if (role === user.role) return;
+    const previous = user.role;
+    setSavingId(user.id);
+    setUsers(prev => prev.map(u => (u.id === user.id ? { ...u, role } : u)));
+    try {
+      const res = await apiFetch(`${baseUrl}/api/users/${user.id}/role`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role }),
+      });
+      if (!res.ok) {
+        setUsers(prev => prev.map(u => (u.id === user.id ? { ...u, role: previous } : u)));
+        if (isForbidden(res)) {
+          toast({ variant: "destructive", title: PERMISSION_DENIED_MESSAGE });
+          return;
+        }
+        let message = "Failed to update role";
+        try {
+          const errBody = await res.json();
+          if (errBody?.error?.code === "last_admin") {
+            message = "Cannot change the role of the last remaining admin";
+          } else if (typeof errBody?.error?.message === "string") {
+            message = errBody.error.message;
+          }
+        } catch { /* keep default message */ }
+        toast({ variant: "destructive", title: message });
+        return;
+      }
+      toast({ title: "Role updated" });
+    } catch {
+      setUsers(prev => prev.map(u => (u.id === user.id ? { ...u, role: previous } : u)));
+      toast({ variant: "destructive", title: "Failed to update role" });
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  if (isLoading) {
+    return (
+      <div className="space-y-4">
+        <Skeleton className="h-16 w-full bg-card" />
+        <Skeleton className="h-16 w-full bg-card" />
+        <Skeleton className="h-16 w-full bg-card" />
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="flex flex-col items-center justify-center h-64 text-center border border-border border-dashed rounded-xl bg-card/30">
+        <Shield size={48} className="text-muted-foreground/50 mb-4" />
+        <h3 className="text-xl font-bold text-foreground mb-2">{loadError}</h3>
+        <Button variant="outline" onClick={loadUsers}>Retry</Button>
+      </div>
+    );
+  }
+
+  return (
+    <section className="bg-card border border-border rounded-xl p-6 shadow-sm">
+      <div className="flex items-center gap-2 mb-6 border-b border-border pb-4">
+        <Shield className="text-primary" size={20} />
+        <div>
+          <h2 className="text-xl font-bold">User Management</h2>
+          <p className="text-sm text-muted-foreground">Assign roles to control who can view and edit content.</p>
+        </div>
+      </div>
+      <div className="space-y-3">
+        {users.map(user => (
+          <div key={user.id} className="flex items-center justify-between gap-4 p-4 border border-border bg-background rounded-lg">
+            <div className="min-w-0">
+              <p className="font-semibold text-foreground truncate">{user.name || user.email}</p>
+              <p className="text-sm text-muted-foreground truncate">{user.email}</p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              {savingId === user.id && <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />}
+              <Select
+                value={user.role}
+                onValueChange={(role) => changeRole(user, role)}
+                disabled={savingId === user.id}
+              >
+                <SelectTrigger className="w-[160px]" data-testid={`select-role-${user.id}`}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {MANAGED_ROLES.map(r => (
+                    <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        ))}
+        {users.length === 0 && (
+          <p className="text-sm text-muted-foreground text-center py-8">No users found.</p>
+        )}
+      </div>
+    </section>
   );
 }
 

@@ -22,6 +22,7 @@ import brandReadinessRouter from "./brand-readiness";
 import scheduleProfileRouter from "./schedule-profile";
 import smartScheduleRouter from "./smart-schedule";
 import feedbackRouter from "./feedback";
+import usersRouter from "./users";
 
 const router: IRouter = Router();
 
@@ -48,6 +49,7 @@ router.use(brandReadinessRouter);
 router.use(scheduleProfileRouter);
 router.use(smartScheduleRouter);
 router.use(feedbackRouter);
+router.use(usersRouter);
 
 router.all("/{*path}", (_req, res) => {
   res.status(404).json({ error: "Endpoint not found" });

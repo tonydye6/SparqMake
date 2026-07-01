@@ -92,3 +92,25 @@ export function useAuth(): AuthContextValue {
   }
   return ctx;
 }
+
+const WRITE_ROLES = new Set(["editor", "admin"]);
+
+export function roleCanWrite(role: string | null | undefined): boolean {
+  return !!role && WRITE_ROLES.has(role);
+}
+
+export function roleIsAdmin(role: string | null | undefined): boolean {
+  return role === "admin";
+}
+
+/** True when the signed-in user may perform write actions (editor or admin). */
+export function useCanWrite(): boolean {
+  const { user } = useAuth();
+  return roleCanWrite(user?.role);
+}
+
+/** True when the signed-in user is an admin. */
+export function useIsAdmin(): boolean {
+  const { user } = useAuth();
+  return roleIsAdmin(user?.role);
+}

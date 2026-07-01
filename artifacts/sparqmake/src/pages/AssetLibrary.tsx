@@ -31,7 +31,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useForm } from "react-hook-form";
 import { Skeleton } from "@/components/ui/skeleton";
-import { cn, apiFetch } from "@/lib/utils";
+import { cn, apiFetch, isForbidden, PERMISSION_DENIED_MESSAGE } from "@/lib/utils";
+import { useCanWrite } from "@/hooks/useAuth";
 import { Switch } from "@/components/ui/switch";
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
@@ -75,7 +76,8 @@ interface CreativeUsage {
 export default function AssetLibrary() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  
+  const canWrite = useCanWrite();
+
   const [selectedBrand, setSelectedBrand] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState("");
@@ -251,7 +253,13 @@ export default function AssetLibrary() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ids: Array.from(selectedIds), ...updates }),
       });
-      if (!res.ok) throw new Error("Bulk update failed");
+      if (!res.ok) {
+        if (isForbidden(res)) {
+          toast({ variant: "destructive", title: PERMISSION_DENIED_MESSAGE });
+          return;
+        }
+        throw new Error("Bulk update failed");
+      }
       const data = await res.json();
       queryClient.invalidateQueries({ queryKey: ["/api/assets"] });
       clearSelection();
@@ -273,7 +281,14 @@ export default function AssetLibrary() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ids: Array.from(selectedIds) }),
       });
-      if (!res.ok) throw new Error("Bulk delete failed");
+      if (!res.ok) {
+        if (isForbidden(res)) {
+          setDeleteConfirmOpen(false);
+          toast({ variant: "destructive", title: PERMISSION_DENIED_MESSAGE });
+          return;
+        }
+        throw new Error("Bulk delete failed");
+      }
       const data = await res.json();
       queryClient.invalidateQueries({ queryKey: ["/api/assets"] });
       clearSelection();
@@ -354,16 +369,20 @@ export default function AssetLibrary() {
               <Button size="sm" variant="outline" onClick={selectAll} className="border-primary/30 text-primary hover:bg-primary/20">
                 Select All
               </Button>
-              <Button size="sm" onClick={() => bulkUpdate({ status: "approved" })} disabled={bulkLoading} className="bg-success hover:bg-success/90 text-white">
-                <Check className="w-3.5 h-3.5 mr-1.5" /> Approve Selected
-              </Button>
-              <Button size="sm" onClick={() => bulkUpdate({ status: "archived" })} disabled={bulkLoading} className="bg-warning hover:bg-warning/90 text-black">
-                <Archive className="w-3.5 h-3.5 mr-1.5" /> Archive Selected
-              </Button>
-              <BulkTagDialog onApply={(tags) => bulkUpdate({ tags })} disabled={bulkLoading} />
-              <Button size="sm" onClick={() => setDeleteConfirmOpen(true)} disabled={bulkLoading} className="bg-destructive hover:bg-destructive/90 text-destructive-foreground">
-                <Trash2 className="w-3.5 h-3.5 mr-1.5" /> Delete Selected
-              </Button>
+              {canWrite && (
+                <>
+                  <Button size="sm" onClick={() => bulkUpdate({ status: "approved" })} disabled={bulkLoading} className="bg-success hover:bg-success/90 text-white">
+                    <Check className="w-3.5 h-3.5 mr-1.5" /> Approve Selected
+                  </Button>
+                  <Button size="sm" onClick={() => bulkUpdate({ status: "archived" })} disabled={bulkLoading} className="bg-warning hover:bg-warning/90 text-black">
+                    <Archive className="w-3.5 h-3.5 mr-1.5" /> Archive Selected
+                  </Button>
+                  <BulkTagDialog onApply={(tags) => bulkUpdate({ tags })} disabled={bulkLoading} />
+                  <Button size="sm" onClick={() => setDeleteConfirmOpen(true)} disabled={bulkLoading} className="bg-destructive hover:bg-destructive/90 text-destructive-foreground">
+                    <Trash2 className="w-3.5 h-3.5 mr-1.5" /> Delete Selected
+                  </Button>
+                </>
+              )}
               <Button size="sm" variant="ghost" onClick={clearSelection} className="text-muted-foreground">
                 <X className="w-3.5 h-3.5 mr-1" /> Clear
               </Button>
@@ -392,6 +411,7 @@ export default function AssetLibrary() {
             </AlertDialogContent>
           </AlertDialog>
 
+          {canWrite && (
           <div 
             {...getRootProps()} 
             className={`mb-8 border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-colors ${
@@ -409,8 +429,9 @@ export default function AssetLibrary() {
               {isUploading ? "Files are uploading in the background" : "Supports JPG, PNG, MP4 — select or drop multiple files at once"}
             </p>
           </div>
+          )}
 
-          {uploadQueue.length > 0 && (
+          {canWrite && uploadQueue.length > 0 && (
             <div className="mb-6 rounded-xl border border-border bg-card/50 p-4">
               <div className="flex items-center justify-between mb-3">
                 <h4 className="text-sm font-semibold text-foreground">
@@ -477,6 +498,7 @@ export default function AssetLibrary() {
                   selected={selectedIds.has(asset.id)}
                   onToggleSelect={() => toggleSelection(asset.id)}
                   bulkMode={bulkMode}
+                  canWrite={canWrite}
                 />
               ))
             ) : (
@@ -484,9 +506,9 @@ export default function AssetLibrary() {
                 <EmptyState
                   icon={ImagePlus}
                   title="No assets yet"
-                  description="Upload brand assets to start building creatives"
-                  actionLabel="Upload Assets"
-                  onAction={openDropzone}
+                  description={canWrite ? "Upload brand assets to start building creatives" : "No brand assets have been uploaded yet"}
+                  actionLabel={canWrite ? "Upload Assets" : undefined}
+                  onAction={canWrite ? openDropzone : undefined}
                 />
               </div>
             )}
@@ -494,11 +516,11 @@ export default function AssetLibrary() {
         </TabsContent>
 
         <TabsContent value="briefs" className="flex-1 overflow-y-auto mt-0 pr-4">
-          <BriefsTab briefs={briefs?.data || []} brands={brands || []} isLoading={briefsLoading} />
+          <BriefsTab briefs={briefs?.data || []} brands={brands || []} isLoading={briefsLoading} canWrite={canWrite} />
         </TabsContent>
 
         <TabsContent value="hashtags" className="flex-1 overflow-y-auto mt-0 pr-4">
-          <HashtagsTab sets={hashtagSets?.data || []} brands={brands || []} />
+          <HashtagsTab sets={hashtagSets?.data || []} brands={brands || []} canWrite={canWrite} />
         </TabsContent>
       </Tabs>
     </div>
@@ -542,7 +564,7 @@ function BulkTagDialog({ onApply, disabled }: { onApply: (tags: string[]) => voi
   );
 }
 
-function VisualAssetCard({ asset, selected, onToggleSelect, bulkMode }: { asset: Asset; selected: boolean; onToggleSelect: () => void; bulkMode: boolean }) {
+function VisualAssetCard({ asset, selected, onToggleSelect, bulkMode, canWrite }: { asset: Asset; selected: boolean; onToggleSelect: () => void; bulkMode: boolean; canWrite: boolean }) {
   const [isOpen, setIsOpen] = useState(false);
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -572,8 +594,11 @@ function VisualAssetCard({ asset, selected, onToggleSelect, bulkMode }: { asset:
         toast({ title: "Asset updated" });
         setEditMode(false);
       },
-      onError: () => {
-        toast({ variant: "destructive", title: "Failed to update asset" });
+      onError: (err: unknown) => {
+        toast({
+          variant: "destructive",
+          title: isForbidden(err) ? PERMISSION_DENIED_MESSAGE : "Failed to update asset",
+        });
       }
     });
   };
@@ -586,8 +611,11 @@ function VisualAssetCard({ asset, selected, onToggleSelect, bulkMode }: { asset:
         setIsOpen(false);
         toast({ title: "Asset deleted" });
       },
-      onError: () => {
-        toast({ variant: "destructive", title: "Failed to delete asset" });
+      onError: (err: unknown) => {
+        toast({
+          variant: "destructive",
+          title: isForbidden(err) ? PERMISSION_DENIED_MESSAGE : "Failed to delete asset",
+        });
       }
     });
   };
@@ -641,22 +669,24 @@ function VisualAssetCard({ asset, selected, onToggleSelect, bulkMode }: { asset:
             </div>
           )}
           
-          <div
-            className={cn(
-              "absolute top-2 left-2 z-10 transition-opacity duration-200",
-              bulkMode || selected ? "opacity-100" : "opacity-0 group-hover:opacity-100"
-            )}
-            onClick={handleCheckboxClick}
-          >
-            <div className={cn(
-              "w-6 h-6 rounded border-2 flex items-center justify-center transition-colors",
-              selected
-                ? "bg-primary border-primary text-white"
-                : "bg-background/80 backdrop-blur border-border hover:border-primary"
-            )}>
-              {selected && <Check size={14} />}
+          {canWrite && (
+            <div
+              className={cn(
+                "absolute top-2 left-2 z-10 transition-opacity duration-200",
+                bulkMode || selected ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+              )}
+              onClick={handleCheckboxClick}
+            >
+              <div className={cn(
+                "w-6 h-6 rounded border-2 flex items-center justify-center transition-colors",
+                selected
+                  ? "bg-primary border-primary text-white"
+                  : "bg-background/80 backdrop-blur border-border hover:border-primary"
+              )}>
+                {selected && <Check size={14} />}
+              </div>
             </div>
-          </div>
+          )}
 
           <div className="absolute top-2 right-2 flex gap-1">
             {asset.assetClass && ASSET_CLASS_CONFIG[asset.assetClass] && (
@@ -728,7 +758,9 @@ function VisualAssetCard({ asset, selected, onToggleSelect, bulkMode }: { asset:
                 <div>
                   <h3 className="font-bold text-lg flex items-center justify-between">
                     {asset.name}
-                    <Button variant="ghost" size="icon" onClick={() => setEditMode(true)} className="h-8 w-8"><Edit2 size={14} /></Button>
+                    {canWrite && (
+                      <Button variant="ghost" size="icon" onClick={() => setEditMode(true)} className="h-8 w-8"><Edit2 size={14} /></Button>
+                    )}
                   </h3>
                   <p className="text-sm text-muted-foreground mt-1">{asset.description || "No description provided."}</p>
                   {isSubjectReference && asset.characterIdentityNote && (
@@ -767,7 +799,9 @@ function VisualAssetCard({ asset, selected, onToggleSelect, bulkMode }: { asset:
                   )}
                 </div>
 
-                <IntelligenceEditor asset={asset} onUpdate={handleUpdate} isPending={updateMutation.isPending} />
+                {canWrite && (
+                  <IntelligenceEditor asset={asset} onUpdate={handleUpdate} isPending={updateMutation.isPending} />
+                )}
 
                 <div className="bg-background p-4 rounded-lg border border-border">
                   <h4 className="text-xs uppercase text-muted-foreground font-semibold mb-3">Used in Creatives</h4>
@@ -798,23 +832,25 @@ function VisualAssetCard({ asset, selected, onToggleSelect, bulkMode }: { asset:
             )}
           </div>
 
-          <div className="p-4 border-t border-border bg-background flex flex-col gap-2">
-            <div className="flex gap-2 w-full">
-              {asset.status !== 'approved' && (
-                <Button className="flex-1 bg-success hover:bg-success/90 text-white" onClick={() => handleUpdate({ status: 'approved' })} disabled={updateMutation.isPending}>
-                  <Check className="w-4 h-4 mr-2" /> Approve
-                </Button>
-              )}
-              {asset.status !== 'archived' && (
-                <Button className="flex-1 bg-warning hover:bg-warning/90 text-black" onClick={() => handleUpdate({ status: 'archived' })} disabled={updateMutation.isPending}>
-                  <X className="w-4 h-4 mr-2" /> Archive
-                </Button>
-              )}
+          {canWrite && (
+            <div className="p-4 border-t border-border bg-background flex flex-col gap-2">
+              <div className="flex gap-2 w-full">
+                {asset.status !== 'approved' && (
+                  <Button className="flex-1 bg-success hover:bg-success/90 text-white" onClick={() => handleUpdate({ status: 'approved' })} disabled={updateMutation.isPending}>
+                    <Check className="w-4 h-4 mr-2" /> Approve
+                  </Button>
+                )}
+                {asset.status !== 'archived' && (
+                  <Button className="flex-1 bg-warning hover:bg-warning/90 text-black" onClick={() => handleUpdate({ status: 'archived' })} disabled={updateMutation.isPending}>
+                    <X className="w-4 h-4 mr-2" /> Archive
+                  </Button>
+                )}
+              </div>
+              <Button variant="outline" className="w-full text-destructive hover:bg-destructive/10 hover:text-destructive border-border" onClick={() => setDeleteConfirmOpen(true)} disabled={deleteMutation.isPending}>
+                <Trash2 className="w-4 h-4 mr-2" /> Delete Asset
+              </Button>
             </div>
-            <Button variant="outline" className="w-full text-destructive hover:bg-destructive/10 hover:text-destructive border-border" onClick={() => setDeleteConfirmOpen(true)} disabled={deleteMutation.isPending}>
-              <Trash2 className="w-4 h-4 mr-2" /> Delete Asset
-            </Button>
-          </div>
+          )}
         </SheetContent>
       </Sheet>
       <AlertDialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
@@ -842,7 +878,7 @@ function VisualAssetCard({ asset, selected, onToggleSelect, bulkMode }: { asset:
   );
 }
 
-function BriefsTab({ briefs, brands, isLoading }: { briefs: Asset[], brands: any[], isLoading: boolean }) {
+function BriefsTab({ briefs, brands, isLoading, canWrite }: { briefs: Asset[], brands: any[], isLoading: boolean, canWrite: boolean }) {
   const [isAddOpen, setIsAddOpen] = useState(false);
   const { register, handleSubmit, reset } = useForm();
   const queryClient = useQueryClient();
@@ -874,7 +910,14 @@ function BriefsTab({ briefs, brands, isLoading }: { briefs: Asset[], brands: any
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ids: Array.from(selectedIds) }),
       });
-      if (!res.ok) throw new Error("Bulk delete failed");
+      if (!res.ok) {
+        if (isForbidden(res)) {
+          setDeleteConfirmOpen(false);
+          toast({ variant: "destructive", title: PERMISSION_DENIED_MESSAGE });
+          return;
+        }
+        throw new Error("Bulk delete failed");
+      }
       const data = await res.json();
       queryClient.invalidateQueries({ queryKey: ["/api/assets"] });
       clearSelection();
@@ -896,6 +939,12 @@ function BriefsTab({ briefs, brands, isLoading }: { briefs: Asset[], brands: any
         setIsAddOpen(false);
         reset();
         toast({ title: "Brief created" });
+      },
+      onError: (err: unknown) => {
+        toast({
+          variant: "destructive",
+          title: isForbidden(err) ? PERMISSION_DENIED_MESSAGE : "Failed to create brief",
+        });
       }
     }
   });
@@ -922,9 +971,11 @@ function BriefsTab({ briefs, brands, isLoading }: { briefs: Asset[], brands: any
           <Button size="sm" variant="outline" onClick={selectAll} className="border-primary/30 text-primary hover:bg-primary/20">
             Select All
           </Button>
-          <Button size="sm" onClick={() => setDeleteConfirmOpen(true)} disabled={bulkLoading} className="bg-destructive hover:bg-destructive/90 text-destructive-foreground">
-            <Trash2 className="w-3.5 h-3.5 mr-1.5" /> Delete Selected
-          </Button>
+          {canWrite && (
+            <Button size="sm" onClick={() => setDeleteConfirmOpen(true)} disabled={bulkLoading} className="bg-destructive hover:bg-destructive/90 text-destructive-foreground">
+              <Trash2 className="w-3.5 h-3.5 mr-1.5" /> Delete Selected
+            </Button>
+          )}
           <Button size="sm" variant="ghost" onClick={clearSelection} className="text-muted-foreground">
             <X className="w-3.5 h-3.5 mr-1" /> Clear
           </Button>
@@ -953,6 +1004,7 @@ function BriefsTab({ briefs, brands, isLoading }: { briefs: Asset[], brands: any
         </AlertDialogContent>
       </AlertDialog>
 
+      {canWrite && (
       <div className="flex justify-end">
         <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
           <DialogTrigger asChild>
@@ -986,6 +1038,7 @@ function BriefsTab({ briefs, brands, isLoading }: { briefs: Asset[], brands: any
           </DialogContent>
         </Dialog>
       </div>
+      )}
 
       {isLoading ? (
         <div className="space-y-4">
@@ -1001,17 +1054,19 @@ function BriefsTab({ briefs, brands, isLoading }: { briefs: Asset[], brands: any
               "bg-card border rounded-xl p-4 flex flex-col md:flex-row gap-4 transition-colors",
               isSelected ? "border-primary ring-1 ring-primary/50" : "border-border hover:border-primary/50"
             )}>
-              <button
-                type="button"
-                onClick={() => toggleSelection(brief.id)}
-                className={cn(
-                  "shrink-0 self-start mt-1 transition-colors",
-                  isSelected ? "text-primary" : "text-muted-foreground/50 hover:text-primary"
-                )}
-                aria-label={isSelected ? "Deselect brief" : "Select brief"}
-              >
-                {isSelected ? <CheckSquare className="w-5 h-5" /> : <Square className="w-5 h-5" />}
-              </button>
+              {canWrite && (
+                <button
+                  type="button"
+                  onClick={() => toggleSelection(brief.id)}
+                  className={cn(
+                    "shrink-0 self-start mt-1 transition-colors",
+                    isSelected ? "text-primary" : "text-muted-foreground/50 hover:text-primary"
+                  )}
+                  aria-label={isSelected ? "Deselect brief" : "Select brief"}
+                >
+                  {isSelected ? <CheckSquare className="w-5 h-5" /> : <Square className="w-5 h-5" />}
+                </button>
+              )}
               <div className="flex-1">
                 <div className="flex items-center gap-2 mb-2">
                   <h4 className="font-bold text-lg text-foreground">{brief.name}</h4>
@@ -1026,9 +1081,11 @@ function BriefsTab({ briefs, brands, isLoading }: { briefs: Asset[], brands: any
                   </div>
                 )}
               </div>
-              <div className="flex items-center md:items-start gap-2 shrink-0 md:pl-4 md:border-l border-border">
-                <Button variant="ghost" size="sm"><Edit2 className="w-4 h-4 mr-2" /> Edit</Button>
-              </div>
+              {canWrite && (
+                <div className="flex items-center md:items-start gap-2 shrink-0 md:pl-4 md:border-l border-border">
+                  <Button variant="ghost" size="sm"><Edit2 className="w-4 h-4 mr-2" /> Edit</Button>
+                </div>
+              )}
             </div>
             );
           })}
@@ -1204,7 +1261,7 @@ function IntelligenceEditor({ asset, onUpdate, isPending }: { asset: Asset; onUp
   );
 }
 
-function HashtagsTab({ sets, brands }: { sets: HashtagSet[], brands: any[] }) {
+function HashtagsTab({ sets, brands, canWrite }: { sets: HashtagSet[], brands: any[], canWrite: boolean }) {
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [setToDelete, setSetToDelete] = useState<HashtagSet | null>(null);
   const { register, handleSubmit, reset } = useForm();
@@ -1218,6 +1275,12 @@ function HashtagsTab({ sets, brands }: { sets: HashtagSet[], brands: any[] }) {
         setIsAddOpen(false);
         reset();
         toast({ title: "Hashtag set created" });
+      },
+      onError: (err: unknown) => {
+        toast({
+          variant: "destructive",
+          title: isForbidden(err) ? PERMISSION_DENIED_MESSAGE : "Failed to create hashtag set",
+        });
       }
     }
   });
@@ -1228,6 +1291,13 @@ function HashtagsTab({ sets, brands }: { sets: HashtagSet[], brands: any[] }) {
         queryClient.invalidateQueries({ queryKey: ["/api/hashtag-sets"] });
         toast({ title: "Deleted" });
         setSetToDelete(null);
+      },
+      onError: (err: unknown) => {
+        setSetToDelete(null);
+        toast({
+          variant: "destructive",
+          title: isForbidden(err) ? PERMISSION_DENIED_MESSAGE : "Failed to delete hashtag set",
+        });
       }
     }
   });
@@ -1253,6 +1323,7 @@ function HashtagsTab({ sets, brands }: { sets: HashtagSet[], brands: any[] }) {
 
   return (
     <div className="space-y-8">
+      {canWrite && (
       <div className="flex justify-end mb-4">
         <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
           <DialogTrigger asChild>
@@ -1290,6 +1361,7 @@ function HashtagsTab({ sets, brands }: { sets: HashtagSet[], brands: any[] }) {
           </DialogContent>
         </Dialog>
       </div>
+      )}
 
       {sets.length === 0 ? (
         <div className="flex flex-col items-center justify-center h-64 text-center border border-border border-dashed rounded-xl bg-card/30">
@@ -1315,14 +1387,16 @@ function HashtagsTab({ sets, brands }: { sets: HashtagSet[], brands: any[] }) {
                         <h4 className="font-bold">{set.name}</h4>
                         <Badge variant="outline" className="text-[10px] mt-1">{brands.find(b => b.id === set.brandId)?.name || 'Unknown'}</Badge>
                       </div>
-                      <Button 
-                        variant="ghost" 
-                        size="icon" 
-                        className="opacity-0 group-hover:opacity-100 text-destructive hover:bg-destructive/10 hover:text-destructive h-8 w-8"
-                        onClick={() => setSetToDelete(set)}
-                      >
-                        <Trash2 size={14} />
-                      </Button>
+                      {canWrite && (
+                        <Button 
+                          variant="ghost" 
+                          size="icon" 
+                          className="opacity-0 group-hover:opacity-100 text-destructive hover:bg-destructive/10 hover:text-destructive h-8 w-8"
+                          onClick={() => setSetToDelete(set)}
+                        >
+                          <Trash2 size={14} />
+                        </Button>
+                      )}
                     </div>
                     <div className="flex flex-wrap gap-1.5">
                       {set.hashtags.map((tag:string, i:number) => (
