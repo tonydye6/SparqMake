@@ -22,7 +22,8 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { validateUploadedFile, validateFontFileBytes } from "../services/fileValidation.js";
-import { writeFromFile, deleteObject, resolveUrl } from "../services/storage.js";
+import { writeFromFile } from "../services/storage.js";
+import { softDeleteBackingObjects } from "../services/deletion.js";
 
 const router: IRouter = Router();
 
@@ -217,7 +218,31 @@ router.delete("/brands/:id/logos/:assetId", requireDestructive, async (req, res)
     return;
   }
 
-  await db.delete(assetsTable).where(eq(assetsTable.id, assetId));
+  // Delete the asset row AND clear any dangling brand references to it in the
+  // same transaction, so no brand row is left pointing at the (soon soft-deleted)
+  // logo file.
+  await db.transaction(async (tx) => {
+    await tx.delete(assetsTable).where(eq(assetsTable.id, assetId));
+
+    const [brand] = await tx.select().from(brandsTable).where(eq(brandsTable.id, brandId));
+    if (!brand) return;
+
+    const updates: Record<string, unknown> = {};
+    if (brand.logoFileUrl && brand.logoFileUrl === asset.fileUrl) {
+      updates.logoFileUrl = null;
+    }
+    const config = (brand.brandAssetConfig || {}) as Record<string, unknown>;
+    if (config.primaryLogoAssetId === assetId || config.secondaryLogoAssetId === assetId) {
+      const next = { ...config };
+      if (next.primaryLogoAssetId === assetId) delete next.primaryLogoAssetId;
+      if (next.secondaryLogoAssetId === assetId) delete next.secondaryLogoAssetId;
+      updates.brandAssetConfig = next;
+    }
+    if (Object.keys(updates).length > 0) {
+      updates.updatedAt = new Date();
+      await tx.update(brandsTable).set(updates).where(eq(brandsTable.id, brandId));
+    }
+  });
 
   await recordAudit({
     actor: actorFromRequest(req),
@@ -228,12 +253,12 @@ router.delete("/brands/:id/logos/:assetId", requireDestructive, async (req, res)
     metadata: { name: asset.name },
   });
 
-  const loc = resolveUrl(asset.fileUrl);
-  if (loc) {
-    try { await deleteObject(loc); } catch { /* ignore */ }
-  }
+  const cleanup = await softDeleteBackingObjects([asset.fileUrl]);
 
-  res.json({ message: "Logo deleted" });
+  res.json({
+    message: "Logo deleted",
+    ...(cleanup.failed.length > 0 ? { storageCleanupFailed: cleanup.failed } : {}),
+  });
 });
 
 router.get("/brands/:id/fonts", async (req, res): Promise<void> => {
@@ -340,7 +365,19 @@ router.delete("/brands/:id/fonts/:assetId", requireDestructive, async (req, res)
     return;
   }
 
-  await db.delete(assetsTable).where(eq(assetsTable.id, assetId));
+  // Delete the asset row AND drop the font from the brand's brandFonts list in
+  // the same transaction, so the brand never references a soft-deleted font file.
+  await db.transaction(async (tx) => {
+    await tx.delete(assetsTable).where(eq(assetsTable.id, assetId));
+
+    const [brand] = await tx.select().from(brandsTable).where(eq(brandsTable.id, brandId));
+    if (brand?.brandFonts) {
+      const fonts = (brand.brandFonts as Array<Record<string, unknown>>).filter(f => f.assetId !== assetId);
+      await tx.update(brandsTable)
+        .set({ brandFonts: fonts, updatedAt: new Date() })
+        .where(eq(brandsTable.id, brandId));
+    }
+  });
 
   await recordAudit({
     actor: actorFromRequest(req),
@@ -351,20 +388,12 @@ router.delete("/brands/:id/fonts/:assetId", requireDestructive, async (req, res)
     metadata: { name: asset.name },
   });
 
-  const loc = resolveUrl(asset.fileUrl);
-  if (loc) {
-    try { await deleteObject(loc); } catch { /* ignore */ }
-  }
+  const cleanup = await softDeleteBackingObjects([asset.fileUrl]);
 
-  const [brand] = await db.select().from(brandsTable).where(eq(brandsTable.id, brandId));
-  if (brand?.brandFonts) {
-    const fonts = (brand.brandFonts as Array<Record<string, unknown>>).filter(f => f.assetId !== assetId);
-    await db.update(brandsTable)
-      .set({ brandFonts: fonts, updatedAt: new Date() })
-      .where(eq(brandsTable.id, brandId));
-  }
-
-  res.json({ message: "Font deleted" });
+  res.json({
+    message: "Font deleted",
+    ...(cleanup.failed.length > 0 ? { storageCleanupFailed: cleanup.failed } : {}),
+  });
 });
 
 const AssetConfigSchema = z.object({

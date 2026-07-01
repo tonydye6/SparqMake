@@ -338,23 +338,51 @@ export async function writeFromFile(
 }
 
 /**
+ * Result of a delete attempt. `ok` is true when the live object is gone from
+ * every backend (removed, or already absent) — i.e. the delete left storage in
+ * the intended state. `ok` is false when a live copy could NOT be safely removed
+ * (e.g. a soft-delete trash copy failed, so the live object was intentionally
+ * left intact) — callers should surface this rather than swallow it. `error`
+ * carries a short reason when `ok` is false. `deleteObject` never throws for a
+ * storage-level failure; the failure is reported via this result.
+ */
+export interface DeleteResult {
+  ok: boolean;
+  error?: string;
+}
+
+/**
  * Delete an object. Soft-delete (default) moves it to a `trash/` prefix so it
  * can be recovered within the retention window before the cleanup sweep purges
- * it. Hard delete removes it immediately. Missing objects are ignored.
+ * it. Hard delete removes it immediately. Missing objects count as success.
+ *
+ * The object may live in both the bucket and on disk (dual backend); the result
+ * is `ok` only when the live copy was cleared from every backend that has it, so
+ * a caller can trust that a `ok:true` delete leaves no live object behind.
  */
 export async function deleteObject(
   loc: StorageLocation,
   opts: { soft?: boolean } = {},
-): Promise<void> {
-  if (!isSafeFilename(loc.filename)) return;
+): Promise<DeleteResult> {
+  if (!isSafeFilename(loc.filename)) return { ok: false, error: "unsafe filename" };
   const soft = opts.soft !== false;
   const key = bucketKey(loc);
   cacheInvalidate(key);
 
+  let ok = true;
+  let error: string | undefined;
+  const fail = (reason: string) => {
+    ok = false;
+    error = error ?? reason;
+  };
+
   if (OBJECT_STORAGE_CONFIGURED) {
     try {
       const exists = await client().exists(key);
-      if (exists.ok && exists.value) {
+      if (!exists.ok) {
+        logger.error({ key, err: exists.error }, "Object storage exists check failed");
+        fail("bucket exists check failed");
+      } else if (exists.value) {
         if (soft) {
           const trashKey = TRASH_PREFIX + key;
           const copied = await client().copy(key, trashKey);
@@ -365,15 +393,25 @@ export async function deleteObject(
               { key, err: copied.error },
               "Soft-delete copy to trash failed; leaving live object intact",
             );
+            fail("trash copy failed");
           } else {
-            await client().delete(key, { ignoreNotFound: true });
+            const del = await client().delete(key, { ignoreNotFound: true });
+            if (!del.ok) {
+              logger.error({ key, err: del.error }, "Object storage delete failed after trash copy");
+              fail("bucket delete failed");
+            }
           }
         } else {
-          await client().delete(key, { ignoreNotFound: true });
+          const del = await client().delete(key, { ignoreNotFound: true });
+          if (!del.ok) {
+            logger.error({ key, err: del.error }, "Object storage delete failed");
+            fail("bucket delete failed");
+          }
         }
       }
     } catch (err) {
       logger.error({ err, key }, "Object storage delete failed");
+      fail("bucket delete threw");
     }
   }
 
@@ -392,8 +430,11 @@ export async function deleteObject(
       }
     } catch (err) {
       logger.error({ err, loc }, "Disk delete failed");
+      fail("disk delete failed");
     }
   }
+
+  return { ok, error };
 }
 
 // ---------------------------------------------------------------------------

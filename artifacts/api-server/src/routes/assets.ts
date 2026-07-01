@@ -16,19 +16,9 @@ import {
 } from "@workspace/api-zod";
 import { backfillAssetClassifications } from "../services/backfill-assets.js";
 import { validateRequest } from "../middleware/validate.js";
-import { deleteObject, resolveUrl } from "../services/storage.js";
 import { requireBulkMutation, requireDestructive } from "../middleware/auth.js";
 import { recordAudit, actorFromRequest } from "../lib/audit.js";
-
-/** Soft-delete the storage objects backing an asset row (fileUrl + thumbnailUrl). */
-async function deleteAssetObjects(rows: { fileUrl: string | null; thumbnailUrl: string | null }[]): Promise<void> {
-  for (const row of rows) {
-    for (const url of [row.fileUrl, row.thumbnailUrl]) {
-      const loc = resolveUrl(url);
-      if (loc) await deleteObject(loc);
-    }
-  }
-}
+import { softDeleteBackingObjects, MAX_BULK_DELETE } from "../services/deletion.js";
 
 interface AuthenticatedUser {
   id: string;
@@ -180,23 +170,44 @@ router.post("/assets/bulk-delete", requireBulkMutation, async (req, res): Promis
     return;
   }
 
-  const deleted = await db
-    .delete(assetsTable)
-    .where(inArray(assetsTable.id, ids))
-    .returning();
+  // De-duplicate before enforcing the cap so a caller passing repeats isn't
+  // rejected for exceeding a limit it doesn't actually hit.
+  const uniqueIds = [...new Set(ids)];
+  if (uniqueIds.length > MAX_BULK_DELETE) {
+    res.status(400).json({
+      error: `Too many ids: ${uniqueIds.length}. A single bulk delete accepts at most ${MAX_BULK_DELETE}.`,
+    });
+    return;
+  }
+
+  // Transactional DB delete first (preserves "no DB row points at a missing
+  // file"), then recoverable soft-delete of the backing storage objects.
+  const deleted = await db.transaction(async (tx) =>
+    tx.delete(assetsTable).where(inArray(assetsTable.id, uniqueIds)).returning(),
+  );
+
+  const deletedIds = deleted.map((a) => a.id);
+  const notFound = uniqueIds.filter((id) => !deletedIds.includes(id));
 
   await recordAudit({
     actor: actorFromRequest(req),
     action: "asset.bulk_delete",
     entityType: "asset",
-    entityIds: deleted.map((a) => a.id),
+    entityIds: deletedIds,
     affectedCount: deleted.length,
-    metadata: { requestedIds: ids.length },
+    metadata: { requestedIds: uniqueIds.length, notFound: notFound.length },
   });
 
-  await deleteAssetObjects(deleted);
+  const cleanup = await softDeleteBackingObjects(
+    deleted.flatMap((a) => [a.fileUrl, a.thumbnailUrl]),
+  );
 
-  res.json({ deleted: deleted.length });
+  res.json({
+    deleted: deleted.length,
+    deletedIds,
+    notFound,
+    storageCleanupFailed: cleanup.failed,
+  });
 });
 
 router.get("/assets/recommended", async (req, res): Promise<void> => {
@@ -359,9 +370,12 @@ router.delete("/assets/:id", requireDestructive, validateRequest({ params: Delet
     metadata: { name: asset.name },
   });
 
-  await deleteAssetObjects([asset]);
+  const cleanup = await softDeleteBackingObjects([asset.fileUrl, asset.thumbnailUrl]);
 
-  res.json(DeleteAssetResponse.parse({ message: "Asset deleted" }));
+  res.json({
+    ...DeleteAssetResponse.parse({ message: "Asset deleted" }),
+    ...(cleanup.failed.length > 0 ? { storageCleanupFailed: cleanup.failed } : {}),
+  });
 });
 
 router.get("/assets/:id/usage", async (req, res): Promise<void> => {

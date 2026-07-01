@@ -110,14 +110,47 @@ The `@replit/object-storage` SDK exposes no per-object timestamp, so the bucket 
 is purged wholesale (only with `--purge`); the disk side honors `--older-than-days`
 via file mtime.
 
-### Record deletes also soft-delete backing objects
+### Drift-safe record deletes (DB ↔ storage)
 
 Deleting a DB row that owns files must move those objects to `trash/` too, or the
 bucket accumulates unreferenced data (disk used to self-clear on restart; the bucket
-does not). All destructive asset endpoints (`DELETE /assets/:id`,
-`POST /assets/bulk-delete`) resolve each returned row's `fileUrl`/`thumbnailUrl` and
-soft-delete the objects after the DB delete. Use the returned rows (`.returning()`)
-so the URLs are known after deletion.
+does not). The single delete contract, applied uniformly and implemented in
+`src/services/deletion.ts` (`softDeleteBackingObjects`), is **transaction +
+reconciliation**:
+
+1. **DB first, transactionally.** The owning row(s) are deleted inside
+   `db.transaction()` (which also clears any sibling references in the same commit —
+   e.g. `brands.logoFileUrl` / `brandAssetConfig` / `brandFonts` when a brand
+   logo/font asset is deleted). The row is gone *before* storage is touched, so the
+   user-visible invariant "no DB row points at a missing file" always holds.
+2. **Then recoverable soft-delete of every backing object.** Each returned row's
+   file URLs (`fileUrl`/`thumbnailUrl`, etc.) are resolved and soft-deleted. The
+   per-object outcome is aggregated and **reported, never swallowed** — the old
+   silent `catch { /* ignore */ }` on brand logo/font deletes is gone, and
+   `deleteObject` now returns `{ ok, error }` instead of `void`.
+3. **Residual drift is reconciled by the sweep.** If a storage object cannot be
+   removed (e.g. a trash-copy failure leaves the live object intact), the result is
+   an *orphaned object* (never a dangling DB reference), reconciled later by the
+   orphan sweep below.
+
+Endpoints on this contract: `DELETE /assets/:id`, `POST /assets/bulk-delete`,
+`DELETE /brands/:id/logos/:assetId`, `DELETE /brands/:id/fonts/:assetId`.
+
+**Partial-failure reporting & batch cap.** `POST /assets/bulk-delete` de-duplicates
+ids, enforces a cap of `MAX_BULK_DELETE` (100) unique ids per call (`400` beyond
+that), and returns `{ deleted, deletedIds, notFound, storageCleanupFailed }` so a
+caller sees exactly which rows were removed, which ids didn't exist, and which
+objects failed to soft-delete. Single-object deletes add `storageCleanupFailed` to
+their response only when a cleanup failure occurred.
+
+**Cascade deletes.** Hard-deleting a creative cascades (`ON DELETE CASCADE`) to
+`creative_variants`, whose generated media (`rawImageUrl`, `compositedImageUrl`,
+`videoUrl`, `audioUrl`, `mergedVideoUrl`) would otherwise be orphaned. There is no
+hard-delete route for creatives or brands today (brand delete is a soft archive,
+`isActive=false`), so no cascade currently runs; if one is added, its cascade-orphaned
+media is caught by the **orphan sweep**, which inventories every `creative_variants`
+media column via `gatherFileReferences`. That sweep is the documented reconciliation
+path for cascade orphans rather than a bespoke per-route cleanup.
 
 ## Orphan sweep (live → trash)
 

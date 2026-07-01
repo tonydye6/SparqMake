@@ -20,6 +20,21 @@ description: Durable constraints for any age-based or recoverable cleanup of Rep
   in place and surface the error; objects in `trash/` are purged later by a separate
   recovery-window sweep, never inline.
 
+- **Record-delete contract is DB-first-transactional, then soft-delete storage,
+  then orphan-sweep reconciles.** `deleteObject` returns `{ ok, error }` (not
+  `void`); `softDeleteBackingObjects` in `src/services/deletion.ts` aggregates
+  per-URL results so callers report partial failure (never swallow). Deleting the
+  DB row before touching storage means the only failure drift is an orphan file
+  (safe, swept later) — never a dangling DB reference (user-visible broken media).
+  **Why:** the two drift directions are not symmetric; keep the safe one.
+
+- **Regeneration is NOT a storage orphan source — don't "fix" it.** `generate.ts`
+  regen deletes+reinserts `creative_variants` but the new variant filenames are
+  deterministic (`${creativeId}_${platform}_raw|composited.png`), so new writes
+  overwrite the same object keys. Soft-deleting the "old" URLs there would delete
+  the just-written live files. Only a changed platform set leaves a stray, which
+  the orphan sweep handles. **Why:** looks like an orphan bug but isn't.
+
 - **True ranged reads are possible despite the typed API hiding them.**
   `Client.downloadAsStream(key, opts)` forwards `opts` straight to the underlying
   `@google-cloud/storage` `file.createReadStream(opts)`, so passing `{ start, end }`

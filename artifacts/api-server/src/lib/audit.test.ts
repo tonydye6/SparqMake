@@ -80,6 +80,7 @@ const db = {
     set: () => ({ where: () => ({ returning: () => Promise.resolve(updateReturn) }) }),
   }),
   select: () => selectChain(),
+  transaction: async <T>(fn: (tx: unknown) => Promise<T>): Promise<T> => fn(db),
 };
 
 vi.mock("@workspace/db", () => ({
