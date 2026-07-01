@@ -7,6 +7,7 @@ import { z } from "zod";
 import { validateRequest } from "../middleware/validate.js";
 import { logger } from "../lib/logger";
 import { requireDestructive } from "../middleware/auth.js";
+import { recordAudit, actorFromRequest } from "../lib/audit.js";
 
 const CreateCalendarEntryBody = z.object({
   creativeId: z.string().min(1),
@@ -230,6 +231,14 @@ router.delete("/calendar-entries/:id", requireDestructive, validateRequest({ par
     res.status(404).json({ error: "Calendar entry not found" });
     return;
   }
+
+  await recordAudit({
+    actor: actorFromRequest(req),
+    action: "calendar_entry.delete",
+    entityType: "calendar_entry",
+    entityIds: [entry.id],
+    metadata: { platform: entry.platform, creativeId: entry.creativeId },
+  });
 
   res.json({ message: "Calendar entry deleted" });
 });

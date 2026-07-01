@@ -17,6 +17,7 @@ import {
 import { analyzeTemplate } from "../services/refinement-analysis.js";
 import { validateRequest } from "../middleware/validate.js";
 import { requireDestructive } from "../middleware/auth.js";
+import { recordAudit, actorFromRequest } from "../lib/audit.js";
 
 const router: IRouter = Router();
 
@@ -100,6 +101,14 @@ router.delete("/templates/:id", requireDestructive, validateRequest({ params: De
     res.status(404).json({ error: "Template not found" });
     return;
   }
+
+  await recordAudit({
+    actor: actorFromRequest(req),
+    action: "template.delete",
+    entityType: "template",
+    entityIds: [template.id],
+    metadata: { name: template.name },
+  });
 
   res.json(DeleteTemplateResponse.parse({ message: "Template deleted" }));
 });

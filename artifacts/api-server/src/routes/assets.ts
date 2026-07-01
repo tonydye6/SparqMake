@@ -18,6 +18,7 @@ import { backfillAssetClassifications } from "../services/backfill-assets.js";
 import { validateRequest } from "../middleware/validate.js";
 import { deleteObject, resolveUrl } from "../services/storage.js";
 import { requireBulkMutation, requireDestructive } from "../middleware/auth.js";
+import { recordAudit, actorFromRequest } from "../lib/audit.js";
 
 /** Soft-delete the storage objects backing an asset row (fileUrl + thumbnailUrl). */
 async function deleteAssetObjects(rows: { fileUrl: string | null; thumbnailUrl: string | null }[]): Promise<void> {
@@ -184,6 +185,15 @@ router.post("/assets/bulk-delete", requireBulkMutation, async (req, res): Promis
     .where(inArray(assetsTable.id, ids))
     .returning();
 
+  await recordAudit({
+    actor: actorFromRequest(req),
+    action: "asset.bulk_delete",
+    entityType: "asset",
+    entityIds: deleted.map((a) => a.id),
+    affectedCount: deleted.length,
+    metadata: { requestedIds: ids.length },
+  });
+
   await deleteAssetObjects(deleted);
 
   res.json({ deleted: deleted.length });
@@ -339,6 +349,15 @@ router.delete("/assets/:id", requireDestructive, validateRequest({ params: Delet
     res.status(404).json({ error: "Asset not found" });
     return;
   }
+
+  await recordAudit({
+    actor: actorFromRequest(req),
+    action: "asset.delete",
+    entityType: "asset",
+    entityIds: [asset.id],
+    brandId: asset.brandId,
+    metadata: { name: asset.name },
+  });
 
   await deleteAssetObjects([asset]);
 

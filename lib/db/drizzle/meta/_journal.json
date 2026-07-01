@@ -50,6 +50,13 @@
       "when": 1780810906150,
       "tag": "0006_brand_design_systems",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1782930604844,
+      "tag": "0007_black_king_cobra",
+      "breakpoints": true
     }
   ]
 }

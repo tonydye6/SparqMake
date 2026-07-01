@@ -8,6 +8,7 @@ import { z } from "zod";
 import { validateRequest } from "../middleware/validate.js";
 import { validateCsvBuffer } from "../services/fileValidation.js";
 import { requireDestructive } from "../middleware/auth.js";
+import { recordAudit, actorFromRequest } from "../lib/audit.js";
 
 const UpdatePlanItemBody = z.object({
   title: z.string().min(1).max(500).optional(),
@@ -288,6 +289,13 @@ router.delete("/content-plan/:id", requireDestructive, async (req, res): Promise
     res.status(404).json({ error: "Plan item not found" });
     return;
   }
+
+  await recordAudit({
+    actor: actorFromRequest(req),
+    action: "content_plan.delete",
+    entityType: "content_plan_item",
+    entityIds: [item.id],
+  });
 
   res.json({ deleted: true });
 });

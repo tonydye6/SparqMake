@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import { eq, and, sql } from "drizzle-orm";
 import { db, hashtagSetsTable } from "@workspace/db";
 import { requireDestructive } from "../middleware/auth.js";
+import { recordAudit, actorFromRequest } from "../lib/audit.js";
 import {
   GetHashtagSetsQueryParams,
   CreateHashtagSetBody,
@@ -91,6 +92,14 @@ router.delete("/hashtag-sets/:id", requireDestructive, async (req, res): Promise
     res.status(404).json({ error: "Hashtag set not found" });
     return;
   }
+
+  await recordAudit({
+    actor: actorFromRequest(req),
+    action: "hashtag_set.delete",
+    entityType: "hashtag_set",
+    entityIds: [set.id],
+    brandId: set.brandId ?? null,
+  });
 
   res.json(DeleteHashtagSetResponse.parse({ message: "Hashtag set deleted" }));
 });

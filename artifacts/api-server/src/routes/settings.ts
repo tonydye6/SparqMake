@@ -4,6 +4,7 @@ import { db, appSettingsTable, costLogsTable } from "@workspace/db";
 import { z } from "zod";
 import { validateRequest } from "../middleware/validate.js";
 import { requireRole } from "../middleware/auth.js";
+import { recordAudit, actorFromRequest } from "../lib/audit.js";
 
 const ALLOWED_SETTING_KEYS = [
   "dailyCostThreshold",
@@ -33,6 +34,7 @@ router.get("/settings", async (_req, res): Promise<void> => {
 router.put("/settings", requireRole("admin"), validateRequest({ body: UpdateSettingsBody }), async (req, res): Promise<void> => {
   const updates = req.body as Record<string, unknown>;
 
+  const changedKeys: string[] = [];
   for (const [key, value] of Object.entries(updates)) {
     if (typeof value !== "string") continue;
     if (!ALLOWED_SET.has(key)) continue;
@@ -43,6 +45,18 @@ router.put("/settings", requireRole("admin"), validateRequest({ body: UpdateSett
         target: appSettingsTable.key,
         set: { value, updatedAt: new Date() },
       });
+    changedKeys.push(key);
+  }
+
+  if (changedKeys.length > 0) {
+    await recordAudit({
+      actor: actorFromRequest(req),
+      action: "settings.update",
+      entityType: "setting",
+      entityIds: changedKeys,
+      affectedCount: changedKeys.length,
+      metadata: { keys: changedKeys },
+    });
   }
 
   const rows = await db.select().from(appSettingsTable).where(inArray(appSettingsTable.key, [...ALLOWED_SETTING_KEYS]));

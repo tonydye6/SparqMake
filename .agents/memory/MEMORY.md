@@ -9,3 +9,4 @@
 - [api-server storage tests + ownership](api-server-storage-tests.md) — chdir-before-import for disk-backend vitest; file ownership is reference-based (no user→brand tenant model).
 - [Dev-bypass user lifecycle](dev-bypass-user-lifecycle.md) — create is insert-only (email freezes/drifts); removal only at startup; cleanup deletes by fixed id OR historical emails, so stale prod rows need a redeploy.
 - [Object Storage cleanup & aging](object-storage-cleanup.md) — `@replit/object-storage` StorageObject has no timestamp; bucket objects cannot be age-gated, so cleanup/sweep use disk mtime + opt-in + trash recovery.
+- [Audit logging](audit-logging.md) — `recordAudit` must run AFTER the primary op and never throw; `brandId` nullable no-FK (future tenancy); no-op deletes must not audit; content_plan has no brandId.

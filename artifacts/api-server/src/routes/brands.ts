@@ -15,6 +15,7 @@ import {
 } from "@workspace/api-zod";
 import { validateRequest } from "../middleware/validate.js";
 import { requireDestructive } from "../middleware/auth.js";
+import { recordAudit, actorFromRequest } from "../lib/audit.js";
 import { z } from "zod";
 import multer from "multer";
 import * as fs from "fs";
@@ -104,6 +105,15 @@ router.delete("/brands/:id", requireDestructive, validateRequest({ params: Delet
     res.status(404).json({ error: "Brand not found" });
     return;
   }
+
+  await recordAudit({
+    actor: actorFromRequest(req),
+    action: "brand.archive",
+    entityType: "brand",
+    entityIds: [brand.id],
+    brandId: brand.id,
+    metadata: { name: brand.name },
+  });
 
   res.json(DeleteBrandResponse.parse({ message: "Brand archived" }));
 });
@@ -208,6 +218,15 @@ router.delete("/brands/:id/logos/:assetId", requireDestructive, async (req, res)
   }
 
   await db.delete(assetsTable).where(eq(assetsTable.id, assetId));
+
+  await recordAudit({
+    actor: actorFromRequest(req),
+    action: "brand.logo_delete",
+    entityType: "asset",
+    entityIds: [assetId],
+    brandId,
+    metadata: { name: asset.name },
+  });
 
   const loc = resolveUrl(asset.fileUrl);
   if (loc) {
@@ -322,6 +341,15 @@ router.delete("/brands/:id/fonts/:assetId", requireDestructive, async (req, res)
   }
 
   await db.delete(assetsTable).where(eq(assetsTable.id, assetId));
+
+  await recordAudit({
+    actor: actorFromRequest(req),
+    action: "brand.font_delete",
+    entityType: "asset",
+    entityIds: [assetId],
+    brandId,
+    metadata: { name: asset.name },
+  });
 
   const loc = resolveUrl(asset.fileUrl);
   if (loc) {

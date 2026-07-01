@@ -11,3 +11,4 @@ export * from "./users";
 export * from "./social-accounts";
 export * from "./settings";
 export * from "./social-content-plan-items";
+export * from "./audit-logs";

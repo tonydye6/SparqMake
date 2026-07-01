@@ -5,6 +5,7 @@ import { eq } from "drizzle-orm";
 import { decryptToken, encryptToken } from "../services/token-encryption";
 import { logger } from "../lib/logger";
 import { requireStandardWrite, requireDestructive } from "../middleware/auth";
+import { recordAudit, actorFromRequest } from "../lib/audit";
 
 async function isDefinitiveTokenFailure(resp: Response): Promise<boolean> {
   if (resp.status >= 400 && resp.status < 500) {
@@ -101,6 +102,16 @@ router.delete("/social-accounts/:id", requireDestructive, async (req, res) => {
       res.status(404).json({ error: "Social account not found" });
       return;
     }
+
+    const account = deleted[0];
+    await recordAudit({
+      actor: actorFromRequest(req),
+      action: "social_account.delete",
+      entityType: "social_account",
+      entityIds: [account.id],
+      brandId: account.brandId,
+      metadata: { platform: account.platform, accountName: account.accountName },
+    });
 
     res.json({ success: true });
   } catch (err) {
