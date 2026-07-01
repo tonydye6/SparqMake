@@ -4,7 +4,7 @@ import { db, socialAccountsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { decryptToken, encryptToken } from "../services/token-encryption";
 import { logger } from "../lib/logger";
-import { requireRole } from "../middleware/auth";
+import { requireStandardWrite, requireDestructive } from "../middleware/auth";
 
 async function isDefinitiveTokenFailure(resp: Response): Promise<boolean> {
   if (resp.status >= 400 && resp.status < 500) {
@@ -88,7 +88,7 @@ router.get("/social-accounts/platform/:platform", async (req, res) => {
   }
 });
 
-router.delete("/social-accounts/:id", requireRole("admin"), async (req, res) => {
+router.delete("/social-accounts/:id", requireDestructive, async (req, res) => {
   try {
     const id = str(req.params.id);
 
@@ -109,7 +109,7 @@ router.delete("/social-accounts/:id", requireRole("admin"), async (req, res) => 
   }
 });
 
-router.post("/social-accounts/:id/refresh", requireRole("editor"), async (req, res) => {
+router.post("/social-accounts/:id/refresh", requireStandardWrite, async (req, res) => {
   try {
     const id = str(req.params.id);
 

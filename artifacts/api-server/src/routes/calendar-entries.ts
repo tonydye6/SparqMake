@@ -6,6 +6,7 @@ import { publishEntry } from "../services/publish-scheduler";
 import { z } from "zod";
 import { validateRequest } from "../middleware/validate.js";
 import { logger } from "../lib/logger";
+import { requireDestructive } from "../middleware/auth.js";
 
 const CreateCalendarEntryBody = z.object({
   creativeId: z.string().min(1),
@@ -217,7 +218,7 @@ router.post("/calendar-entries/:id/retry", validateRequest({ params: IdParams })
   res.json({ message: "Retry initiated", entryId: id });
 });
 
-router.delete("/calendar-entries/:id", validateRequest({ params: IdParams }), async (req, res): Promise<void> => {
+router.delete("/calendar-entries/:id", requireDestructive, validateRequest({ params: IdParams }), async (req, res): Promise<void> => {
   const id = str(req.params.id);
 
   const [entry] = await db

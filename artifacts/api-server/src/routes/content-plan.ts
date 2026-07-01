@@ -7,6 +7,7 @@ import { parse as csvParseSync } from "csv-parse/sync";
 import { z } from "zod";
 import { validateRequest } from "../middleware/validate.js";
 import { validateCsvBuffer } from "../services/fileValidation.js";
+import { requireDestructive } from "../middleware/auth.js";
 
 const UpdatePlanItemBody = z.object({
   title: z.string().min(1).max(500).optional(),
@@ -278,7 +279,7 @@ router.put("/content-plan/:id", validateRequest({ body: UpdatePlanItemBody }), a
   res.json(item);
 });
 
-router.delete("/content-plan/:id", async (req, res): Promise<void> => {
+router.delete("/content-plan/:id", requireDestructive, async (req, res): Promise<void> => {
   const [item] = await db.delete(socialContentPlanItemsTable)
     .where(eq(socialContentPlanItemsTable.id, str(req.params.id)))
     .returning();

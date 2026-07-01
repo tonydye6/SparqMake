@@ -17,6 +17,7 @@ import {
 import { backfillAssetClassifications } from "../services/backfill-assets.js";
 import { validateRequest } from "../middleware/validate.js";
 import { deleteObject, resolveUrl } from "../services/storage.js";
+import { requireBulkMutation, requireDestructive } from "../middleware/auth.js";
 
 /** Soft-delete the storage objects backing an asset row (fileUrl + thumbnailUrl). */
 async function deleteAssetObjects(rows: { fileUrl: string | null; thumbnailUrl: string | null }[]): Promise<void> {
@@ -106,7 +107,7 @@ router.post("/assets", validateRequest({ body: CreateAssetBody }), async (req, r
 
 const VALID_ASSET_STATUSES = ["uploaded", "approved", "archived"];
 
-router.post("/assets/bulk-update", async (req, res): Promise<void> => {
+router.post("/assets/bulk-update", requireBulkMutation, async (req, res): Promise<void> => {
   const { ids, status, tags } = req.body as {
     ids?: string[];
     status?: string;
@@ -170,7 +171,7 @@ router.post("/assets/bulk-update", async (req, res): Promise<void> => {
   res.json({ updated: results.length, assets: results });
 });
 
-router.post("/assets/bulk-delete", async (req, res): Promise<void> => {
+router.post("/assets/bulk-delete", requireBulkMutation, async (req, res): Promise<void> => {
   const { ids } = req.body as { ids?: string[] };
 
   if (!ids || !Array.isArray(ids) || ids.length === 0) {
@@ -332,7 +333,7 @@ router.put("/assets/:id/metadata", async (req, res): Promise<void> => {
   res.json(asset);
 });
 
-router.delete("/assets/:id", validateRequest({ params: DeleteAssetParams }), async (req, res): Promise<void> => {
+router.delete("/assets/:id", requireDestructive, validateRequest({ params: DeleteAssetParams }), async (req, res): Promise<void> => {
   const [asset] = await db.delete(assetsTable).where(eq(assetsTable.id, str(req.params.id))).returning();
   if (!asset) {
     res.status(404).json({ error: "Asset not found" });

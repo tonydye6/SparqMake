@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import { eq, and, sql } from "drizzle-orm";
 import { db, hashtagSetsTable } from "@workspace/db";
+import { requireDestructive } from "../middleware/auth.js";
 import {
   GetHashtagSetsQueryParams,
   CreateHashtagSetBody,
@@ -78,7 +79,7 @@ router.put("/hashtag-sets/:id", async (req, res): Promise<void> => {
   res.json(UpdateHashtagSetResponse.parse(set));
 });
 
-router.delete("/hashtag-sets/:id", async (req, res): Promise<void> => {
+router.delete("/hashtag-sets/:id", requireDestructive, async (req, res): Promise<void> => {
   const params = DeleteHashtagSetParams.safeParse(req.params);
   if (!params.success) {
     res.status(400).json({ error: params.error.message });

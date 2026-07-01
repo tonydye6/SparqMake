@@ -167,3 +167,52 @@ export function requireEditorForWrites(req: Request, res: Response, next: NextFu
   }
   requireRole("editor")(req, res, next);
 }
+
+/**
+ * Mutation authorization policy
+ * -----------------------------
+ * Single source of truth for the role required by each *class* of mutation.
+ * Route handlers must attach one of the exported guards below instead of
+ * calling `requireRole(...)` ad-hoc, so the policy is defined in exactly one
+ * place and stays consistent across routes.
+ *
+ * Classes:
+ *  - standardWrite: routine single-resource create/update. Requires `editor`.
+ *                   This matches the blanket `requireEditorForWrites` baseline;
+ *                   attach it explicitly only where a route needs to be self
+ *                   documenting.
+ *  - bulk:          operations that mutate many rows in one call (bulk-delete,
+ *                   bulk-update). Requires `admin` — a single call can affect
+ *                   the entire library, so it is gated above base editor.
+ *  - destructive:   permanent single-resource deletes / archives. Requires
+ *                   `admin`. Applied to every hard-delete endpoint so deleting
+ *                   is uniformly gated regardless of resource type.
+ *
+ * Coherence note: a resource whose *edit* stays at `editor` while its *delete*
+ * requires `admin` is intentional when edits are reversible (e.g. templates are
+ * version-snapshotted and can be rolled back) but deletes are permanent.
+ *
+ * Tenancy seam: `requireMutation` is the single choke point for the check. To
+ * later add per-brand / per-user ownership isolation, resolve the target
+ * resource's owner inside this factory and combine it with the role check — no
+ * route call site needs to change. Intentionally not implemented now (product
+ * deferral); this comment marks the extension point.
+ */
+export type MutationClass = "standardWrite" | "bulk" | "destructive";
+
+export const MUTATION_POLICY: Record<MutationClass, AppRole> = {
+  standardWrite: "editor",
+  bulk: "admin",
+  destructive: "admin",
+};
+
+export function requireMutation(mutationClass: MutationClass) {
+  // Extension point for tenancy isolation — see the block comment above.
+  return requireRole(MUTATION_POLICY[mutationClass]);
+}
+
+// Stable guard singletons. Routes share these references so the policy is
+// applied uniformly and wiring can be asserted by identity in tests.
+export const requireStandardWrite = requireMutation("standardWrite");
+export const requireBulkMutation = requireMutation("bulk");
+export const requireDestructive = requireMutation("destructive");

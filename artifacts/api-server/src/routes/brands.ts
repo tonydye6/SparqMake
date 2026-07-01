@@ -14,7 +14,7 @@ import {
   DeleteBrandResponse,
 } from "@workspace/api-zod";
 import { validateRequest } from "../middleware/validate.js";
-import { requireRole } from "../middleware/auth.js";
+import { requireDestructive } from "../middleware/auth.js";
 import { z } from "zod";
 import multer from "multer";
 import * as fs from "fs";
@@ -94,7 +94,7 @@ router.put("/brands/:id", validateRequest({ params: UpdateBrandParams, body: Upd
   res.json(UpdateBrandResponse.parse(brand));
 });
 
-router.delete("/brands/:id", requireRole("admin"), validateRequest({ params: DeleteBrandParams }), async (req, res): Promise<void> => {
+router.delete("/brands/:id", requireDestructive, validateRequest({ params: DeleteBrandParams }), async (req, res): Promise<void> => {
   const [brand] = await db
     .update(brandsTable)
     .set({ isActive: false, updatedAt: new Date() })
@@ -191,7 +191,7 @@ router.post("/brands/:id/logos", upload.single("file"), async (req, res): Promis
   res.status(201).json(asset);
 });
 
-router.delete("/brands/:id/logos/:assetId", async (req, res): Promise<void> => {
+router.delete("/brands/:id/logos/:assetId", requireDestructive, async (req, res): Promise<void> => {
   const brandId = str(req.params.id), assetId = str(req.params.assetId);
 
   const [asset] = await db.select().from(assetsTable)
@@ -306,7 +306,7 @@ router.post("/brands/:id/fonts", upload.single("file"), async (req, res): Promis
   res.status(201).json(asset);
 });
 
-router.delete("/brands/:id/fonts/:assetId", async (req, res): Promise<void> => {
+router.delete("/brands/:id/fonts/:assetId", requireDestructive, async (req, res): Promise<void> => {
   const brandId = str(req.params.id), assetId = str(req.params.assetId);
 
   const [asset] = await db.select().from(assetsTable)
