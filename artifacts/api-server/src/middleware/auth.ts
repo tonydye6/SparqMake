@@ -1,6 +1,6 @@
 import type { Request, Response, NextFunction } from "express";
 import { db, usersTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { eq, or, inArray } from "drizzle-orm";
 import { logger } from "../lib/logger";
 
 const DEV_USER = {
@@ -10,6 +10,13 @@ const DEV_USER = {
   image: null,
   role: "editor",
 };
+
+// Every email the dev-bypass account has ever been created with. The account is
+// only ever inserted (never updated), so an old build's email can persist in the
+// DB after a rename (e.g. the legacy `sparqforge.local` domain). Cleanup must
+// match every historical identity so a drifted record is still removed. These
+// literals are reserved for the dev bypass and can never belong to a real user.
+const DEV_BYPASS_EMAILS = ["dev@sparqmake.local", "dev@sparqforge.local"];
 
 let devUserEnsured = false;
 
@@ -61,16 +68,40 @@ export function isDevBypass(): boolean {
 
 if (isDevBypass()) {
   logger.warn("⚠️  STARTUP WARNING: DEV_AUTH_BYPASS=true — authentication is bypassed. Do NOT deploy with this setting.");
-} else {
-  db.delete(usersTable)
-    .where(eq(usersTable.id, DEV_USER.id))
-    .returning()
-    .then((rows) => {
-      if (rows.length > 0) {
-        logger.info("Cleaned up dev bypass user from database");
-      }
-    })
-    .catch(() => {});
+}
+
+/**
+ * Remove the dev-bypass account from the database when the bypass is disabled
+ * (as it always is in a deployed/production environment).
+ *
+ * This must be invoked explicitly during startup (see index.ts) rather than run
+ * as an import side-effect: a side-effect is invisible, unawaited, and its
+ * errors were previously swallowed, so a failure left the stray account in place
+ * with no signal. Running it from the controlled bootstrap makes the outcome
+ * logged and ordered before the server accepts requests.
+ *
+ * Deletion is scoped strictly to the reserved dev-bypass identity — its fixed id
+ * OR any of its historical emails — so it can never touch a legitimate user, and
+ * still removes a record whose email drifted across a rename.
+ */
+export async function cleanupDevBypassUser(): Promise<void> {
+  if (isDevBypass()) return;
+  try {
+    const rows = await db
+      .delete(usersTable)
+      .where(
+        or(
+          eq(usersTable.id, DEV_USER.id),
+          inArray(usersTable.email, DEV_BYPASS_EMAILS),
+        ),
+      )
+      .returning();
+    if (rows.length > 0) {
+      logger.info({ count: rows.length }, "Cleaned up dev bypass user(s) from database");
+    }
+  } catch (err) {
+    logger.error(err, "Failed to clean up dev bypass user");
+  }
 }
 
 export function isGoogleConfigured(): boolean {

@@ -2,6 +2,7 @@ import type { Server } from "node:http";
 import app from "./app";
 import { logger } from "./lib/logger";
 import { seedDatabase } from "./seed";
+import { cleanupDevBypassUser } from "./middleware/auth";
 import { refreshExpiringTokens } from "./services/token-refresh";
 import {
   startPublishScheduler,
@@ -87,15 +88,17 @@ function registerShutdownHandlers(server: Server): void {
 }
 
 seedDatabase()
-  .then(() => {
+  .then(async () => {
+    await cleanupDevBypassUser();
     const server = startServer(false);
     registerShutdownHandlers(server);
     refreshExpiringTokens()
       .then(() => logger.info("Token refresh check completed"))
       .catch((err) => logger.error(err, "Token refresh check failed"));
   })
-  .catch((err) => {
+  .catch(async (err) => {
     logger.error(err, "Failed to seed database");
+    await cleanupDevBypassUser();
     const server = startServer(true);
     registerShutdownHandlers(server);
   });
