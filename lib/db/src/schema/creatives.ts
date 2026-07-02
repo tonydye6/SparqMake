@@ -110,6 +110,11 @@ export const calendarEntriesTable = pgTable("calendar_entries", {
   publishedAt: timestamp("published_at"),
   publishStatus: text("publish_status").notNull().default("scheduled"),
   publishError: text("publish_error"),
+  // Platform-native ID of the published post (tweet ID, IG media ID, LinkedIn
+  // post URN, TikTok post ID, YouTube video ID). Set on successful publish;
+  // required for metrics ingestion. NULL for entries published before this
+  // column existed or when the platform did not return an ID.
+  platformPostId: text("platform_post_id"),
   retryCount: integer("retry_count").notNull().default(0),
   // Set when a permanent-failure alert covering this entry was delivered.
   // NULL means "not alerted yet" — the scheduler's alert sweep picks the entry

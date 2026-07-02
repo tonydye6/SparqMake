@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Send, RotateCw, Loader2 } from "lucide-react";
+import { Send, RotateCw, Loader2, Eye, Heart, MessageCircle, Share2 } from "lucide-react";
 import { PublishHealthBanner } from "@/components/PublishHealthBanner";
 import { FaInstagram, FaXTwitter, FaTiktok, FaLinkedin, FaYoutube } from "react-icons/fa6";
 import type { IconType } from "react-icons";
@@ -42,11 +42,27 @@ const STATUS_VARIANT: Record<string, "default" | "secondary" | "destructive" | "
   failed: "destructive",
 };
 
+interface EntryMetrics {
+  impressions: number | null;
+  views: number | null;
+  likes: number | null;
+  comments: number | null;
+  shares: number | null;
+  fetchedAt: string;
+}
+
+function fmtCount(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(n);
+}
+
 export default function CalendarNext() {
   const { toast } = useToast();
   const [entries, setEntries] = useState<CalEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [metrics, setMetrics] = useState<Record<string, EntryMetrics>>({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -62,6 +78,18 @@ export default function CalendarNext() {
         (Array.isArray(data) ? (data as CalEntry[]) : [])) as CalEntry[];
       arr.sort((a, b) => new Date(a.scheduledAt).getTime() - new Date(b.scheduledAt).getTime());
       setEntries(arr);
+
+      const publishedIds = arr.filter((e) => e.publishStatus === "published").map((e) => e.id);
+      if (publishedIds.length > 0) {
+        try {
+          const resp = await apiFetch(`${API_BASE}/api/post-metrics/latest?entryIds=${publishedIds.join(",")}`);
+          if (resp.ok) setMetrics(await resp.json());
+        } catch {
+          // Metrics are supplementary — the calendar still renders without them.
+        }
+      } else {
+        setMetrics({});
+      }
     } catch {
       setEntries([]);
     } finally {
@@ -139,6 +167,24 @@ export default function CalendarNext() {
                         <div className="min-w-0 flex-1">
                           <Badge variant={STATUS_VARIANT[e.publishStatus] || "secondary"} className="text-[10px]">{e.publishStatus}</Badge>
                           {e.publishError && <p className="text-xs text-destructive truncate mt-0.5">{e.publishError}</p>}
+                          {e.publishStatus === "published" && metrics[e.id] && (
+                            <div className="flex items-center gap-2.5 mt-1 text-[11px] text-muted-foreground">
+                              {(metrics[e.id].impressions ?? metrics[e.id].views) !== null && (
+                                <span className="flex items-center gap-0.5">
+                                  <Eye size={11} />{fmtCount((metrics[e.id].impressions ?? metrics[e.id].views) || 0)}
+                                </span>
+                              )}
+                              {metrics[e.id].likes !== null && (
+                                <span className="flex items-center gap-0.5"><Heart size={11} />{fmtCount(metrics[e.id].likes || 0)}</span>
+                              )}
+                              {metrics[e.id].comments !== null && (
+                                <span className="flex items-center gap-0.5"><MessageCircle size={11} />{fmtCount(metrics[e.id].comments || 0)}</span>
+                              )}
+                              {metrics[e.id].shares !== null && (
+                                <span className="flex items-center gap-0.5"><Share2 size={11} />{fmtCount(metrics[e.id].shares || 0)}</span>
+                              )}
+                            </div>
+                          )}
                         </div>
                         {(e.publishStatus === "scheduled" || e.publishStatus === "failed") && (
                           <Button

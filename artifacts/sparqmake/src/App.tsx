@@ -11,6 +11,7 @@ import AssetLibrary from "@/pages/AssetLibrary";
 import ReviewQueue from "@/pages/ReviewQueue";
 import Settings from "@/pages/Settings";
 import CostDashboard from "@/pages/CostDashboard";
+import PerformanceDashboard from "@/pages/PerformanceDashboard";
 import ContentPlan from "@/pages/ContentPlan";
 import Login from "@/pages/Login";
 import SetupWizard from "@/pages/SetupWizard";
@@ -141,6 +142,9 @@ function Router() {
         </Route>
         <Route path="/settings">
           <AppLayout><Settings /></AppLayout>
+        </Route>
+        <Route path="/performance">
+          <AppLayout><PerformanceDashboard /></AppLayout>
         </Route>
         <Route path="/costs">
           <AppLayout><CostDashboard /></AppLayout>

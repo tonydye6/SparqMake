@@ -13,3 +13,4 @@ export * from "./settings";
 export * from "./social-content-plan-items";
 export * from "./audit-logs";
 export * from "./publish-alerts";
+export * from "./post-metrics";

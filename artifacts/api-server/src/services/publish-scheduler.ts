@@ -289,6 +289,7 @@ async function publishEntry(entryId: string): Promise<void> {
           publishStatus: "published",
           publishedAt: new Date(),
           publishError: null,
+          platformPostId: result.platformPostId || null,
           updatedAt: new Date(),
         })
         .where(and(

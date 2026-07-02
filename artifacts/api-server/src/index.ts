@@ -11,6 +11,10 @@ import {
   startPublishScheduler,
   stopPublishScheduler,
 } from "./services/publish-scheduler";
+import {
+  startMetricsScheduler,
+  stopMetricsScheduler,
+} from "./services/metrics-scheduler";
 
 const rawPort = process.env["PORT"];
 
@@ -43,6 +47,11 @@ function startServer(seedFailed: boolean): Server {
       startTokenRefreshScheduler();
     } catch (err) {
       logger.error(err, "Token refresh scheduler failed to start — tokens will not auto-refresh");
+    }
+    try {
+      startMetricsScheduler();
+    } catch (err) {
+      logger.error(err, "Metrics scheduler failed to start — post analytics ingestion disabled");
     }
   });
 
@@ -78,6 +87,7 @@ function registerShutdownHandlers(server: Server): void {
 
     stopPublishScheduler();
     stopTokenRefreshScheduler();
+    stopMetricsScheduler();
 
     server.close((err) => {
       if (err) {

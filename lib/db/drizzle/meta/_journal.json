@@ -71,6 +71,13 @@
       "when": 1783019198640,
       "tag": "0009_amazing_harrier",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1783019512773,
+      "tag": "0010_flippant_ricochet",
+      "breakpoints": true
     }
   ]
 }

@@ -13,7 +13,8 @@ import {
   ClipboardList,
   MessageSquareText,
   Sparkles,
-  Palette
+  Palette,
+  TrendingUp
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -84,6 +85,7 @@ export function Sidebar({ mobileOpen, onMobileClose }: SidebarProps) {
     { href: "/calendar", label: "Calendar", icon: CalendarIcon, badge: calendarCount || undefined },
     { href: "/content-plan", label: "Content Plan", icon: ClipboardList },
     { href: "/review", label: "Review Queue", icon: CheckSquare, badge: reviewCount || undefined },
+    { href: "/performance", label: "Performance", icon: TrendingUp },
     { href: "/costs", label: "Cost Dashboard", icon: DollarSign },
     { href: "/settings", label: "Settings", icon: Settings },
     { href: "/feedback", label: "Feedback", icon: MessageSquareText },
