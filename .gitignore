@@ -57,6 +57,11 @@ sparqmake keys.pdf
 *keys*.pdf
 *keys*.txt
 *credentials*
+# ...but never ignore source code that happens to contain "credentials" in
+# its name (the pattern above once silently dropped a .ts service file from
+# a commit, breaking the build for everyone).
+!*credentials*.ts
+!*credentials*.tsx
 
 # Local runtime uploads (never commit user/generated media)
 uploads/
