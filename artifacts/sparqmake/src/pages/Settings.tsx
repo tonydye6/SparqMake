@@ -732,6 +732,28 @@ const AVAILABLE_PLATFORMS = [
   { id: "youtube", label: "YouTube", description: "Upload and publish videos" },
 ];
 
+interface PlatformConfigStatus {
+  platform: string;
+  configured: boolean;
+  missing: { key: string; label: string; envVar: string }[];
+}
+
+const OAUTH_ERROR_MESSAGES: Record<string, string> = {
+  not_configured: "This platform's developer credentials are not configured.",
+  invalid_state: "The sign-in session expired or was invalid. Please try connecting again.",
+  missing_params: "The platform did not return the expected sign-in details. Please try again.",
+  missing_code: "The platform did not return an authorization code. Please try again.",
+  token_exchange_failed: "Could not exchange the authorization code for an access token. Please try again.",
+  user_fetch_failed: "Connected, but the account profile could not be loaded. Please try again.",
+  profile_fetch_failed: "Connected, but the account profile could not be loaded. Please try again.",
+  channel_fetch_failed: "Could not load the YouTube channel for this account.",
+  no_youtube_channel: "No YouTube channel was found for the signed-in Google account.",
+  no_ig_business_account: "No Instagram Business account is linked to the connected Facebook page.",
+  invalid_brand: "Select a valid brand before connecting an account.",
+  config_missing: "This platform's developer credentials are not configured.",
+  callback_error: "Something went wrong while completing the connection. Please try again.",
+};
+
 function ConnectedAccountsTab() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -739,6 +761,7 @@ function ConnectedAccountsTab() {
   const { data: brands } = useGetBrands();
   const [connectBrandId, setConnectBrandId] = useState<string>("");
   const [disconnectAccount, setDisconnectAccount] = useState<{ id: string; accountName: string } | null>(null);
+  const [platformStatus, setPlatformStatus] = useState<Map<string, PlatformConfigStatus> | null>(null);
   const baseUrl = import.meta.env.VITE_API_URL || "";
 
   useEffect(() => {
@@ -746,6 +769,47 @@ function ConnectedAccountsTab() {
       setConnectBrandId(brands[0].id);
     }
   }, [brands, connectBrandId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch(`${baseUrl}/api/social-platforms/status`)
+      .then(res => (res.ok ? res.json() : null))
+      .then((body: { platforms?: PlatformConfigStatus[] } | null) => {
+        if (cancelled || !body?.platforms) return;
+        setPlatformStatus(new Map(body.platforms.map(p => [p.platform, p])));
+      })
+      .catch(() => { /* status is best-effort; buttons stay enabled */ });
+    return () => { cancelled = true; };
+  }, [baseUrl]);
+
+  // Surface OAuth redirect results (?success=... / ?error=...) instead of failing silently.
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    const success = url.searchParams.get("success");
+    const error = url.searchParams.get("error");
+    const platform = url.searchParams.get("platform");
+    if (!success && !error) return;
+
+    if (success) {
+      const label = PLATFORM_CONFIG[success]?.label || success;
+      toast({ title: "Account connected", description: `${label} was connected successfully.` });
+      queryClient.invalidateQueries({ queryKey: ["/api/social-accounts"] });
+    } else if (error) {
+      const label = platform ? (PLATFORM_CONFIG[platform]?.label || platform) : null;
+      const description = OAUTH_ERROR_MESSAGES[error] || "An unexpected error occurred during connection.";
+      toast({
+        variant: "destructive",
+        title: label ? `Couldn't connect ${label}` : "Couldn't connect account",
+        description,
+      });
+    }
+
+    url.searchParams.delete("success");
+    url.searchParams.delete("error");
+    url.searchParams.delete("platform");
+    window.history.replaceState({}, "", url.pathname + url.search + url.hash);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const deleteMutation = useDeleteSocialAccount({
     mutation: {
@@ -920,13 +984,15 @@ function ConnectedAccountsTab() {
           {AVAILABLE_PLATFORMS.map(platform => {
             const config = PLATFORM_CONFIG[platform.id];
             const isConnected = connectedPlatforms.has(platform.id);
+            const status = platformStatus?.get(platform.id);
+            const notConfigured = status ? !status.configured : false;
             return (
               <div
                 key={platform.id}
                 className="flex flex-col items-center p-6 border border-border bg-background rounded-lg text-center"
               >
                 <div
-                  className="w-14 h-14 rounded-xl flex items-center justify-center text-white font-bold text-lg mb-3"
+                  className={`w-14 h-14 rounded-xl flex items-center justify-center text-white font-bold text-lg mb-3 ${notConfigured ? "opacity-50" : ""}`}
                   style={{ backgroundColor: config.color }}
                 >
                   {config.icon}
@@ -937,10 +1003,18 @@ function ConnectedAccountsTab() {
                   variant={isConnected ? "outline" : "default"}
                   size="sm"
                   onClick={() => handleConnect(platform.id)}
-                  className={!isConnected ? "bg-primary hover:bg-primary/90" : ""}
+                  disabled={notConfigured}
+                  className={!isConnected && !notConfigured ? "bg-primary hover:bg-primary/90" : ""}
+                  data-testid={`button-connect-${platform.id}`}
                 >
                   {isConnected ? "Connect Another" : "Connect"}
                 </Button>
+                {notConfigured && (
+                  <p className="text-xs text-amber-500 mt-2 flex items-center gap-1" data-testid={`text-not-configured-${platform.id}`}>
+                    <AlertTriangle size={12} />
+                    Not configured{status && status.missing.length > 0 ? `: missing ${status.missing.map(m => m.label).join(", ")}` : ""}
+                  </p>
+                )}
               </div>
             );
           })}

@@ -9,7 +9,7 @@ import type {
   TikTokTokenResponse,
   GoogleTokenResponse,
 } from "../types/oauth";
-import { TIKTOK_ENV_VARS } from "../constants";
+import { getSocialCredential } from "./social-credentials";
 
 export async function refreshExpiringTokens(): Promise<void> {
   try {
@@ -68,7 +68,10 @@ type SocialAccountRecord = typeof socialAccountsTable.$inferSelect;
 
 async function refreshTwitterToken(account: SocialAccountRecord): Promise<void> {
   const refreshTokenDecrypted = decryptToken(account.refreshToken!);
-  const clientId = process.env.X_SparqMake_X_API_Key;
+  const clientId = getSocialCredential("twitter", "clientId");
+  if (!clientId) {
+    throw new Error("Twitter refresh skipped: X/Twitter API Key not configured");
+  }
 
   const response = await fetch("https://api.twitter.com/2/oauth2/token", {
     method: "POST",
@@ -76,7 +79,7 @@ async function refreshTwitterToken(account: SocialAccountRecord): Promise<void> 
     body: new URLSearchParams({
       grant_type: "refresh_token",
       refresh_token: refreshTokenDecrypted,
-      client_id: clientId!,
+      client_id: clientId,
     }),
   });
 
@@ -103,8 +106,11 @@ async function refreshTwitterToken(account: SocialAccountRecord): Promise<void> 
 
 async function refreshLinkedInToken(account: SocialAccountRecord): Promise<void> {
   const refreshTokenDecrypted = decryptToken(account.refreshToken!);
-  const clientId = process.env.SparqMake_LinkedIn_Client_ID;
-  const clientSecret = process.env.SparqMake_LinkedIn_Client_Secret;
+  const clientId = getSocialCredential("linkedin", "clientId");
+  const clientSecret = getSocialCredential("linkedin", "clientSecret");
+  if (!clientId || !clientSecret) {
+    throw new Error("LinkedIn refresh skipped: LinkedIn Client ID/Secret not configured");
+  }
 
   const response = await fetch("https://www.linkedin.com/oauth/v2/accessToken", {
     method: "POST",
@@ -112,8 +118,8 @@ async function refreshLinkedInToken(account: SocialAccountRecord): Promise<void>
     body: new URLSearchParams({
       grant_type: "refresh_token",
       refresh_token: refreshTokenDecrypted,
-      client_id: clientId!,
-      client_secret: clientSecret!,
+      client_id: clientId,
+      client_secret: clientSecret,
     }),
   });
 
@@ -142,15 +148,18 @@ async function refreshLinkedInToken(account: SocialAccountRecord): Promise<void>
 
 async function refreshTikTokToken(account: SocialAccountRecord): Promise<void> {
   const refreshTokenDecrypted = decryptToken(account.refreshToken!);
-  const clientKey = process.env[TIKTOK_ENV_VARS.clientId];
-  const clientSecret = process.env[TIKTOK_ENV_VARS.clientSecret];
+  const clientKey = getSocialCredential("tiktok", "clientId");
+  const clientSecret = getSocialCredential("tiktok", "clientSecret");
+  if (!clientKey || !clientSecret) {
+    throw new Error("TikTok refresh skipped: TikTok Client Key/Secret not configured");
+  }
 
   const response = await fetch("https://open.tiktokapis.com/v2/oauth/token/", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
-      client_key: clientKey!,
-      client_secret: clientSecret!,
+      client_key: clientKey,
+      client_secret: clientSecret,
       grant_type: "refresh_token",
       refresh_token: refreshTokenDecrypted,
     }),
@@ -179,8 +188,11 @@ async function refreshTikTokToken(account: SocialAccountRecord): Promise<void> {
 
 async function refreshYouTubeToken(account: SocialAccountRecord): Promise<void> {
   const refreshTokenDecrypted = decryptToken(account.refreshToken!);
-  const clientId = process.env.SparqForge_Google_Client_ID;
-  const clientSecret = process.env.SparqForge_Google_Client_Secret;
+  const clientId = getSocialCredential("youtube", "clientId");
+  const clientSecret = getSocialCredential("youtube", "clientSecret");
+  if (!clientId || !clientSecret) {
+    throw new Error("YouTube refresh skipped: Google Client ID/Secret not configured");
+  }
 
   const response = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
@@ -188,8 +200,8 @@ async function refreshYouTubeToken(account: SocialAccountRecord): Promise<void> 
     body: new URLSearchParams({
       grant_type: "refresh_token",
       refresh_token: refreshTokenDecrypted,
-      client_id: clientId!,
-      client_secret: clientSecret!,
+      client_id: clientId,
+      client_secret: clientSecret,
     }),
   });
 
@@ -218,13 +230,16 @@ async function refreshYouTubeToken(account: SocialAccountRecord): Promise<void> 
 
 async function refreshInstagramToken(account: SocialAccountRecord): Promise<void> {
   const accessTokenDecrypted = decryptToken(account.accessToken);
-  const appId = process.env.SparqMake_Instagram_App_ID;
-  const appSecret = process.env.SparqMake_Instagram_App_Secret;
+  const appId = getSocialCredential("instagram", "clientId");
+  const appSecret = getSocialCredential("instagram", "clientSecret");
+  if (!appId || !appSecret) {
+    throw new Error("Instagram refresh skipped: Instagram App ID/Secret not configured");
+  }
 
   const refreshUrl = new URL("https://graph.facebook.com/v19.0/oauth/access_token");
   refreshUrl.searchParams.set("grant_type", "fb_exchange_token");
-  refreshUrl.searchParams.set("client_id", appId!);
-  refreshUrl.searchParams.set("client_secret", appSecret!);
+  refreshUrl.searchParams.set("client_id", appId);
+  refreshUrl.searchParams.set("client_secret", appSecret);
   refreshUrl.searchParams.set("fb_exchange_token", accessTokenDecrypted);
 
   const response = await fetch(refreshUrl.toString());

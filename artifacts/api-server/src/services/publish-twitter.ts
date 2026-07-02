@@ -2,6 +2,7 @@ import OAuth from "oauth-1.0a";
 import crypto from "crypto";
 import { logger } from "../lib/logger";
 import { resolveUrl, readBuffer } from "./storage.js";
+import { getTwitterOAuth1Credentials } from "./social-credentials";
 
 interface PublishTwitterOptions {
   accessToken: string;
@@ -17,34 +18,10 @@ interface PublishResult {
   httpStatus?: number;
 }
 
-// OAuth 1.0a credentials for Twitter media upload (v1.1 API).
-// Twitter's media upload endpoint requires OAuth 1.0a, even when tweet creation uses OAuth 2.0 Bearer tokens.
-//
-// Required environment variables:
-//   X_SparqMake_X_API_Key          – Twitter app's Consumer Key (API Key), from the Twitter Developer Portal → App → Keys and Tokens
-//   X_SparqMake_X_API_Secret       – Twitter app's Consumer Secret (API Secret), same section
-//   X_SparqMake_X_Access_Token     – User-level OAuth 1.0a Access Token, generated under "Authentication Tokens" in the Developer Portal
-//   X_SparqMake_X_Access_Token_Secret – Corresponding Access Token Secret
-//
-// These credentials must belong to the same Twitter account whose OAuth 2.0 Bearer token is used for tweet creation,
-// so that uploaded media can be attached to tweets authored by that account.
-function getOAuth1Credentials() {
-  const consumerKey = process.env.X_SparqMake_X_API_Key;
-  const consumerSecret = process.env.X_SparqMake_X_API_Secret;
-  const oauthToken = process.env.X_SparqMake_X_Access_Token;
-  const oauthTokenSecret = process.env.X_SparqMake_X_Access_Token_Secret;
-
-  if (!consumerKey || !consumerSecret || !oauthToken || !oauthTokenSecret) {
-    return null;
-  }
-
-  return { consumerKey, consumerSecret, oauthToken, oauthTokenSecret };
-}
-
 function createOAuth1Header(
   url: string,
   method: string,
-  creds: NonNullable<ReturnType<typeof getOAuth1Credentials>>,
+  creds: NonNullable<ReturnType<typeof getTwitterOAuth1Credentials>>,
   data?: Record<string, string>,
 ): string {
   const oauth = new OAuth({
@@ -78,9 +55,9 @@ async function uploadMedia(accessToken: string, imagePath: string): Promise<stri
     const base64 = imageBuffer.toString("base64");
     const mimeType = filename.endsWith(".png") ? "image/png" : "image/jpeg";
 
-    const oauth1Creds = getOAuth1Credentials();
+    const oauth1Creds = getTwitterOAuth1Credentials();
     if (!oauth1Creds) {
-      logger.error("Twitter media upload requires OAuth 1.0a credentials. Set env vars: X_SparqMake_X_API_Key, X_SparqMake_X_API_Secret, X_SparqMake_X_Access_Token, X_SparqMake_X_Access_Token_Secret. These must belong to the same account whose OAuth2 Bearer token is used for tweet creation.");
+      logger.error("Twitter media upload requires OAuth 1.0a credentials. Set env vars: X_SparqMake_X_API_Key, X_SparqMake_X_API_Secret, X_SparqMake_X_Access_Token, X_SparqMake_X_Access_Token_Secret (legacy X_SparqForge_X_* names are also accepted). These must belong to the same account whose OAuth2 Bearer token is used for tweet creation.");
       return null;
     }
     logger.info("Using OAuth 1.0a for Twitter media upload. Ensure the OAuth 1.0a access token belongs to the same account as the OAuth2 Bearer token used for tweet creation.");

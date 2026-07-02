@@ -11,3 +11,4 @@
 - [Dev-bypass user lifecycle](dev-bypass-user-lifecycle.md) — create is insert-only (email freezes/drifts); removal only at startup; cleanup deletes by fixed id OR historical emails, so stale prod rows need a redeploy.
 - [Object Storage cleanup & aging](object-storage-cleanup.md) — `@replit/object-storage` StorageObject has no timestamp; bucket objects cannot be age-gated, so cleanup/sweep use disk mtime + opt-in + trash recovery.
 - [Audit logging](audit-logging.md) — `recordAudit` must run AFTER the primary op and never throw; `brandId` nullable no-FK (future tenancy); no-op deletes must not audit; content_plan has no brandId.
+- [Social credential resolution](social-credential-resolution.md) — always use the central resolver (SparqMake canonical + SparqForge aliases); viewEnvVars misses account-level secrets; placeholder values treated as unconfigured.

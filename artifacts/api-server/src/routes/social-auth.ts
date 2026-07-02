@@ -18,7 +18,7 @@ import type {
   GoogleTokenResponse,
   YouTubeChannelResponse,
 } from "../types/oauth";
-import { TIKTOK_ENV_VARS } from "../constants";
+import { getSocialCredential } from "../services/social-credentials";
 
 const router = Router();
 
@@ -138,9 +138,10 @@ async function upsertSocialAccount(values: typeof socialAccountsTable.$inferInse
 }
 
 router.get("/auth/twitter", async (req, res) => {
-  const clientId = process.env.X_SparqMake_X_API_Key;
+  const clientId = getSocialCredential("twitter", "clientId");
   if (!clientId) {
-    return res.status(500).json({ error: "Twitter API key not configured" });
+    logger.error("Twitter connect attempted but API key is not configured");
+    return res.redirect(`${getSettingsRedirectUrl()}&error=not_configured&platform=twitter`);
   }
 
   const userId = req.user?.id;
@@ -193,7 +194,11 @@ router.get("/auth/twitter/callback", async (req, res) => {
       return res.redirect(`${getSettingsRedirectUrl()}&error=invalid_state`);
     }
 
-    const clientId = process.env.X_SparqMake_X_API_Key;
+    const clientId = getSocialCredential("twitter", "clientId");
+    if (!clientId) {
+      logger.error("Twitter OAuth callback but API key is not configured");
+      return res.redirect(`${getSettingsRedirectUrl()}&error=not_configured&platform=twitter`);
+    }
     const callbackUrl = `${getCallbackBaseUrl()}/api/auth/twitter/callback`;
 
     const tokenResponse = await fetch("https://api.twitter.com/2/oauth2/token", {
@@ -203,7 +208,7 @@ router.get("/auth/twitter/callback", async (req, res) => {
         grant_type: "authorization_code",
         code,
         redirect_uri: callbackUrl,
-        client_id: clientId!,
+        client_id: clientId,
         code_verifier: pkceData.verifier,
       }),
     });
@@ -249,9 +254,10 @@ router.get("/auth/twitter/callback", async (req, res) => {
 });
 
 router.get("/auth/instagram", async (req, res) => {
-  const appId = process.env.SparqMake_Instagram_App_ID;
+  const appId = getSocialCredential("instagram", "clientId");
   if (!appId) {
-    return res.status(500).json({ error: "Instagram App ID not configured" });
+    logger.error("Instagram connect attempted but App ID is not configured");
+    return res.redirect(`${getSettingsRedirectUrl()}&error=not_configured&platform=instagram`);
   }
 
   const userId = req.user?.id;
@@ -292,14 +298,18 @@ router.get("/auth/instagram/callback", async (req, res) => {
       return res.redirect(`${getSettingsRedirectUrl()}&error=missing_code`);
     }
 
-    const appId = process.env.SparqMake_Instagram_App_ID;
-    const appSecret = process.env.SparqMake_Instagram_App_Secret;
+    const appId = getSocialCredential("instagram", "clientId");
+    const appSecret = getSocialCredential("instagram", "clientSecret");
+    if (!appId || !appSecret) {
+      logger.error("Instagram OAuth callback but App ID/Secret is not configured");
+      return res.redirect(`${getSettingsRedirectUrl()}&error=not_configured&platform=instagram`);
+    }
     const callbackUrl = `${getCallbackBaseUrl()}/api/auth/instagram/callback`;
 
     const tokenUrl = new URL("https://graph.facebook.com/v19.0/oauth/access_token");
-    tokenUrl.searchParams.set("client_id", appId!);
+    tokenUrl.searchParams.set("client_id", appId);
     tokenUrl.searchParams.set("redirect_uri", callbackUrl);
-    tokenUrl.searchParams.set("client_secret", appSecret!);
+    tokenUrl.searchParams.set("client_secret", appSecret);
     tokenUrl.searchParams.set("code", code);
 
     const tokenResp = await fetch(tokenUrl.toString());
@@ -317,8 +327,8 @@ router.get("/auth/instagram/callback", async (req, res) => {
     // We intentionally avoid logging the URL to prevent exposing the short-lived token.
     const longLivedUrl = new URL("https://graph.facebook.com/v19.0/oauth/access_token");
     longLivedUrl.searchParams.set("grant_type", "fb_exchange_token");
-    longLivedUrl.searchParams.set("client_id", appId!);
-    longLivedUrl.searchParams.set("client_secret", appSecret!);
+    longLivedUrl.searchParams.set("client_id", appId);
+    longLivedUrl.searchParams.set("client_secret", appSecret);
     longLivedUrl.searchParams.set("fb_exchange_token", tokenData.access_token);
 
     const longLivedResp = await fetch(longLivedUrl.toString());
@@ -378,9 +388,10 @@ router.get("/auth/instagram/callback", async (req, res) => {
 });
 
 router.get("/auth/linkedin", async (req, res) => {
-  const clientId = process.env.SparqMake_LinkedIn_Client_ID;
+  const clientId = getSocialCredential("linkedin", "clientId");
   if (!clientId) {
-    return res.status(500).json({ error: "LinkedIn Client ID not configured" });
+    logger.error("LinkedIn connect attempted but Client ID is not configured");
+    return res.redirect(`${getSettingsRedirectUrl()}&error=not_configured&platform=linkedin`);
   }
 
   const userId = req.user?.id;
@@ -421,8 +432,12 @@ router.get("/auth/linkedin/callback", async (req, res) => {
       return res.redirect(`${getSettingsRedirectUrl()}&error=missing_code`);
     }
 
-    const clientId = process.env.SparqMake_LinkedIn_Client_ID;
-    const clientSecret = process.env.SparqMake_LinkedIn_Client_Secret;
+    const clientId = getSocialCredential("linkedin", "clientId");
+    const clientSecret = getSocialCredential("linkedin", "clientSecret");
+    if (!clientId || !clientSecret) {
+      logger.error("LinkedIn OAuth callback but Client ID/Secret is not configured");
+      return res.redirect(`${getSettingsRedirectUrl()}&error=not_configured&platform=linkedin`);
+    }
     const callbackUrl = `${getCallbackBaseUrl()}/api/auth/linkedin/callback`;
 
     const tokenResponse = await fetch("https://www.linkedin.com/oauth/v2/accessToken", {
@@ -432,8 +447,8 @@ router.get("/auth/linkedin/callback", async (req, res) => {
         grant_type: "authorization_code",
         code,
         redirect_uri: callbackUrl,
-        client_id: clientId!,
-        client_secret: clientSecret!,
+        client_id: clientId,
+        client_secret: clientSecret,
       }),
     });
 
@@ -488,9 +503,10 @@ router.get("/auth/linkedin/callback", async (req, res) => {
 });
 
 router.get("/auth/tiktok", async (req, res) => {
-  const clientKey = process.env[TIKTOK_ENV_VARS.clientId];
+  const clientKey = getSocialCredential("tiktok", "clientId");
   if (!clientKey) {
-    return res.status(500).json({ error: "TikTok Client Key not configured" });
+    logger.error("TikTok connect attempted but Client Key is not configured");
+    return res.redirect(`${getSettingsRedirectUrl()}&error=not_configured&platform=tiktok`);
   }
 
   const userId = req.user?.id;
@@ -543,12 +559,12 @@ router.get("/auth/tiktok/callback", async (req, res) => {
       return res.redirect(`${getSettingsRedirectUrl()}&error=invalid_state`);
     }
 
-    const clientKey = process.env[TIKTOK_ENV_VARS.clientId];
-    const clientSecret = process.env[TIKTOK_ENV_VARS.clientSecret];
+    const clientKey = getSocialCredential("tiktok", "clientId");
+    const clientSecret = getSocialCredential("tiktok", "clientSecret");
 
     if (!clientKey || !clientSecret) {
-      logger.error("TikTok client credentials not configured");
-      return res.redirect(`${getSettingsRedirectUrl()}&error=config_missing`);
+      logger.error("TikTok OAuth callback but Client Key/Secret is not configured");
+      return res.redirect(`${getSettingsRedirectUrl()}&error=not_configured&platform=tiktok`);
     }
 
     const callbackUrl = `${getCallbackBaseUrl()}/api/auth/tiktok/callback`;
@@ -623,9 +639,10 @@ router.get("/auth/tiktok/callback", async (req, res) => {
 });
 
 router.get("/auth/youtube", async (req, res) => {
-  const clientId = process.env.SparqForge_Google_Client_ID;
+  const clientId = getSocialCredential("youtube", "clientId");
   if (!clientId) {
-    return res.status(500).json({ error: "Google Client ID not configured" });
+    logger.error("YouTube connect attempted but Google Client ID is not configured");
+    return res.redirect(`${getSettingsRedirectUrl()}&error=not_configured&platform=youtube`);
   }
 
   const userId = req.user?.id;
@@ -671,8 +688,12 @@ router.get("/auth/youtube/callback", async (req, res) => {
       return res.redirect(`${getSettingsRedirectUrl()}&error=missing_code`);
     }
 
-    const clientId = process.env.SparqForge_Google_Client_ID;
-    const clientSecret = process.env.SparqForge_Google_Client_Secret;
+    const clientId = getSocialCredential("youtube", "clientId");
+    const clientSecret = getSocialCredential("youtube", "clientSecret");
+    if (!clientId || !clientSecret) {
+      logger.error("YouTube OAuth callback but Google Client ID/Secret is not configured");
+      return res.redirect(`${getSettingsRedirectUrl()}&error=not_configured&platform=youtube`);
+    }
     const callbackUrl = `${getCallbackBaseUrl()}/api/auth/youtube/callback`;
 
     const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
@@ -682,8 +703,8 @@ router.get("/auth/youtube/callback", async (req, res) => {
         grant_type: "authorization_code",
         code,
         redirect_uri: callbackUrl,
-        client_id: clientId!,
-        client_secret: clientSecret!,
+        client_id: clientId,
+        client_secret: clientSecret,
       }),
     });
 
