@@ -18,6 +18,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { ScheduleModal } from "@/components/ScheduleModal";
 import { useLocation } from "wouter";
 import { formatRejectComment, parseRejectComment, REJECT_CATEGORIES } from "@/lib/reject-reasons";
+import { PublishHealthBanner } from "@/components/PublishHealthBanner";
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
 
@@ -391,6 +392,10 @@ export default function ReviewQueue() {
             ))}
           </SelectContent>
         </Select>
+      </div>
+
+      <div className="mb-4 empty:mb-0 shrink-0">
+        <PublishHealthBanner />
       </div>
 
       {!isLoading && filteredCreatives.length === 0 && (

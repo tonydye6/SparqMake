@@ -23,6 +23,7 @@ import scheduleProfileRouter from "./schedule-profile";
 import smartScheduleRouter from "./smart-schedule";
 import feedbackRouter from "./feedback";
 import usersRouter from "./users";
+import publishHealthRouter from "./publish-health";
 
 const router: IRouter = Router();
 
@@ -50,6 +51,7 @@ router.use(scheduleProfileRouter);
 router.use(smartScheduleRouter);
 router.use(feedbackRouter);
 router.use(usersRouter);
+router.use(publishHealthRouter);
 
 router.all("/{*path}", (_req, res) => {
   res.status(404).json({ error: "Endpoint not found" });

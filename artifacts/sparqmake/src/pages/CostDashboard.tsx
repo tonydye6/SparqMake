@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
+import { PublishHealthCard } from "@/components/PublishHealthBanner";
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
 
@@ -280,6 +281,9 @@ export default function CostDashboard() {
       )}
 
       <div className="flex-1 overflow-y-auto pr-0 sm:pr-2 pb-12">
+        <div className="mb-4 sm:mb-6">
+          <PublishHealthCard />
+        </div>
         {!isLoading && (!summary || summary.totalCost === 0) && (
           <EmptyState
             icon={BarChart3}

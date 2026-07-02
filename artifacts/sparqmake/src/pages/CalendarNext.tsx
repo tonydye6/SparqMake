@@ -7,6 +7,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Send, RotateCw, Loader2 } from "lucide-react";
+import { PublishHealthBanner } from "@/components/PublishHealthBanner";
 import { FaInstagram, FaXTwitter, FaTiktok, FaLinkedin, FaYoutube } from "react-icons/fa6";
 import type { IconType } from "react-icons";
 
@@ -110,6 +111,9 @@ export default function CalendarNext() {
 
       <div className="flex-1 overflow-auto">
         <div className="max-w-3xl mx-auto px-6 py-8">
+          <div className="mb-6 empty:mb-0">
+            <PublishHealthBanner onChanged={load} />
+          </div>
           {loading ? (
             <div className="space-y-3">
               {[0, 1, 2].map((i) => (

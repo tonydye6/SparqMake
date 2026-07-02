@@ -111,6 +111,10 @@ export const calendarEntriesTable = pgTable("calendar_entries", {
   publishStatus: text("publish_status").notNull().default("scheduled"),
   publishError: text("publish_error"),
   retryCount: integer("retry_count").notNull().default(0),
+  // Set when a permanent-failure alert covering this entry was delivered.
+  // NULL means "not alerted yet" — the scheduler's alert sweep picks the entry
+  // up. Reset to NULL on manual retry so a later permanent failure re-alerts.
+  alertedAt: timestamp("alerted_at"),
   scheduleMethod: text("schedule_method").notNull().default("manual"),
   smartScheduleRationale: text("smart_schedule_rationale"),
   proposalId: text("proposal_id"),

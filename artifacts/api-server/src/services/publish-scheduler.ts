@@ -7,9 +7,10 @@ import { publishToTikTok } from "./publish-tiktok";
 import { publishToYouTube } from "./publish-youtube";
 import { decryptToken } from "./token-encryption";
 import { logger } from "../lib/logger";
+import { sweepPublishFailureAlerts } from "./publish-alerts";
+import { MAX_RETRIES } from "./publish-constants";
 
 const POLL_INTERVAL_MS = 60_000;
-const MAX_RETRIES = 3;
 
 function isPermanentFailure(httpStatus: number | undefined): boolean {
   if (!httpStatus) return false;
@@ -352,15 +353,21 @@ async function pollAndPublish(): Promise<void> {
 
     const allEntries = [...readyEntries, ...retriableEntries];
 
-    if (allEntries.length === 0) return;
+    if (allEntries.length > 0) {
+      logger.info({ count: allEntries.length, ready: readyEntries.length, retries: retriableEntries.length }, "Processing entries for publishing");
 
-    logger.info({ count: allEntries.length, ready: readyEntries.length, retries: retriableEntries.length }, "Processing entries for publishing");
-
-    for (const entry of allEntries) {
-      await publishEntry(entry.id);
+      for (const entry of allEntries) {
+        await publishEntry(entry.id);
+      }
     }
   } catch (err) {
     logger.error({ err }, "Publish scheduler poll error");
+  }
+
+  try {
+    await sweepPublishFailureAlerts();
+  } catch (err) {
+    logger.error({ err }, "Publish failure alert sweep error");
   }
 }
 

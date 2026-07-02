@@ -209,8 +209,16 @@ router.post("/calendar-entries/:id/retry", validateRequest({ params: IdParams })
   }
 
   await db.update(calendarEntriesTable)
-    .set({ publishStatus: "scheduled", publishError: null, retryCount: 0, updatedAt: new Date() })
+    .set({ publishStatus: "scheduled", publishError: null, retryCount: 0, alertedAt: null, updatedAt: new Date() })
     .where(eq(calendarEntriesTable.id, id as string));
+
+  await recordAudit({
+    actor: actorFromRequest(req),
+    action: "calendar_entry.retry",
+    entityType: "calendar_entry",
+    entityIds: [id],
+    metadata: { platform: entry.platform, previousError: entry.publishError },
+  });
 
   publishEntry(id).catch(err => {
     logger.error({ err, entryId: id }, "Background retry publish failed");
