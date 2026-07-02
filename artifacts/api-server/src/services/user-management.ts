@@ -19,6 +19,21 @@ function normalizeEmail(email: unknown): string | null {
 /** Postgres unique-violation SQLSTATE, raised if a duplicate slips past the pre-check (race). */
 const PG_UNIQUE_VIOLATION = "23505";
 
+/** Postgres foreign-key-violation SQLSTATE, raised when deleting a user whose id is still referenced (onDelete: restrict). */
+const PG_FOREIGN_KEY_VIOLATION = "23503";
+
+/**
+ * Extract the Postgres SQLSTATE from a thrown error. Drizzle wraps driver
+ * errors (DrizzleQueryError with the original error on `cause`), so the code
+ * may live on the error itself or one level down.
+ */
+function pgErrorCode(err: unknown): string | undefined {
+  const direct = (err as { code?: unknown })?.code;
+  if (typeof direct === "string") return direct;
+  const nested = (err as { cause?: { code?: unknown } })?.cause?.code;
+  return typeof nested === "string" ? nested : undefined;
+}
+
 /**
  * Roles must match the `users_role_check` DB constraint in lib/db/src/schema/users.ts.
  * Keep this list in sync with that constraint and with the ROLE_RANK in middleware/auth.ts.
@@ -51,7 +66,8 @@ export type UserManagementErrorCode =
   | "invalid_role"
   | "last_admin"
   | "invalid_email"
-  | "duplicate_email";
+  | "duplicate_email"
+  | "has_content";
 
 export class UserManagementError extends Error {
   constructor(
@@ -110,6 +126,53 @@ export async function updateUserRole(id: string, role: unknown): Promise<Managed
 }
 
 /**
+ * Delete a workspace user, or revoke a pending invite (a row created by
+ * inviteUser that has never signed in — same table, `name` still null).
+ *
+ * Guards:
+ *  - the target user must exist;
+ *  - deleting the *last* remaining admin is rejected, mirroring the
+ *    last-admin guard in updateUserRole, so user management can never be
+ *    orphaned;
+ *  - if the user's id is still referenced by content they created
+ *    (creatives.created_by / refinement_logs.user_id use onDelete: restrict),
+ *    the FK violation is surfaced as `has_content` instead of a raw DB error.
+ *    Pending invites can never trip this — they have no content.
+ */
+export async function deleteUser(id: string): Promise<ManagedUser> {
+  const [target] = await db.select(userColumns).from(usersTable).where(eq(usersTable.id, id)).limit(1);
+  if (!target) {
+    throw new UserManagementError("not_found", "User not found");
+  }
+
+  if (target.role === "admin") {
+    const [{ value: otherAdmins }] = await db
+      .select({ value: count() })
+      .from(usersTable)
+      .where(and(eq(usersTable.role, "admin"), ne(usersTable.id, id)));
+    if (Number(otherAdmins) === 0) {
+      throw new UserManagementError("last_admin", "Cannot remove the last remaining admin");
+    }
+  }
+
+  try {
+    const [deleted] = await db.delete(usersTable).where(eq(usersTable.id, id)).returning(userColumns);
+    if (!deleted) {
+      throw new UserManagementError("not_found", "User not found");
+    }
+    return deleted;
+  } catch (err) {
+    if (pgErrorCode(err) === PG_FOREIGN_KEY_VIOLATION) {
+      throw new UserManagementError(
+        "has_content",
+        "This user has created content in the workspace and can't be removed. Change their role to Viewer instead to revoke write access.",
+      );
+    }
+    throw err;
+  }
+}
+
+/**
  * Invite (pre-create) a workspace user so an admin can onboard a teammate
  * before that person has ever signed in.
  *
@@ -151,7 +214,7 @@ export async function inviteUser(email: unknown, role: unknown): Promise<Managed
       .returning(userColumns);
     return created;
   } catch (err) {
-    if ((err as { code?: string })?.code === PG_UNIQUE_VIOLATION) {
+    if (pgErrorCode(err) === PG_UNIQUE_VIOLATION) {
       throw new UserManagementError("duplicate_email", "A user with this email already exists");
     }
     throw err;

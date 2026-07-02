@@ -222,6 +222,8 @@ function UserManagementTab() {
   const [inviteRole, setInviteRole] = useState<string>("viewer");
   const [isInviting, setIsInviting] = useState(false);
   const [inviteError, setInviteError] = useState<string | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<ManagedUser | null>(null);
+  const [isRemoving, setIsRemoving] = useState(false);
   const baseUrl = import.meta.env.VITE_API_URL || "";
 
   const adminCount = users.filter(u => u.role === "admin").length;
@@ -331,6 +333,51 @@ function UserManagementTab() {
       toast({ variant: "destructive", title: "Failed to update role" });
     } finally {
       setSavingId(null);
+    }
+  };
+
+  const confirmRemove = async () => {
+    if (!removeTarget) return;
+    const target = removeTarget;
+    const isPendingInvite = !target.name;
+    setIsRemoving(true);
+    try {
+      const res = await apiFetch(`${baseUrl}/api/users/${target.id}`, { method: "DELETE" });
+      if (!res.ok) {
+        if (isForbidden(res)) {
+          toast({ variant: "destructive", title: PERMISSION_DENIED_MESSAGE });
+          return;
+        }
+        if (res.status === 404) {
+          // Already gone (removed elsewhere) — treat as success and refresh.
+          setUsers(prev => prev.filter(u => u.id !== target.id));
+          toast({ title: isPendingInvite ? "Invite cancelled" : "User removed" });
+          return;
+        }
+        let message = isPendingInvite ? "Failed to cancel invite" : "Failed to remove user";
+        try {
+          const errBody = await res.json();
+          if (errBody?.code === "last_admin") {
+            message = "Cannot remove the last remaining admin";
+          } else if (typeof errBody?.error === "string") {
+            message = errBody.error;
+          }
+        } catch { /* keep default message */ }
+        toast({ variant: "destructive", title: message });
+        return;
+      }
+      setUsers(prev => prev.filter(u => u.id !== target.id));
+      toast({
+        title: isPendingInvite ? "Invite cancelled" : "User removed",
+        description: isPendingInvite
+          ? `${target.email} will no longer be able to sign in.`
+          : `${target.email} no longer has access to this workspace.`,
+      });
+    } catch {
+      toast({ variant: "destructive", title: isPendingInvite ? "Failed to cancel invite" : "Failed to remove user" });
+    } finally {
+      setIsRemoving(false);
+      setRemoveTarget(null);
     }
   };
 
@@ -449,7 +496,7 @@ function UserManagementTab() {
       {isLastAdmin && (
         <div className="flex items-start gap-2 mb-4 p-3 rounded-lg border border-amber-500/30 bg-amber-500/10 text-sm text-amber-600 dark:text-amber-400" data-testid="hint-last-admin">
           <AlertTriangle size={16} className="mt-0.5 shrink-0" />
-          <span>Only one admin remains. Their role can't be changed until another admin is added, to keep user management accessible.</span>
+          <span>Only one admin remains. They can't be removed or have their role changed until another admin is added, to keep user management accessible.</span>
         </div>
       )}
       <div className="space-y-3">
@@ -457,6 +504,7 @@ function UserManagementTab() {
           const isCurrentUser = currentUser?.id === user.id;
           const lockLastAdmin = user.role === "admin" && isLastAdmin;
           const lastUpdated = formatLastUpdated(user.updatedAt);
+          const isPendingInvite = !user.name;
           return (
             <div key={user.id} className="flex items-center justify-between gap-4 p-4 border border-border bg-background rounded-lg">
               <div className="min-w-0">
@@ -464,6 +512,9 @@ function UserManagementTab() {
                   <p className="font-semibold text-foreground truncate">{user.name || user.email}</p>
                   {isCurrentUser && (
                     <Badge variant="outline" className="shrink-0" data-testid={`badge-you-${user.id}`}>You</Badge>
+                  )}
+                  {isPendingInvite && (
+                    <Badge variant="secondary" className="shrink-0" data-testid={`badge-pending-${user.id}`}>Invite pending</Badge>
                   )}
                 </div>
                 <p className="text-sm text-muted-foreground truncate">{user.email}</p>
@@ -494,6 +545,19 @@ function UserManagementTab() {
                     ))}
                   </SelectContent>
                 </Select>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="text-muted-foreground hover:text-destructive shrink-0"
+                  onClick={() => setRemoveTarget(user)}
+                  disabled={isRemoving || savingId === user.id || lockLastAdmin}
+                  title={lockLastAdmin
+                    ? "The last remaining admin can't be removed"
+                    : isPendingInvite ? "Cancel invite" : "Remove user"}
+                  data-testid={`button-remove-${user.id}`}
+                >
+                  <Trash2 size={16} />
+                </Button>
               </div>
             </div>
           );
@@ -502,6 +566,32 @@ function UserManagementTab() {
           <p className="text-sm text-muted-foreground text-center py-8">No users found.</p>
         )}
       </div>
+      <AlertDialog open={!!removeTarget} onOpenChange={(open) => { if (!open && !isRemoving) setRemoveTarget(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {removeTarget && !removeTarget.name ? "Cancel this invite?" : "Remove this user?"}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {removeTarget && !removeTarget.name
+                ? <>The invite for <span className="font-medium text-foreground">{removeTarget.email}</span> will be revoked and they won't be able to sign in.</>
+                : <>{removeTarget && (<span className="font-medium text-foreground">{removeTarget.name || removeTarget.email}</span>)} will immediately lose access to this workspace. This can't be undone.</>}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isRemoving}>Keep</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => { e.preventDefault(); confirmRemove(); }}
+              disabled={isRemoving}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              data-testid="button-confirm-remove"
+            >
+              {isRemoving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {removeTarget && !removeTarget.name ? "Cancel Invite" : "Remove User"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </section>
   );
 }

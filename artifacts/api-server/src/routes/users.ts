@@ -5,12 +5,14 @@ import { requireRole } from "../middleware/auth.js";
 import {
   APP_ROLES,
   UserManagementError,
+  deleteUser,
   inviteUser,
   listUsers,
   updateUserRole,
 } from "../services/user-management.js";
 
-const UpdateRoleParams = z.object({ id: z.string().min(1) });
+const UserIdParams = z.object({ id: z.string().min(1) });
+const UpdateRoleParams = UserIdParams;
 const UpdateRoleBody = z.object({ role: z.enum(APP_ROLES) }).strict();
 const InviteUserBody = z
   .object({ email: z.string().trim().min(1).email(), role: z.enum(APP_ROLES) })
@@ -21,6 +23,7 @@ function userManagementErrorStatus(code: UserManagementError["code"]): number {
     case "not_found":
       return 404;
     case "duplicate_email":
+    case "has_content":
       return 409;
     default:
       return 400;
@@ -69,6 +72,26 @@ router.patch(
       if (err instanceof UserManagementError) {
         const status = err.code === "not_found" ? 404 : 400;
         res.status(status).json({ error: err.message, code: err.code });
+        return;
+      }
+      throw err;
+    }
+  },
+);
+
+router.delete(
+  "/users/:id",
+  requireRole("admin"),
+  validateRequest({ params: UserIdParams }),
+  async (req, res): Promise<void> => {
+    const { id } = req.params as { id: string };
+
+    try {
+      await deleteUser(id);
+      res.status(204).end();
+    } catch (err) {
+      if (err instanceof UserManagementError) {
+        res.status(userManagementErrorStatus(err.code)).json({ error: err.message, code: err.code });
         return;
       }
       throw err;

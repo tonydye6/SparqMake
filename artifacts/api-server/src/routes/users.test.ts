@@ -8,11 +8,13 @@ import type { Request, Response, NextFunction } from "express";
 let selectResults: unknown[][] = [];
 let updateResults: unknown[][] = [];
 // An entry may be a rows array (resolves) or an Error (rejects), so we can
-// simulate a Postgres unique-violation on insert.
+// simulate a Postgres unique-violation on insert or FK-violation on delete.
 let insertResults: (unknown[] | Error)[] = [];
+let deleteResults: (unknown[] | Error)[] = [];
 let selectCall = 0;
 let updateCall = 0;
 let insertCall = 0;
+let deleteCall = 0;
 
 function thenable(getResult: () => unknown[] | Error) {
   const obj: Record<string, unknown> = {};
@@ -38,6 +40,7 @@ vi.mock("@workspace/db", () => ({
     select: () => thenable(() => selectResults[selectCall++] ?? []),
     update: () => thenable(() => updateResults[updateCall++] ?? []),
     insert: () => thenable(() => insertResults[insertCall++] ?? []),
+    delete: () => thenable(() => deleteResults[deleteCall++] ?? []),
   },
 }));
 
@@ -48,7 +51,7 @@ vi.mock("drizzle-orm", () => ({
   count: () => ({ op: "count" }),
 }));
 
-const { listUsers, updateUserRole, inviteUser, isValidRole, UserManagementError } =
+const { listUsers, updateUserRole, inviteUser, deleteUser, isValidRole, UserManagementError } =
   await import("../services/user-management.js");
 const { requireRole } = await import("../middleware/auth.js");
 
@@ -56,9 +59,11 @@ beforeEach(() => {
   selectResults = [];
   updateResults = [];
   insertResults = [];
+  deleteResults = [];
   selectCall = 0;
   updateCall = 0;
   insertCall = 0;
+  deleteCall = 0;
 });
 
 // --- admin-only access ---------------------------------------------------
@@ -220,6 +225,67 @@ describe("inviteUser", () => {
     await expect(inviteUser("racer@b.c", "viewer")).rejects.toMatchObject({
       code: "duplicate_email",
     });
+  });
+});
+
+// --- deletion + last-admin protection ------------------------------------
+
+describe("deleteUser", () => {
+  it("throws not_found when the user does not exist", async () => {
+    selectResults = [[]]; // target lookup: none
+    await expect(deleteUser("missing")).rejects.toMatchObject({ code: "not_found" });
+    expect(deleteCall).toBe(0);
+  });
+
+  it("deletes a non-admin without touching the admin-count guard", async () => {
+    selectResults = [[{ id: "u1", email: "a@b.c", name: "A", role: "viewer" }]];
+    deleteResults = [[{ id: "u1", email: "a@b.c", name: "A", role: "viewer" }]];
+    const removed = await deleteUser("u1");
+    expect(removed.id).toBe("u1");
+    // Only the target lookup select ran; no admin-count query.
+    expect(selectCall).toBe(1);
+    expect(deleteCall).toBe(1);
+  });
+
+  it("revokes a pending invite (name null, never signed in)", async () => {
+    selectResults = [[{ id: "u2", email: "pending@b.c", name: null, role: "editor" }]];
+    deleteResults = [[{ id: "u2", email: "pending@b.c", name: null, role: "editor" }]];
+    const removed = await deleteUser("u2");
+    expect(removed.email).toBe("pending@b.c");
+  });
+
+  it("blocks deleting the last remaining admin", async () => {
+    selectResults = [
+      [{ id: "admin1", email: "t@b.c", name: "Tony", role: "admin" }], // target
+      [{ value: 0 }], // no other admins
+    ];
+    await expect(deleteUser("admin1")).rejects.toMatchObject({ code: "last_admin" });
+    // Never reached the delete.
+    expect(deleteCall).toBe(0);
+  });
+
+  it("allows deleting an admin when another admin remains", async () => {
+    selectResults = [
+      [{ id: "admin1", email: "t@b.c", name: "Tony", role: "admin" }], // target
+      [{ value: 1 }], // one other admin remains
+    ];
+    deleteResults = [[{ id: "admin1", email: "t@b.c", name: "Tony", role: "admin" }]];
+    const removed = await deleteUser("admin1");
+    expect(removed.id).toBe("admin1");
+  });
+
+  it("maps a FK-restrict violation to has_content", async () => {
+    selectResults = [[{ id: "u3", email: "c@b.c", name: "C", role: "editor" }]];
+    deleteResults = [Object.assign(new Error("violates foreign key constraint"), { code: "23503" })];
+    await expect(deleteUser("u3")).rejects.toMatchObject({ code: "has_content" });
+  });
+
+  it("maps a drizzle-wrapped FK violation (code on cause) to has_content", async () => {
+    selectResults = [[{ id: "u4", email: "d@b.c", name: "D", role: "editor" }]];
+    const wrapped = new Error("Failed query: delete from users ...");
+    (wrapped as { cause?: unknown }).cause = Object.assign(new Error("fk"), { code: "23503" });
+    deleteResults = [wrapped];
+    await expect(deleteUser("u4")).rejects.toMatchObject({ code: "has_content" });
   });
 });
 
