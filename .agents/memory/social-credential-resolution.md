@@ -14,3 +14,5 @@ All social platform (X/Twitter, Instagram, LinkedIn, TikTok, YouTube) OAuth cred
 - Some stored secrets contain placeholder values (e.g. Instagram App ID literally `INSTAGRAM_APP_ID`). The resolver treats ALL_CAPS_WITH_UNDERSCORES values and your_/changeme/placeholder patterns as unconfigured so the UI/status endpoint reflects reality.
 
 **How to apply:** New social platform credential consumers import `getSocialCredential` / `getPlatformConfigStatus`. The `GET /api/social-platforms/status` endpoint returns names/labels only — never secret values.
+
+**Reconstruction note (2026-07-02):** The original resolver file was lost from the repo despite its commit claiming to add it (consumers imported a nonexistent module; server could not boot, typecheck failed). It was rebuilt from consumer call sites and the env-name inventory above. If a merge lands and typecheck suddenly reports a missing module, suspect a dropped new file before suspecting your own changes.

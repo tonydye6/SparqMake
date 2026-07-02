@@ -1,6 +1,6 @@
 import { useReducer, useEffect, useState, useCallback, useRef, useMemo } from "react";
 import type { Dispatch, MouseEvent } from "react";
-import { Sparkles, LayoutGrid, Wand2, RefreshCw, ArrowRight, Check, Plus, Loader2, Share2, AlertTriangle, Send } from "lucide-react";
+import { Sparkles, LayoutGrid, Wand2, RefreshCw, ArrowRight, Check, Plus, Loader2, Share2, AlertTriangle, Send, Clapperboard, Music, Volume2, VolumeX } from "lucide-react";
 import { FaInstagram, FaXTwitter, FaTiktok, FaLinkedin } from "react-icons/fa6";
 import type { IconType } from "react-icons";
 import { useGetBrands, useGetTemplates } from "@workspace/api-client-react";
@@ -393,6 +393,11 @@ interface BoardVariant {
   caption?: string | null;
   platform?: string;
   clipWarning?: boolean | null;
+  aspectRatio?: string;
+  videoUrl?: string | null;
+  audioSource?: string | null;
+  audioUrl?: string | null;
+  mergedVideoUrl?: string | null;
 }
 
 const VARY_OPTIONS: { mode: string; label: string }[] = [
@@ -758,7 +763,8 @@ function BeatFinish({ state, onAdvance }: { state: StudioState; onAdvance: () =>
   const img = variant.compositedImageUrl || variant.rawImageUrl;
 
   return (
-    <div className="max-w-5xl mx-auto px-6 py-8 grid gap-8 md:grid-cols-2">
+    <div className="max-w-5xl mx-auto px-6 py-8 space-y-10">
+      <div className="grid gap-8 md:grid-cols-2">
       {/* Finished composite preview */}
       <div className="space-y-2">
         <Card className="overflow-hidden p-0 bg-muted">
@@ -830,7 +836,308 @@ function BeatFinish({ state, onAdvance }: { state: StudioState; onAdvance: () =>
           <Share2 size={16} className="ml-1.5" />
         </Button>
       </div>
+      </div>
+
+      {/* Video + audio lane. Video generation and ElevenLabs audio are model
+          calls; the merged result is what gets scheduled, published, and
+          downloaded (publish/download already prefer mergedVideoUrl). */}
+      {state.creativeId && <FinishVideoSection creativeId={state.creativeId} />}
     </div>
+  );
+}
+
+// --- Finish: video + audio ---
+
+const VIDEO_ORIENTATIONS: { key: "landscape" | "portrait"; label: string }[] = [
+  { key: "landscape", label: "Landscape (16:9)" },
+  { key: "portrait", label: "Portrait (9:16)" },
+];
+
+// The Veo clip length (see server VIDEO_CONFIGS/durationSeconds) — generated
+// audio is requested at the same duration so it matches the clip.
+const CLIP_DURATION_SEC = 6;
+
+const AUDIO_SOURCE_LABELS: Record<string, string> = {
+  veo_native: "Original audio",
+  elevenlabs_music: "AI music",
+  elevenlabs_sfx: "AI sound effect",
+  mute: "Muted",
+  custom_upload: "Custom audio",
+};
+
+function FinishVideoSection({ creativeId }: { creativeId: string }) {
+  const { toast } = useToast();
+  const [videoVariants, setVideoVariants] = useState<BoardVariant[]>([]);
+  const [orientation, setOrientation] = useState<"landscape" | "portrait">("landscape");
+  const [generating, setGenerating] = useState(false);
+  const [progress, setProgress] = useState<string | null>(null);
+
+  const reload = useCallback(async () => {
+    try {
+      const resp = await apiFetch(`${API_BASE}/api/creatives/${creativeId}/variants`);
+      const arr = asArray<BoardVariant>(resp.ok ? await resp.json() : []);
+      setVideoVariants(arr.filter((v) => v.videoUrl));
+    } catch {
+      /* keep whatever we had */
+    }
+  }, [creativeId]);
+
+  useEffect(() => {
+    void reload();
+  }, [reload]);
+
+  // The generate endpoint streams SSE over a POST, so EventSource won't work —
+  // read the fetch body and parse `event:`/`data:` frames by hand.
+  async function generateVideoClip() {
+    setGenerating(true);
+    setProgress("Starting video generation…");
+    let failed: string | null = null;
+    try {
+      const resp = await apiFetch(`${API_BASE}/api/creatives/${creativeId}/generate-video`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orientations: [orientation] }),
+      });
+      if (!resp.ok || !resp.body) {
+        const data = await resp.json().catch(() => ({}));
+        throw new Error(data.error || data.message || `Request failed (${resp.status})`);
+      }
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const frames = buf.split("\n\n");
+        buf = frames.pop() ?? "";
+        for (const frame of frames) {
+          let event = "message";
+          let data: Record<string, unknown> = {};
+          for (const line of frame.split("\n")) {
+            if (line.startsWith("event: ")) event = line.slice(7).trim();
+            else if (line.startsWith("data: ")) {
+              try {
+                data = JSON.parse(line.slice(6));
+              } catch {
+                /* skip malformed frame */
+              }
+            }
+          }
+          if (event === "error") {
+            failed = String(data.message || "Video generation failed");
+          } else if (event === "video_progress") {
+            if (data.status === "failed") failed = String(data.error || "Video generation failed");
+            else if (data.status === "completed") setProgress("Video ready — finishing up…");
+            else if (data.message) setProgress(String(data.message));
+          } else if (event === "progress" && data.message) {
+            setProgress(String(data.message));
+          }
+        }
+      }
+      if (failed) throw new Error(failed);
+      await reload();
+      toast({ title: "Video ready", description: "Add music or a sound effect below, then preview the result." });
+    } catch (err) {
+      toast({
+        variant: "destructive",
+        title: "Video generation failed",
+        description: err instanceof Error ? err.message : "Please try again.",
+      });
+    } finally {
+      setGenerating(false);
+      setProgress(null);
+    }
+  }
+
+  function patchVideoVariant(updated: BoardVariant) {
+    setVideoVariants((prev) => prev.map((v) => (v.id === updated.id ? { ...v, ...updated } : v)));
+  }
+
+  return (
+    <div className="space-y-4 border-t border-border pt-6">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h2 className="font-display text-xl font-semibold text-foreground inline-flex items-center gap-2">
+            <Clapperboard size={18} /> Video
+            <span className="text-sm font-normal text-muted-foreground">· model call</span>
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            Generate a short clip for this concept, then add on-brand audio. Video and audio each cost a generation.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Select
+            value={orientation}
+            onValueChange={(v) => setOrientation(v as "landscape" | "portrait")}
+            disabled={generating}
+          >
+            <SelectTrigger className="w-[180px]" data-testid="video-orientation">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {VIDEO_ORIENTATIONS.map((o) => (
+                <SelectItem key={o.key} value={o.key}>
+                  {o.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Button onClick={generateVideoClip} disabled={generating} data-testid="generate-video">
+            {generating ? <Loader2 size={14} className="mr-1.5 animate-spin" /> : <Clapperboard size={14} className="mr-1.5" />}
+            Generate video
+          </Button>
+        </div>
+      </div>
+
+      {generating && (
+        <p className="text-sm text-muted-foreground inline-flex items-center" data-testid="video-progress">
+          <Loader2 size={14} className="mr-2 animate-spin" />
+          {progress || "Generating video… this can take a minute or two."}
+        </p>
+      )}
+
+      {videoVariants.length === 0 && !generating ? (
+        <p className="text-sm text-muted-foreground">No video yet. Generate one to add audio.</p>
+      ) : (
+        <div className="grid gap-4 md:grid-cols-2">
+          {videoVariants.map((v) => (
+            <VideoAudioCard key={v.id} variant={v} creativeId={creativeId} onPatched={patchVideoVariant} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function VideoAudioCard({
+  variant,
+  creativeId,
+  onPatched,
+}: {
+  variant: BoardVariant;
+  creativeId: string;
+  onPatched: (v: BoardVariant) => void;
+}) {
+  const { toast } = useToast();
+  const [audioType, setAudioType] = useState<"music" | "sfx" | "mute">("music");
+  const [prompt, setPrompt] = useState("");
+  const [mode, setMode] = useState<"replace" | "mix">("replace");
+  const [applying, setApplying] = useState(false);
+
+  // Preview the merged file when audio has been applied; merged filenames are
+  // timestamped, so a new merge always gets a fresh URL (no cache-busting needed).
+  const src = variant.mergedVideoUrl || variant.videoUrl;
+  const needsPrompt = audioType === "music" || audioType === "sfx";
+  const sourceLabel = variant.audioSource ? AUDIO_SOURCE_LABELS[variant.audioSource] || variant.audioSource : null;
+
+  async function applyAudio() {
+    if (needsPrompt && !prompt.trim()) {
+      toast({ variant: "destructive", title: "Add a prompt", description: "Describe the music or sound effect you want." });
+      return;
+    }
+    setApplying(true);
+    try {
+      const updated = await postJson(`${API_BASE}/api/creatives/${creativeId}/variants/${variant.id}/audio`, {
+        type: audioType,
+        prompt: needsPrompt ? prompt.trim() : undefined,
+        mode,
+        durationSeconds: CLIP_DURATION_SEC,
+      });
+      onPatched(updated as BoardVariant);
+      toast({
+        title: audioType === "mute" ? "Audio muted" : "Audio added",
+        description: "Preview the updated clip to hear the result.",
+      });
+    } catch (err) {
+      toast({
+        variant: "destructive",
+        title: "Audio failed",
+        description: err instanceof Error ? err.message : "Please try again.",
+      });
+    } finally {
+      setApplying(false);
+    }
+  }
+
+  return (
+    <Card className="overflow-hidden p-0 flex flex-col">
+      <div className="bg-muted">
+        {src ? (
+          <video
+            key={src}
+            src={src.startsWith("/") ? `${API_BASE}${src}` : src}
+            controls
+            preload="metadata"
+            className={cn("w-full bg-black", variant.aspectRatio === "9:16" ? "max-h-96 aspect-[9/16] mx-auto" : "aspect-video")}
+            data-testid={`video-preview-${variant.id}`}
+          />
+        ) : (
+          <div className="aspect-video flex items-center justify-center text-xs text-muted-foreground">No video</div>
+        )}
+      </div>
+
+      <div className="flex flex-col gap-3 p-3">
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <span className="font-medium text-foreground">
+            {variant.aspectRatio === "9:16" ? "Portrait" : "Landscape"}
+          </span>
+          {sourceLabel && (
+            <span className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5">
+              {variant.audioSource === "mute" ? <VolumeX size={11} /> : <Volume2 size={11} />}
+              {sourceLabel}
+            </span>
+          )}
+        </div>
+
+        <div className="grid grid-cols-2 gap-2">
+          <Select value={audioType} onValueChange={(v) => setAudioType(v as "music" | "sfx" | "mute")} disabled={applying}>
+            <SelectTrigger data-testid={`audio-type-${variant.id}`}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="music">AI music</SelectItem>
+              <SelectItem value="sfx">Sound effect</SelectItem>
+              <SelectItem value="mute">Mute audio</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select value={mode} onValueChange={(v) => setMode(v as "replace" | "mix")} disabled={applying || audioType === "mute"}>
+            <SelectTrigger data-testid={`audio-mode-${variant.id}`}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="replace">Replace original audio</SelectItem>
+              <SelectItem value="mix">Mix with original</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        {needsPrompt && (
+          <Textarea
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            placeholder={
+              audioType === "music"
+                ? "e.g. Upbeat electronic track with a driving beat"
+                : "e.g. Crowd cheering with a stadium air horn"
+            }
+            className="min-h-16 resize-none text-sm"
+            disabled={applying}
+            data-testid={`audio-prompt-${variant.id}`}
+          />
+        )}
+
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs text-muted-foreground">
+            {needsPrompt ? `Matched to the ${CLIP_DURATION_SEC}s clip · costs a generation` : "Removes the audio track · free"}
+          </span>
+          <Button size="sm" onClick={applyAudio} disabled={applying} data-testid={`apply-audio-${variant.id}`}>
+            {applying ? <Loader2 size={14} className="mr-1.5 animate-spin" /> : <Music size={14} className="mr-1.5" />}
+            {variant.mergedVideoUrl ? "Redo audio" : "Add audio"}
+          </Button>
+        </div>
+      </div>
+    </Card>
   );
 }
 

@@ -1,7 +1,7 @@
 import { str } from "../lib/http-params.js";
 import { Router, type IRouter, type Request, type Response } from "express";
-import { eq } from "drizzle-orm";
-import { db, creativesTable, creativeVariantsTable, costLogsTable } from "@workspace/db";
+import { eq, gte, sql } from "drizzle-orm";
+import { db, creativesTable, creativeVariantsTable, costLogsTable, appSettingsTable } from "@workspace/db";
 import { assembleContext, type SelectedAssetRef } from "../services/context-assembly.js";
 import { generateVideo, estimateVideoCost, VIDEO_CONFIGS } from "../services/video-generation.js";
 import { generateMusic, generateSFX, estimateElevenLabsCost } from "../services/elevenlabs.js";
@@ -18,6 +18,58 @@ function clampVolume(v: unknown, fallback: number): number {
   const n = typeof v === "number" ? v : parseFloat(String(v ?? ""));
   if (!Number.isFinite(n)) return fallback;
   return Math.max(0, Math.min(10, n));
+}
+
+// Clip-matched audio duration: Veo clips are generated at 6s (see
+// video-generation.ts), so audio defaults to the same length. Clamp keeps the
+// value inside ElevenLabs' supported range.
+const DEFAULT_AUDIO_DURATION_SEC = 6;
+function clampDuration(v: unknown): number {
+  const n = typeof v === "number" ? v : parseFloat(String(v ?? ""));
+  if (!Number.isFinite(n)) return DEFAULT_AUDIO_DURATION_SEC;
+  return Math.max(1, Math.min(22, Math.round(n)));
+}
+
+// Reserve daily-budget headroom for an ElevenLabs call (advisory-locked, same
+// scheme and lock key as the /generate routes). Returns the reservation row id
+// to settle later, or an `ok:false` result the caller turns into a 429.
+async function reserveAudioBudget(
+  creativeId: string,
+): Promise<{ ok: true; reservationId: string | null } | { ok: false; todaySpend: number; threshold: number }> {
+  const [thresholdRow] = await db.select().from(appSettingsTable).where(eq(appSettingsTable.key, "dailyCostThreshold"));
+  const budgetThreshold = thresholdRow ? parseFloat(thresholdRow.value) : null;
+  if (budgetThreshold === null || isNaN(budgetThreshold) || budgetThreshold <= 0) {
+    return { ok: true, reservationId: null };
+  }
+
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const estimatedCost = estimateElevenLabsCost();
+  const reservationId = crypto.randomUUID();
+
+  const result = await db.transaction(async (tx) => {
+    const BUDGET_LOCK_KEY = 100001;
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(${BUDGET_LOCK_KEY})`);
+    const [todayResult] = await tx.select({
+      totalCost: sql<number>`COALESCE(SUM(${costLogsTable.costUsd}), 0)`,
+    }).from(costLogsTable).where(gte(costLogsTable.createdAt, todayStart));
+    const currentSpend = Number(todayResult?.totalCost || 0);
+    if (currentSpend + estimatedCost > budgetThreshold) {
+      return { exceeded: true as const, todaySpend: currentSpend };
+    }
+    await tx.insert(costLogsTable).values({
+      id: reservationId,
+      creativeId,
+      service: "system",
+      operation: "budget_reservation",
+      model: null,
+      costUsd: estimatedCost,
+    });
+    return { exceeded: false as const, todaySpend: currentSpend };
+  });
+
+  if (result.exceeded) return { ok: false, todaySpend: result.todaySpend, threshold: budgetThreshold };
+  return { ok: true, reservationId };
 }
 
 const router: IRouter = Router();
@@ -185,7 +237,7 @@ router.post("/creatives/:id/generate-video", generationLimiter, async (req: Requ
 
 router.post("/creatives/:id/variants/:variantId/audio", generationLimiter, async (req: Request, res: Response): Promise<void> => {
   const creativeId = str(req.params.id), variantId = str(req.params.variantId);
-  const { type, prompt, mode, audioVolume, videoVolume } = req.body;
+  const { type, prompt, mode, audioVolume, videoVolume, durationSeconds } = req.body;
 
   const [variant] = await db.select().from(creativeVariantsTable)
     .where(eq(creativeVariantsTable.id, variantId));
@@ -216,16 +268,35 @@ router.post("/creatives/:id/variants/:variantId/audio", generationLimiter, async
     return;
   }
 
+  // ElevenLabs generation costs money — gate it behind the same daily-budget
+  // reservation scheme as image/caption generation. Mute/veo_native are free.
+  const needsGeneration = type === "music" || type === "sfx";
+  let reservationId: string | null = null;
+  if (needsGeneration) {
+    const budget = await reserveAudioBudget(creativeId);
+    if (!budget.ok) {
+      res.status(429).json({
+        error: "Daily budget exceeded",
+        todaySpend: budget.todaySpend,
+        threshold: budget.threshold,
+        message: `Today's spend ($${budget.todaySpend.toFixed(2)}) has reached the daily budget limit ($${budget.threshold.toFixed(2)}). Increase the limit in Cost Dashboard settings or wait until tomorrow.`,
+      });
+      return;
+    }
+    reservationId = budget.reservationId;
+  }
+
   try {
     let audioBuffer: Buffer | undefined;
     let audioSource = type || "veo_native";
+    const duration = clampDuration(durationSeconds);
 
     if (type === "music" && prompt) {
-      const result = await generateMusic(prompt);
+      const result = await generateMusic(prompt, duration);
       audioBuffer = result.audioBuffer;
       audioSource = "elevenlabs_music";
     } else if (type === "sfx" && prompt) {
-      const result = await generateSFX(prompt);
+      const result = await generateSFX(prompt, duration);
       audioBuffer = result.audioBuffer;
       audioSource = "elevenlabs_sfx";
     } else if (type === "mute") {
@@ -238,13 +309,21 @@ router.post("/creatives/:id/variants/:variantId/audio", generationLimiter, async
       await writeBuffer("generated", audioFilename, audioBuffer);
       audioUrl = `/api/files/generated/${audioFilename}`;
 
-      await db.insert(costLogsTable).values({
-        creativeId,
-        service: "elevenlabs",
-        operation: type === "music" ? "music_generation" : "sfx_generation",
-        model: "elevenlabs",
-        costUsd: estimateElevenLabsCost(),
+      // Settle the reservation: swap the placeholder row for the real cost log
+      // in one transaction so the daily total never double-counts.
+      await db.transaction(async (tx) => {
+        if (reservationId) {
+          await tx.delete(costLogsTable).where(eq(costLogsTable.id, reservationId));
+        }
+        await tx.insert(costLogsTable).values({
+          creativeId,
+          service: "elevenlabs",
+          operation: type === "music" ? "music_generation" : "sfx_generation",
+          model: "elevenlabs",
+          costUsd: estimateElevenLabsCost(),
+        });
       });
+      reservationId = null;
     }
 
     const videoFilename = variant.videoUrl.replace("/api/files/generated/", "");
@@ -281,6 +360,12 @@ router.post("/creatives/:id/variants/:variantId/audio", generationLimiter, async
 
     res.json(updated);
   } catch (error) {
+    // Release unused budget headroom if generation failed before settling.
+    if (reservationId) {
+      try {
+        await db.delete(costLogsTable).where(eq(costLogsTable.id, reservationId));
+      } catch {}
+    }
     const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: `Audio processing failed: ${message}` });
   }
