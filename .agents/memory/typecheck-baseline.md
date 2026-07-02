@@ -22,3 +22,13 @@ description: The repo-wide `pnpm run typecheck` baseline was red; it has since b
 result means a real regression. Still fastest to validate by running the changed
 package's typecheck and grepping for your file paths, but exit 0 repo-wide is
 the expectation now, not the exception.
+
+**Known regression from upstream (July 2026):** api-server fails TS2307 on
+`services/social-credentials` — the upstream commit that centralized social
+credential resolution created that file, but `.gitignore`'s `*credentials*`
+pattern (line meant for loose credential docs) silently excluded the *source
+file* from the commit, so it never propagates to task environments. Fix must
+happen in the main app: exempt the file (`!**/social-credentials.ts`) or rename
+it, then commit it. Until then, TS2307 on that module in a task environment is
+pre-existing, not your regression. Lesson: broad `.gitignore` patterns like
+`*credentials*` can swallow real source files — git will not warn.

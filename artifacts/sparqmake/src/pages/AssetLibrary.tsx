@@ -671,6 +671,9 @@ function VisualAssetCard({ asset, selected, onToggleSelect, bulkMode, canWrite }
           
           {canWrite && (
             <div
+              role="checkbox"
+              aria-checked={selected}
+              aria-label={`Select ${asset.name}`}
               className={cn(
                 "absolute top-2 left-2 z-10 transition-opacity duration-200",
                 bulkMode || selected ? "opacity-100" : "opacity-0 group-hover:opacity-100"
@@ -759,7 +762,7 @@ function VisualAssetCard({ asset, selected, onToggleSelect, bulkMode, canWrite }
                   <h3 className="font-bold text-lg flex items-center justify-between">
                     {asset.name}
                     {canWrite && (
-                      <Button variant="ghost" size="icon" onClick={() => setEditMode(true)} className="h-8 w-8"><Edit2 size={14} /></Button>
+                      <Button variant="ghost" size="icon" aria-label="Edit asset" onClick={() => setEditMode(true)} className="h-8 w-8"><Edit2 size={14} /></Button>
                     )}
                   </h3>
                   <p className="text-sm text-muted-foreground mt-1">{asset.description || "No description provided."}</p>
@@ -1391,6 +1394,7 @@ function HashtagsTab({ sets, brands, canWrite }: { sets: HashtagSet[], brands: a
                         <Button 
                           variant="ghost" 
                           size="icon" 
+                          aria-label={`Delete hashtag set ${set.name}`}
                           className="opacity-0 group-hover:opacity-100 text-destructive hover:bg-destructive/10 hover:text-destructive h-8 w-8"
                           onClick={() => setSetToDelete(set)}
                         >

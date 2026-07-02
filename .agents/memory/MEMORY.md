@@ -15,3 +15,4 @@
 - [Audit logging](audit-logging.md) — `recordAudit` must run AFTER the primary op and never throw; `brandId` nullable no-FK (future tenancy); no-op deletes must not audit; content_plan has no brandId.
 - [Social credential resolution](social-credential-resolution.md) — always use the central resolver (SparqMake canonical + SparqForge aliases); viewEnvVars misses account-level secrets; placeholder values treated as unconfigured.
 - [Publish failure alerting](publish-failure-alerting.md) — alert sweep runs after each scheduler poll; per-account grouping + 30-min cooldown via publish_alerts rows; retry must reset alerted_at; SMTP unset = graceful degrade.
+- [SparqMake frontend tests](sparqmake-frontend-tests.md) — standalone vitest config (vite config needs PORT/BASE_PATH); RTL needs explicit cleanup when globals:false; jsdom Radix polyfills live in src/test/setup.ts.
