@@ -16,6 +16,8 @@ export const socialAccountsTable = pgTable("social_accounts", {
   platformMetadata: jsonb("platform_metadata"),
   brandId: text("brand_id").notNull().references(() => brandsTable.id, { onDelete: "cascade" }),
   status: text("status").notNull().default("connected"),
+  lastRefreshAt: timestamp("last_refresh_at"),
+  lastRefreshError: text("last_refresh_error"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (table) => [

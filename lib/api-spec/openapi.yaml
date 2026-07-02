@@ -2444,6 +2444,13 @@ components:
           type: string
         displayStatus:
           type: string
+        lastRefreshAt:
+          type: string
+          format: date-time
+          nullable: true
+        lastRefreshError:
+          type: string
+          nullable: true
         createdAt:
           type: string
           format: date-time

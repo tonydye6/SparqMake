@@ -691,6 +691,8 @@ export const GetSocialAccountsResponseItem = zod.object({
   brandId: zod.string().nullish(),
   status: zod.string(),
   displayStatus: zod.string(),
+  lastRefreshAt: zod.date().nullish(),
+  lastRefreshError: zod.string().nullish(),
   createdAt: zod.date().optional(),
   updatedAt: zod.date().optional(),
 });

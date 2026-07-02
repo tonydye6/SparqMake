@@ -1,6 +1,6 @@
 import { apiFetch } from "@/lib/utils";
 import { useState, useEffect } from "react";
-import { CalendarIcon, Clock, Send } from "lucide-react";
+import { AlertTriangle, CalendarIcon, Clock, Send } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,6 +17,12 @@ interface SocialAccount {
   accountId: string;
   status: string;
   displayStatus?: string;
+}
+
+const UNHEALTHY_STATUSES = new Set(["expired", "needs_reconnect", "revoked"]);
+
+function accountHealth(acc: SocialAccount): string {
+  return acc.displayStatus || acc.status;
 }
 
 interface ScheduleModalProps {
@@ -159,26 +165,50 @@ export function ScheduleModal({ open, onOpenChange, creativeId, creativeName, on
                     platform === "tiktok" ? "TikTok" :
                     platform === "youtube" ? "YouTube" : platform;
 
+                  const healthyAccounts = accounts.filter(acc => {
+                    const health = accountHealth(acc);
+                    return health === "connected" || health === "expiring";
+                  });
+                  const unhealthyCount = accounts.filter(acc => UNHEALTHY_STATUSES.has(accountHealth(acc))).length;
+                  const selectedAccount = accounts.find(acc => acc.id === selectedAccounts[platform]);
+                  const selectedExpiring = selectedAccount && accountHealth(selectedAccount) === "expiring";
+
                   return (
-                    <div key={platform} className="flex items-center gap-2">
-                      <PlatformIcon platform={mappedPlatform} className="w-4 h-4 opacity-70 shrink-0" />
-                      <span className="text-xs text-muted-foreground w-24 shrink-0">{platformLabel}</span>
-                      <Select
-                        value={selectedAccounts[platform] || "none"}
-                        onValueChange={(val) => handleAccountSelect(platform, val)}
-                      >
-                        <SelectTrigger className="flex-1 h-8 text-xs bg-background border-border">
-                          <SelectValue placeholder="No account" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="none">No auto-publish</SelectItem>
-                          {accounts.filter(acc => acc.status === "connected" || acc.displayStatus === "connected" || acc.displayStatus === "expiring").map(acc => (
-                            <SelectItem key={acc.id} value={acc.id}>
-                              {acc.accountName} ({acc.accountId})
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                    <div key={platform} className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <PlatformIcon platform={mappedPlatform} className="w-4 h-4 opacity-70 shrink-0" />
+                        <span className="text-xs text-muted-foreground w-24 shrink-0">{platformLabel}</span>
+                        <Select
+                          value={selectedAccounts[platform] || "none"}
+                          onValueChange={(val) => handleAccountSelect(platform, val)}
+                        >
+                          <SelectTrigger className="flex-1 h-8 text-xs bg-background border-border">
+                            <SelectValue placeholder="No account" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="none">No auto-publish</SelectItem>
+                            {healthyAccounts.map(acc => (
+                              <SelectItem key={acc.id} value={acc.id}>
+                                {acc.accountName} ({acc.accountId})
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      {unhealthyCount > 0 && (
+                        <p className="flex items-start gap-1 text-[11px] text-red-500 pl-6" data-testid={`warning-connection-${platform}`}>
+                          <AlertTriangle size={11} className="mt-0.5 shrink-0" />
+                          {healthyAccounts.length === 0
+                            ? `${platformLabel} connection needs reconnecting — auto-publish will fail until you reconnect it in Settings → Connected Accounts.`
+                            : `${unhealthyCount} ${platformLabel} account${unhealthyCount > 1 ? "s" : ""} need${unhealthyCount > 1 ? "" : "s"} reconnecting and ${unhealthyCount > 1 ? "are" : "is"} hidden from this list.`}
+                        </p>
+                      )}
+                      {selectedExpiring && (
+                        <p className="flex items-start gap-1 text-[11px] text-amber-500 pl-6" data-testid={`warning-expiring-${platform}`}>
+                          <AlertTriangle size={11} className="mt-0.5 shrink-0" />
+                          This account's token is expiring soon. It should refresh automatically, but check Settings if the post doesn't publish.
+                        </p>
+                      )}
                     </div>
                   );
                 })}

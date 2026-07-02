@@ -132,6 +132,9 @@ async function upsertSocialAccount(values: typeof socialAccountsTable.$inferInse
         platformMetadata: sql`coalesce(excluded.platform_metadata, ${socialAccountsTable.platformMetadata})`,
         brandId: sql`excluded.brand_id`,
         status: sql`excluded.status`,
+        // A fresh OAuth grant wipes any stale refresh-failure record.
+        lastRefreshAt: new Date(),
+        lastRefreshError: null,
         updatedAt: new Date(),
       },
     });

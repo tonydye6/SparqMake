@@ -16,6 +16,8 @@ export interface SocialAccount {
   brandId?: string | null;
   status: string;
   displayStatus: string;
+  lastRefreshAt?: Date | null;
+  lastRefreshError?: string | null;
   createdAt?: Date;
   updatedAt?: Date;
 }

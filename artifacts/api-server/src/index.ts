@@ -3,7 +3,10 @@ import app from "./app";
 import { logger } from "./lib/logger";
 import { seedDatabase } from "./seed";
 import { cleanupDevBypassUser } from "./middleware/auth";
-import { refreshExpiringTokens } from "./services/token-refresh";
+import {
+  startTokenRefreshScheduler,
+  stopTokenRefreshScheduler,
+} from "./services/token-refresh";
 import {
   startPublishScheduler,
   stopPublishScheduler,
@@ -35,6 +38,11 @@ function startServer(seedFailed: boolean): Server {
       startPublishScheduler();
     } catch (err) {
       logger.error(err, "Publish scheduler failed to start — scheduling disabled");
+    }
+    try {
+      startTokenRefreshScheduler();
+    } catch (err) {
+      logger.error(err, "Token refresh scheduler failed to start — tokens will not auto-refresh");
     }
   });
 
@@ -69,6 +77,7 @@ function registerShutdownHandlers(server: Server): void {
     forceExit.unref();
 
     stopPublishScheduler();
+    stopTokenRefreshScheduler();
 
     server.close((err) => {
       if (err) {
@@ -92,9 +101,6 @@ seedDatabase()
     await cleanupDevBypassUser();
     const server = startServer(false);
     registerShutdownHandlers(server);
-    refreshExpiringTokens()
-      .then(() => logger.info("Token refresh check completed"))
-      .catch((err) => logger.error(err, "Token refresh check failed"));
   })
   .catch(async (err) => {
     logger.error(err, "Failed to seed database");

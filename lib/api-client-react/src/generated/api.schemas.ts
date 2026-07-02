@@ -494,6 +494,8 @@ export interface SocialAccount {
   brandId?: string | null;
   status: string;
   displayStatus: string;
+  lastRefreshAt?: string | null;
+  lastRefreshError?: string | null;
   createdAt?: string;
   updatedAt?: string;
 }

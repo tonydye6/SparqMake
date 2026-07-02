@@ -915,8 +915,13 @@ function ConnectedAccountsTab() {
                           </span>
                         )}
                         {status === "expired" && (
-                          <span className="flex items-center gap-1 text-xs text-red-500">
+                          <span className="flex items-center gap-1 text-xs text-red-500" data-testid={`status-expired-${account.id}`}>
                             <XCircle size={12} /> Token expired
+                          </span>
+                        )}
+                        {status === "needs_reconnect" && (
+                          <span className="flex items-center gap-1 text-xs text-red-500" data-testid={`status-needs-reconnect-${account.id}`}>
+                            <XCircle size={12} /> Needs reconnection
                           </span>
                         )}
                         {status === "revoked" && (
@@ -929,7 +934,17 @@ function ConnectedAccountsTab() {
                             Expires: {new Date(account.tokenExpiry).toLocaleDateString()}
                           </span>
                         )}
+                        {account.lastRefreshAt && (
+                          <span className="text-xs text-muted-foreground">
+                            Last checked: {new Date(account.lastRefreshAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                          </span>
+                        )}
                       </div>
+                      {(status === "needs_reconnect" || status === "expired") && account.lastRefreshError && (
+                        <p className="text-xs text-red-500/80 mt-1" data-testid={`text-refresh-error-${account.id}`}>
+                          {account.lastRefreshError}
+                        </p>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
@@ -941,6 +956,18 @@ function ConnectedAccountsTab() {
                         disabled={refreshMutation.isPending}
                       >
                         <RefreshCw className={`h-4 w-4 mr-1 ${refreshMutation.isPending ? "animate-spin" : ""}`} /> Refresh
+                      </Button>
+                    )}
+                    {(status === "expired" || status === "needs_reconnect" || status === "revoked") && account.brandId && (
+                      <Button
+                        size="sm"
+                        className="bg-primary hover:bg-primary/90 text-primary-foreground"
+                        onClick={() => {
+                          window.location.href = `${baseUrl}/api/auth/${account.platform}?brandId=${encodeURIComponent(account.brandId!)}`;
+                        }}
+                        data-testid={`button-reconnect-${account.id}`}
+                      >
+                        <Share2 className="h-4 w-4 mr-1" /> Reconnect
                       </Button>
                     )}
                     <Button

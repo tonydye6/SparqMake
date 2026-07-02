@@ -36,6 +36,26 @@ interface SmartScheduleModalProps {
   onScheduled?: () => void;
 }
 
+interface SocialAccountHealth {
+  id: string;
+  platform: string;
+  accountName: string;
+  status: string;
+  displayStatus?: string;
+}
+
+const UNHEALTHY_STATUSES = new Set(["expired", "needs_reconnect", "revoked"]);
+
+// Variant platforms (instagram_feed, instagram_story...) map to connected-account platforms.
+const ACCOUNT_PLATFORM_MAP: Record<string, string> = {
+  instagram_feed: "instagram",
+  instagram_story: "instagram",
+  twitter: "twitter",
+  linkedin: "linkedin",
+  tiktok: "tiktok",
+  youtube: "youtube",
+};
+
 const PLATFORM_MAP: Record<string, { label: string; icon: string; color: string }> = {
   instagram_feed: { label: "Instagram Feed", icon: "instagram", color: "#E1306C" },
   instagram_story: { label: "Instagram Story", icon: "instagram", color: "#C13584" },
@@ -127,6 +147,19 @@ export function SmartScheduleModal({ open, onClose, creativeIds, onScheduled }: 
   const [confirming, setConfirming] = useState(false);
   const [expandedCreatives, setExpandedCreatives] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
+  const [socialAccounts, setSocialAccounts] = useState<SocialAccountHealth[]>([]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    apiFetch(`${API_BASE}/api/social-accounts`)
+      .then((res) => (res.ok ? res.json() : []))
+      .then((data: SocialAccountHealth[]) => {
+        if (!cancelled) setSocialAccounts(Array.isArray(data) ? data : []);
+      })
+      .catch(() => { /* health warnings are best-effort */ });
+    return () => { cancelled = true; };
+  }, [open]);
 
   const fetchProposals = useCallback(async () => {
     setLoading(true);
@@ -282,6 +315,30 @@ export function SmartScheduleModal({ open, onClose, creativeIds, onScheduled }: 
     ? Object.values(proposals).some((cp) => cp.variants.some((v) => v.conflictNote))
     : false;
 
+  const unhealthyPlatformLabels = useMemo(() => {
+    if (!proposals) return [];
+    const targetPlatforms = new Set<string>();
+    for (const cp of Object.values(proposals)) {
+      for (const v of cp.variants) {
+        if (!v.proposedAt) continue;
+        targetPlatforms.add(ACCOUNT_PLATFORM_MAP[v.platform] || v.platform);
+      }
+    }
+    const labels: string[] = [];
+    for (const platform of targetPlatforms) {
+      const platformAccounts = socialAccounts.filter((a) => a.platform === platform);
+      if (platformAccounts.length === 0) continue;
+      const allUnhealthy = platformAccounts.every((a) =>
+        UNHEALTHY_STATUSES.has(a.displayStatus || a.status),
+      );
+      if (allUnhealthy) {
+        const key = Object.keys(ACCOUNT_PLATFORM_MAP).find((k) => ACCOUNT_PLATFORM_MAP[k] === platform);
+        labels.push(PLATFORM_MAP[key || platform]?.label.replace(/ (Feed|Story)$/, "") || platform);
+      }
+    }
+    return Array.from(new Set(labels));
+  }, [proposals, socialAccounts]);
+
   const getScoreColor = (score: number) => {
     if (score >= 0.7) return "text-emerald-400";
     if (score >= 0.5) return "text-amber-400";
@@ -341,6 +398,17 @@ export function SmartScheduleModal({ open, onClose, creativeIds, onScheduled }: 
               <p className="text-xs text-amber-300">
                 Some slots were scheduled beyond the 7-day window due to conflicts.
                 The scheduling window was extended to 14 days.
+              </p>
+            </div>
+          )}
+
+          {unhealthyPlatformLabels.length > 0 && (
+            <div className="flex items-start gap-2 p-3 rounded-lg bg-red-500/10 border border-red-500/20" data-testid="warning-unhealthy-connections">
+              <AlertTriangle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+              <p className="text-xs text-red-300">
+                {unhealthyPlatformLabels.join(", ")} connection{unhealthyPlatformLabels.length > 1 ? "s need" : " needs"} reconnecting —
+                posts scheduled to {unhealthyPlatformLabels.length > 1 ? "these platforms" : "this platform"} will fail to auto-publish.
+                Reconnect in Settings → Connected Accounts before the scheduled time.
               </p>
             </div>
           )}
