@@ -4,8 +4,10 @@ import { and, count, eq, ne } from "drizzle-orm";
 /**
  * Pragmatic email check for admin-entered invites. This is intentionally
  * lenient (single `@`, non-empty local/domain parts, a dotted domain) — the
- * authoritative gate on who can actually sign in is the OAuth allow-list in
- * lib/passport.ts, not this format check.
+ * authoritative sign-in gate lives in lib/passport.ts, not this format check.
+ * Note that an invited row *is* itself an authorization: passport admits any
+ * email with an existing user row, so a typo'd invite would let that exact
+ * (mistyped) address sign in if someone actually controlled it.
  */
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -181,6 +183,11 @@ export async function deleteUser(id: string): Promise<ManagedUser> {
  * an existing row, updates name/image while preserving the pre-assigned role).
  * That is how an invited user "lands with the assigned role" — the role set here
  * is not overwritten at login.
+ *
+ * Authorization: the pre-created row itself is what lets the invited person
+ * sign in. lib/passport.ts admits any email with an existing user row, so an
+ * invite works even when the email is NOT covered by ALLOWED_EMAILS /
+ * ALLOWED_EMAIL_DOMAINS. Those env vars only gate strangers with no row.
  *
  * Guards:
  *  - the role must be one of APP_ROLES (matches the DB check constraint);

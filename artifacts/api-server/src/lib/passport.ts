@@ -1,7 +1,7 @@
 import passport from "passport";
 import { Strategy as GoogleStrategy } from "passport-google-oauth20";
 import { db, usersTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { logger } from "./logger";
 
 declare global {
@@ -66,6 +66,21 @@ if (!GOOGLE_CALLBACK_URL.startsWith("http")) {
   logger.warn("Google OAuth callback URL is relative — set APP_URL or GOOGLE_CALLBACK_URL for reliable behavior behind proxies");
 }
 
+/**
+ * Env-var allow-list gate for emails that have NEVER signed in or been invited.
+ *
+ * There are two independent ways an email becomes able to sign in:
+ *  1. An invite: an admin pre-creates the user row via the User Management tab
+ *     (services/user-management.ts inviteUser). The existing DB row itself
+ *     authorizes the email — this function is NOT consulted for it.
+ *  2. The env allow-list below (ALLOWED_EMAILS / ALLOWED_EMAIL_DOMAINS), which
+ *     admits strangers with no pre-existing row (they are auto-created as
+ *     viewer, or admin if in ADMIN_EMAILS).
+ *
+ * Keep this in mind when editing: tightening the env vars does not lock out
+ * invited/existing users, and removing a user's row (via User Management)
+ * revokes their access unless the env list still covers them.
+ */
 function isEmailAllowed(email: string): boolean {
   const domains = (process.env.ALLOWED_EMAIL_DOMAINS || "")
     .split(",")
@@ -96,6 +111,100 @@ function resolveInitialRole(email: string): "viewer" | "editor" | "admin" {
   return ADMIN_EMAILS.has(email.toLowerCase()) ? "admin" : "viewer";
 }
 
+/** The subset of a passport-google-oauth20 Profile that the verify logic reads. */
+export interface GoogleProfileLike {
+  displayName?: string;
+  emails?: Array<{ value: string; verified?: boolean | string }>;
+  photos?: Array<{ value: string }>;
+}
+
+type VerifyDone = (err: Error | null | undefined, user?: Express.User | false) => void;
+
+/**
+ * Verify callback for the Google OAuth strategy, exported for unit testing.
+ *
+ * Sign-in is authorized by EITHER of two independent gates:
+ *  - an existing user row (previous sign-in OR an admin invite pre-created it
+ *    via User Management) — matched case-insensitively by email; or
+ *  - the env allow-list (ALLOWED_EMAILS / ALLOWED_EMAIL_DOMAINS) for brand-new
+ *    emails, which are auto-created with a default role.
+ */
+export async function verifyGoogleProfile(profile: GoogleProfileLike, done: VerifyDone): Promise<void> {
+  try {
+    const emailEntry = profile.emails?.[0];
+    const email = emailEntry?.value;
+    if (!email) {
+      done(new Error("No email found in Google profile"));
+      return;
+    }
+
+    const emailVerified = emailEntry?.verified;
+    if (emailVerified === false || emailVerified === "false") {
+      logger.warn({ email }, "Rejected login: email not verified by Google");
+      done(null, false);
+      return;
+    }
+
+    // An existing user row (created by a prior sign-in OR pre-created by
+    // an admin invite in User Management) authorizes this email on its
+    // own. The env allow-list below only gates brand-new emails with no
+    // row — see the isEmailAllowed doc comment for the full contract.
+    // Invites store emails lowercased, so match case-insensitively.
+    const [existing] = await db
+      .select()
+      .from(usersTable)
+      .where(sql`lower(${usersTable.email}) = ${email.toLowerCase()}`)
+      .limit(1);
+
+    if (!existing && !isEmailAllowed(email)) {
+      logger.warn({ email }, "Rejected login: email not invited and not in allow-list");
+      done(null, false);
+      return;
+    }
+
+    if (existing) {
+      const [updated] = await db
+        .update(usersTable)
+        .set({
+          name: profile.displayName || existing.name,
+          image: profile.photos?.[0]?.value || existing.image,
+          updatedAt: new Date(),
+        })
+        .where(eq(usersTable.id, existing.id))
+        .returning();
+
+      done(null, {
+        id: updated.id,
+        email: updated.email,
+        name: updated.name,
+        image: updated.image,
+        role: updated.role,
+      });
+      return;
+    }
+
+    const [newUser] = await db
+      .insert(usersTable)
+      .values({
+        email,
+        name: profile.displayName || email,
+        image: profile.photos?.[0]?.value || null,
+        role: resolveInitialRole(email),
+      })
+      .returning();
+
+    done(null, {
+      id: newUser.id,
+      email: newUser.email,
+      name: newUser.name,
+      image: newUser.image,
+      role: newUser.role,
+    });
+  } catch (err) {
+    done(err as Error);
+  }
+}
+
 if (GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET) {
   passport.use(
     new GoogleStrategy(
@@ -104,71 +213,8 @@ if (GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET) {
         clientSecret: GOOGLE_CLIENT_SECRET,
         callbackURL: GOOGLE_CALLBACK_URL,
       },
-      async (_accessToken, _refreshToken, profile, done) => {
-        try {
-          const emailEntry = profile.emails?.[0];
-          const email = emailEntry?.value;
-          if (!email) {
-            done(new Error("No email found in Google profile"));
-            return;
-          }
-
-          const emailVerified = (emailEntry as { verified?: boolean | string } | undefined)?.verified;
-          if (emailVerified === false || emailVerified === "false") {
-            logger.warn({ email }, "Rejected login: email not verified by Google");
-            done(null, false);
-            return;
-          }
-
-          if (!isEmailAllowed(email)) {
-            logger.warn({ email }, "Rejected login: email not in allow-list");
-            done(null, false);
-            return;
-          }
-
-          const [existing] = await db.select().from(usersTable).where(eq(usersTable.email, email));
-
-          if (existing) {
-            const [updated] = await db
-              .update(usersTable)
-              .set({
-                name: profile.displayName || existing.name,
-                image: profile.photos?.[0]?.value || existing.image,
-                updatedAt: new Date(),
-              })
-              .where(eq(usersTable.id, existing.id))
-              .returning();
-
-            done(null, {
-              id: updated.id,
-              email: updated.email,
-              name: updated.name,
-              image: updated.image,
-              role: updated.role,
-            });
-            return;
-          }
-
-          const [newUser] = await db
-            .insert(usersTable)
-            .values({
-              email,
-              name: profile.displayName || email,
-              image: profile.photos?.[0]?.value || null,
-              role: resolveInitialRole(email),
-            })
-            .returning();
-
-          done(null, {
-            id: newUser.id,
-            email: newUser.email,
-            name: newUser.name,
-            image: newUser.image,
-            role: newUser.role,
-          });
-        } catch (err) {
-          done(err as Error);
-        }
+      (_accessToken, _refreshToken, profile, done) => {
+        void verifyGoogleProfile(profile as GoogleProfileLike, done);
       },
     ),
   );
