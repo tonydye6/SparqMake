@@ -2,6 +2,7 @@
 - [Stale github remote locks](stale-github-remote-locks.md) — `.git/refs/remotes/github/*.lock` silently no-op fetch/merge (false "success"); only a task agent can clear them, never the main agent.
 - [Typecheck baseline now green](typecheck-baseline.md) — repo-wide `pnpm run typecheck` now exits 0 (fixed api-zod codegen, integration lib @types/node, api-server + sparqmake errors); a red result now means a real regression.
 - [social-credentials file missing](social-credentials-missing-file.md) — the credential-resolver service was never committed; api-server tests/typecheck red at baseline (TS2307 + 2 test files) until it's restored.
+- [gitignore *credentials* trap](gitignore-credentials-trap.md) — root `.gitignore` `*credentials*` silently drops source files (lost social-credentials.ts broke typecheck + 2 suites); `git check-ignore` new files.
 - [api-client data wrapper mismatch](api-client-data-wrapper.md) — generated react-query hooks type list endpoints as bare arrays, but server returns `{ data: [...] }`; keep `.data` access, cast hook result; deleting `.data` breaks runtime.
 - [api-zod multipart collision](api-zod-multipart-collision.md) — new multipart endpoints emit a `<Op>Body` in both api-zod generated/api and generated/types; add it to the explicit re-export in api-zod index or typecheck fails TS2308.
 - [api-server local testing](api-server-local-testing.md) — routes need an `Origin` header even with DEV_AUTH_BYPASS; curl with `Origin: http://localhost`.
