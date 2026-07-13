@@ -423,6 +423,33 @@ async function mutateJson(method: "POST" | "PUT", url: string, body: unknown): P
 const postJson = (url: string, body: unknown) => mutateJson("POST", url, body);
 const putJson = (url: string, body: unknown) => mutateJson("PUT", url, body);
 
+// Shown in place of a variant image whose stored file no longer exists (e.g.
+// production media written to ephemeral disk and wiped by a republish). The
+// server returns 404 for the URL; the <img> onError flips the card into this
+// state instead of leaving a broken image icon.
+function MissingMedia() {
+  return (
+    <div className="w-full h-full flex flex-col items-center justify-center gap-1.5 p-4 text-center text-muted-foreground">
+      <AlertTriangle size={20} />
+      <span className="text-xs font-medium text-foreground">Media missing</span>
+      <span className="text-[11px] leading-snug">
+        The stored file is no longer available. Regenerate to restore it.
+      </span>
+    </div>
+  );
+}
+
+// Tracks whether an <img> for the given URL failed to load; resets whenever
+// the URL changes (e.g. after a regenerate writes a fresh file).
+function useImageError(url: string | null | undefined): [boolean, () => void] {
+  const [errorUrl, setErrorUrl] = useState<string | null>(null);
+  const failed = Boolean(url) && errorUrl === url;
+  const onError = useCallback(() => {
+    if (url) setErrorUrl(url);
+  }, [url]);
+  return [failed, onError];
+}
+
 // List endpoints are inconsistent: some return a bare array, some a `{ data: [] }`
 // wrapper, and the generated types don't always match runtime. Normalize both.
 function asArray<T>(resp: unknown): T[] {
@@ -540,6 +567,21 @@ function BeatBoard({
     }
   }
 
+  // Restore a take whose stored media file is gone (e.g. wiped ephemeral disk
+  // in production). Replaces the take in place with a freshly generated image.
+  async function regenerateTake(take: BoardVariant) {
+    if (!state.creativeId) return;
+    setVaryingId(take.id);
+    try {
+      const updated = await postJson(`${API_BASE}/api/creatives/${state.creativeId}/variants/${take.id}/regenerate`, {});
+      setTakes((prev) => prev.map((t) => (t.id === take.id ? (updated as BoardVariant) : t)));
+    } catch (err) {
+      toast({ variant: "destructive", title: "Regenerate failed", description: err instanceof Error ? err.message : "Please try again." });
+    } finally {
+      setVaryingId(null);
+    }
+  }
+
   const working = phase === "working";
 
   return (
@@ -588,6 +630,7 @@ function BeatBoard({
               varying={varyingId === take.id}
               onSelect={() => dispatch({ type: "selectVariant", variantId: take.id })}
               onVary={(mode) => vary(take, mode)}
+              onRegenerate={() => regenerateTake(take)}
             />
           ))}
         </div>
@@ -602,14 +645,17 @@ function VariantCard({
   varying,
   onSelect,
   onVary,
+  onRegenerate,
 }: {
   take: BoardVariant;
   selected: boolean;
   varying: boolean;
   onSelect: () => void;
   onVary: (mode: string) => void;
+  onRegenerate: () => void;
 }) {
   const img = take.compositedImageUrl || take.rawImageUrl;
+  const [imgMissing, onImgError] = useImageError(img);
   return (
     <Card
       className={cn(
@@ -618,8 +664,10 @@ function VariantCard({
       )}
     >
       <button onClick={onSelect} className="relative block w-full aspect-square bg-muted" data-testid={`take-${take.id}`}>
-        {img ? (
-          <img src={img} alt="Generated take" className="w-full h-full object-cover" />
+        {img && !imgMissing ? (
+          <img src={img} alt="Generated take" className="w-full h-full object-cover" onError={onImgError} />
+        ) : imgMissing ? (
+          <MissingMedia />
         ) : (
           <div className="w-full h-full flex items-center justify-center text-xs text-muted-foreground">No image</div>
         )}
@@ -640,18 +688,32 @@ function VariantCard({
         )}
       </button>
       <div className="flex flex-wrap gap-1 p-2 border-t border-border">
-        {VARY_OPTIONS.map((opt) => (
+        {imgMissing ? (
           <Button
-            key={opt.mode}
-            variant="ghost"
+            variant="outline"
             size="sm"
-            className="h-7 px-2 text-xs text-muted-foreground"
+            className="h-7 px-2 text-xs"
             disabled={varying}
-            onClick={() => onVary(opt.mode)}
+            onClick={onRegenerate}
+            data-testid={`take-regenerate-${take.id}`}
           >
-            {opt.label}
+            {varying ? <Loader2 size={12} className="mr-1 animate-spin" /> : <RefreshCw size={12} className="mr-1" />}
+            Regenerate
           </Button>
-        ))}
+        ) : (
+          VARY_OPTIONS.map((opt) => (
+            <Button
+              key={opt.mode}
+              variant="ghost"
+              size="sm"
+              className="h-7 px-2 text-xs text-muted-foreground"
+              disabled={varying}
+              onClick={() => onVary(opt.mode)}
+            >
+              {opt.label}
+            </Button>
+          ))
+        )}
       </div>
     </Card>
   );
@@ -671,6 +733,10 @@ function BeatFinish({ state, onAdvance }: { state: StudioState; onAdvance: () =>
   const [regenerating, setRegenerating] = useState(false);
   const [imgV, setImgV] = useState(0);
   const startedRef = useRef(false);
+  // Computed before the early returns below so the hook order stays stable.
+  const img = variant ? variant.compositedImageUrl || variant.rawImageUrl : null;
+  const imgSrc = img ? withImageVersion(img, imgV) : null;
+  const [imgMissing, onImgError] = useImageError(imgSrc);
 
   // Load the take chosen on the Board (variants live on the server).
   useEffect(() => {
@@ -760,16 +826,18 @@ function BeatFinish({ state, onAdvance }: { state: StudioState; onAdvance: () =>
     );
   }
 
-  const img = variant.compositedImageUrl || variant.rawImageUrl;
-
   return (
     <div className="max-w-5xl mx-auto px-6 py-8 space-y-10">
       <div className="grid gap-8 md:grid-cols-2">
       {/* Finished composite preview */}
       <div className="space-y-2">
         <Card className="overflow-hidden p-0 bg-muted">
-          {img ? (
-            <img src={withImageVersion(img, imgV)} alt="Finished composite" className="w-full aspect-square object-cover" />
+          {imgSrc && !imgMissing ? (
+            <img src={imgSrc} alt="Finished composite" className="w-full aspect-square object-cover" onError={onImgError} />
+          ) : imgMissing ? (
+            <div className="aspect-square">
+              <MissingMedia />
+            </div>
           ) : (
             <div className="aspect-square flex items-center justify-center text-muted-foreground">No image</div>
           )}
@@ -1357,6 +1425,8 @@ function FanoutCard({
   const [caption, setCaption] = useState(variant.caption || "");
   const [imgV, setImgV] = useState(0);
   const img = variant.compositedImageUrl || variant.rawImageUrl;
+  const imgSrc = img ? withImageVersion(img, imgV) : null;
+  const [imgMissing, onImgError] = useImageError(imgSrc);
   const approved = variant.status === "approved";
 
   // Click the image to recenter the crop on that point (free re-reframe).
@@ -1434,8 +1504,10 @@ function FanoutCard({
         className="relative block w-full aspect-square bg-muted cursor-crosshair"
         title={variant.clipWarning ? "Subject clipped — click it to recenter the crop" : "Click to recenter the crop"}
       >
-        {img ? (
-          <img src={withImageVersion(img, imgV)} alt={`${meta?.group || variant.platform || "platform"} variant`} className="w-full h-full object-cover" />
+        {imgSrc && !imgMissing ? (
+          <img src={imgSrc} alt={`${meta?.group || variant.platform || "platform"} variant`} className="w-full h-full object-cover" onError={onImgError} />
+        ) : imgMissing ? (
+          <MissingMedia />
         ) : (
           <div className="w-full h-full flex items-center justify-center text-xs text-muted-foreground">No image</div>
         )}

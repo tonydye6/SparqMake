@@ -12,6 +12,7 @@
 - [api-server storage tests + ownership](api-server-storage-tests.md) — chdir-before-import for disk-backend vitest; file ownership is reference-based (no user→brand tenant model).
 - [Dev-bypass user lifecycle](dev-bypass-user-lifecycle.md) — create is insert-only (email freezes/drifts); removal only at startup; cleanup deletes by fixed id OR historical emails, so stale prod rows need a redeploy.
 - [Object Storage cleanup & aging](object-storage-cleanup.md) — `@replit/object-storage` StorageObject has no timestamp; bucket objects cannot be age-gated, so cleanup/sweep use disk mtime + opt-in + trash recovery.
+- [Object Storage SDK binding](object-storage-sdk-binding.md) — SDK methods dereference `this`; an unbound reference call crashes the process. Call as methods, cast args not functions; mocks must mirror this.
 - [Audit logging](audit-logging.md) — `recordAudit` must run AFTER the primary op and never throw; `brandId` nullable no-FK (future tenancy); no-op deletes must not audit; content_plan has no brandId.
 - [Social credential resolution](social-credential-resolution.md) — always use the central resolver (SparqMake canonical + SparqForge aliases); viewEnvVars misses account-level secrets; placeholder values treated as unconfigured.
 - [Publish failure alerting](publish-failure-alerting.md) — alert sweep runs after each scheduler poll; per-account grouping + 30-min cooldown via publish_alerts rows; retry must reset alerted_at; SMTP unset = graceful degrade.

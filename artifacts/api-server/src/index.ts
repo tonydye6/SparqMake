@@ -15,6 +15,7 @@ import {
   startMetricsScheduler,
   stopMetricsScheduler,
 } from "./services/metrics-scheduler";
+import { logStorageStartupStatus } from "./services/storage";
 
 const rawPort = process.env["PORT"];
 
@@ -38,6 +39,7 @@ function startServer(seedFailed: boolean): Server {
       { port },
       seedFailed ? "Server listening (seed failed)" : "Server listening",
     );
+    logStorageStartupStatus();
     try {
       startPublishScheduler();
     } catch (err) {

@@ -33,7 +33,13 @@ vi.mock("@replit/object-storage", () => {
     }
     // GCS createReadStream({start,end}) honors byte ranges; the wrapper passes
     // options straight through, so a true ranged read returns only those bytes.
+    // Mirrors the real SDK, which dereferences `this` (this.getBucket()) — an
+    // unbound call (`const f = client.downloadAsStream; f(key)`) must throw
+    // here exactly like it does in production, so that regression fails tests.
     downloadAsStream(_k: string, opts?: { start?: number; end?: number }) {
+      if (this === undefined || typeof (this as Client).getBucket !== "function") {
+        throw new TypeError("Cannot read properties of undefined (reading 'getBucket')");
+      }
       calls.stream.push(opts);
       const start = opts?.start ?? 0;
       const end = opts?.end ?? OBJECT.length - 1;

@@ -55,6 +55,39 @@ export function bucketWritesEnabled(): boolean {
   return backend !== "disk";
 }
 
+/**
+ * Log the effective storage backend at startup. In production, writing media
+ * to local disk is data loss waiting to happen: deployment disks are ephemeral
+ * and every republish wipes them (this already destroyed all production-era
+ * generated images once). Make that state impossible to miss in the logs.
+ */
+export function logStorageStartupStatus(): void {
+  const production = process.env.NODE_ENV === "production";
+  if (bucketWritesEnabled()) {
+    logger.info(
+      { bucketConfigured: true, backend: "bucket" },
+      "Storage: writing media to Object Storage bucket",
+    );
+    return;
+  }
+  const reason = OBJECT_STORAGE_CONFIGURED
+    ? "STORAGE_BACKEND=disk kill-switch is set"
+    : "DEFAULT_OBJECT_STORAGE_BUCKET_ID is not set (no bucket configured)";
+  if (production) {
+    logger.error(
+      { bucketConfigured: OBJECT_STORAGE_CONFIGURED, backend: "disk" },
+      `*** STORAGE MISCONFIGURED IN PRODUCTION *** Media writes are going to EPHEMERAL DISK because ${reason}. ` +
+        "Every uploaded/generated file will be PERMANENTLY LOST on the next republish. " +
+        "Attach an Object Storage bucket to the deployment (DEFAULT_OBJECT_STORAGE_BUCKET_ID) before generating media.",
+    );
+  } else {
+    logger.warn(
+      { bucketConfigured: OBJECT_STORAGE_CONFIGURED, backend: "disk" },
+      `Storage: writing media to local disk (${reason})`,
+    );
+  }
+}
+
 let objectStorageClient: ObjectStorageClient | null = null;
 function client(): ObjectStorageClient {
   if (!objectStorageClient) objectStorageClient = new ObjectStorageClient();
@@ -512,10 +545,22 @@ export async function serveStored(
 
   // Bucket path (or disk-primary miss). Prefer a TRUE ranged read so large
   // media (e.g. video scrubbing) streams only the requested bytes from the
-  // bucket instead of pulling the whole object into memory.
+  // bucket instead of pulling the whole object into memory. A bucket failure
+  // must never escape this function: one bad object/SDK hiccup would otherwise
+  // become an unhandled rejection and take down the whole process.
   if (OBJECT_STORAGE_CONFIGURED) {
-    const served = await serveFromBucket(loc, contentType, req, res, opts);
-    if (served) return;
+    try {
+      const served = await serveFromBucket(loc, contentType, req, res, opts);
+      if (served) return;
+    } catch (err) {
+      logger.error({ err, loc }, "Bucket serve failed — falling back to disk");
+      if (res.headersSent) {
+        // Headers already went out for the bucket attempt; we cannot cleanly
+        // switch to the disk file mid-response. Terminate this response only.
+        res.destroy();
+        return;
+      }
+    }
   }
 
   // Bucket miss (or backend not configured): fall back to disk if present.
@@ -563,12 +608,20 @@ async function bucketMetadata(loc: StorageLocation): Promise<BucketObjectMeta | 
 
 type RangedDownloadOptions = { start?: number; end?: number };
 
-/** Open a (optionally byte-ranged) read stream against the bucket. */
+/**
+ * Open a (optionally byte-ranged) read stream against the bucket.
+ *
+ * MUST be invoked as a method on the client (never pulled off as a bare
+ * function reference): the SDK's downloadAsStream calls `this.getBucket()`
+ * internally, so an unbound call throws and — being uncaught — used to kill
+ * the whole process on the first image request. The SDK passes options
+ * straight through to GCS `createReadStream`, which honors `start`/`end`,
+ * so true ranged reads work even though the public type omits them.
+ */
 function bucketStream(loc: StorageLocation, range: { start: number; end: number } | null): Readable {
   const key = bucketKey(loc);
   const opts: RangedDownloadOptions | undefined = range ? { start: range.start, end: range.end } : undefined;
-  const download = client().downloadAsStream as unknown as (k: string, o?: RangedDownloadOptions) => Readable;
-  return download(key, opts);
+  return client().downloadAsStream(key, opts as Parameters<ObjectStorageClient["downloadAsStream"]>[1]);
 }
 
 function pipeBucketStream(stream: Readable, res: Response): void {
