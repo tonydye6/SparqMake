@@ -50,7 +50,7 @@ timeoutMs = 20000
 
 [userenv.shared]
 ALLOWED_EMAIL_DOMAINS = "sparqgames.com"
-ADMIN_EMAILS = "tony@sparqgames.com"
+ADMIN_EMAILS = "tony@sparqgames.com,da@sparqgames.com,chase@sparqgames.com,jeffrey@sparqgames.com,jan@sparqgames.com"
 
 [userenv.development]
 DEV_AUTH_BYPASS = "true"

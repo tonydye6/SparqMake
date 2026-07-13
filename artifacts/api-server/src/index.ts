@@ -16,6 +16,7 @@ import {
   stopMetricsScheduler,
 } from "./services/metrics-scheduler";
 import { logStorageStartupStatus } from "./services/storage";
+import { syncAdminEmails } from "./services/admin-sync";
 
 const rawPort = process.env["PORT"];
 
@@ -111,12 +112,14 @@ function registerShutdownHandlers(server: Server): void {
 seedDatabase()
   .then(async () => {
     await cleanupDevBypassUser();
+    await syncAdminEmails();
     const server = startServer(false);
     registerShutdownHandlers(server);
   })
   .catch(async (err) => {
     logger.error(err, "Failed to seed database");
     await cleanupDevBypassUser();
+    await syncAdminEmails();
     const server = startServer(true);
     registerShutdownHandlers(server);
   });
