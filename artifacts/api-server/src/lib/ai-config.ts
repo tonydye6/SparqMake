@@ -1,7 +1,7 @@
 export const AI_MODELS = {
   CLAUDE_SONNET: process.env.CLAUDE_MODEL || "claude-sonnet-4-6",
   GEMINI_FLASH_IMAGE: process.env.GEMINI_IMAGE_MODEL || "gemini-2.5-flash-image",
-  GEMINI_FLASH_TEXT: process.env.GEMINI_TEXT_MODEL || "gemini-2.5-flash-preview-05-20",
+  GEMINI_FLASH_TEXT: process.env.GEMINI_TEXT_MODEL || "gemini-2.5-flash",
   VEO_VIDEO: process.env.VEO_MODEL || "veo-2.0-generate-001",
 } as const;
 

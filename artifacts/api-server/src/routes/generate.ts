@@ -11,6 +11,7 @@ import { compositeImage, reframeImage, imageDimensions, type LayoutSpec } from "
 import { detectSubject, predictClip, type SubjectBox } from "../services/focal-point.js";
 import { checkBrandReadiness } from "../lib/brand-readiness.js";
 import { buildGenerationPacket } from "../services/packet-assembly.js";
+import { recordAssetUsage, packetAssetIds } from "../services/asset-usage.js";
 import { writeBuffer, writeFromFile, readBuffer, deleteObject, resolveUrl } from "../services/storage.js";
 import * as fs from "fs";
 import * as path from "path";
@@ -528,6 +529,8 @@ router.post("/creatives/:id/generate", generationLimiter, async (req: Request, r
       }
     }
 
+    await recordAssetUsage(packetAssetIds(packet));
+
     sendEvent("complete", {
       message: "Generation complete!",
       variantCount: insertedVariants.length,
@@ -898,6 +901,8 @@ async function generateVariantImage(
       throw new Error("Failed to save generated files. Please try again.");
     }
 
+    await recordAssetUsage(packetAssetIds(packet));
+
     return { rawFilename, compFilename, compositingFailed };
   } finally {
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
@@ -1059,6 +1064,8 @@ async function runVariantImageGeneration(
     }
     fs.rmSync(tmpDir, { recursive: true, force: true });
     tmpDir = null;
+
+    await recordAssetUsage(packetAssetIds(packet));
 
     res.status(opts.statusCode).json(row);
   } catch (error) {

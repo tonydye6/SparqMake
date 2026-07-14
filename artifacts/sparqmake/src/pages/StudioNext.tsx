@@ -35,6 +35,40 @@ interface Concept {
   angle: string;
 }
 
+// A matched asset offered on the confirm-picks screen, flattened from the
+// server's tiered match response.
+interface AssetSuggestion {
+  id: string;
+  name: string;
+  thumbnailUrl: string | null;
+  description: string | null;
+  matchedTerms: string[];
+  tier: "image" | "description" | "compositing" | "context";
+}
+
+const TIER_LABELS: Record<AssetSuggestion["tier"], string> = {
+  image: "Strong match — used as a visual reference",
+  description: "Described to the model as text guidance",
+  compositing: "Overlaid on the final image",
+  context: "Adds brand context",
+};
+
+// Attribution chip data returned by GET /creatives/:id/asset-usage.
+interface UsedAssetChip {
+  id: string;
+  name: string;
+  thumbnailUrl: string | null;
+  fileUrl: string | null;
+  role: string;
+}
+
+// An asset the creator confirmed for generation. First pick is the primary
+// subject reference; the rest ride along as supporting references.
+interface SelectedAssetPick {
+  assetId: string;
+  role: "primary" | "supporting";
+}
+
 interface StudioState {
   beat: Beat;
   // The creative is created on entering Board; takes/variants hang off it.
@@ -42,6 +76,8 @@ interface StudioState {
   brandId: string | null;
   briefText: string;
   selectedConcept: Concept | null;
+  // Confirmed asset picks from the Home beat, persisted onto the creative.
+  selectedAssets: SelectedAssetPick[];
   // The take chosen on the Board, carried into Finish.
   selectedVariantId: string | null;
   // Fan-out approve-selection (variant ids checked but not yet approved). Held in
@@ -55,6 +91,7 @@ type StudioAction =
   | { type: "setBrand"; brandId: string }
   | { type: "setBrief"; briefText: string }
   | { type: "selectConcept"; concept: Concept | null }
+  | { type: "setSelectedAssets"; assets: SelectedAssetPick[] }
   | { type: "setCreative"; creativeId: string }
   | { type: "selectVariant"; variantId: string }
   | { type: "toggleFanoutApprove"; id: string }
@@ -66,6 +103,7 @@ const initialState: StudioState = {
   brandId: null,
   briefText: "",
   selectedConcept: null,
+  selectedAssets: [],
   selectedVariantId: null,
   fanoutApproved: [],
 };
@@ -80,6 +118,7 @@ function reducer(state: StudioState, action: StudioAction): StudioState {
         ...state,
         brandId: action.brandId,
         selectedConcept: null,
+        selectedAssets: [],
         creativeId: null,
         selectedVariantId: null,
         fanoutApproved: [],
@@ -88,6 +127,8 @@ function reducer(state: StudioState, action: StudioAction): StudioState {
       return { ...state, briefText: action.briefText };
     case "selectConcept":
       return { ...state, selectedConcept: action.concept };
+    case "setSelectedAssets":
+      return { ...state, selectedAssets: action.assets };
     case "setCreative":
       return { ...state, creativeId: action.creativeId };
     case "selectVariant":
@@ -211,6 +252,9 @@ function BeatHome({
   const [brief, setBrief] = useState(state.briefText);
   const [concepts, setConcepts] = useState<Concept[]>([]);
   const [loadingConcepts, setLoadingConcepts] = useState(false);
+  const [matchLoading, setMatchLoading] = useState(false);
+  const [suggestions, setSuggestions] = useState<AssetSuggestion[] | null>(null);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
 
   const brandId = state.brandId;
 
@@ -253,10 +297,76 @@ function BeatHome({
     if (brandId) void loadConcepts();
   }, [brandId, loadConcepts]);
 
+  // Matches the brief against the brand's asset library. Only approved assets
+  // are offered (generation rejects unapproved picks). If nothing matches, we
+  // skip the confirm step and advance straight to the Board.
+  const openAssetPicks = useCallback(
+    async (briefFull: string) => {
+      if (!brandId || !briefFull.trim()) {
+        dispatch({ type: "setSelectedAssets", assets: [] });
+        onAdvance();
+        return;
+      }
+      setMatchLoading(true);
+      try {
+        const res = await postJson(`${API_BASE}/api/assets/match`, { brandId, briefText: briefFull });
+        const tiers: Array<{ list: any[]; tier: AssetSuggestion["tier"] }> = [
+          { list: res.imageReferences || [], tier: "image" },
+          { list: res.textDescriptions || [], tier: "description" },
+          { list: res.compositing || [], tier: "compositing" },
+          { list: res.context || [], tier: "context" },
+        ];
+        const seen = new Set<string>();
+        const flat: AssetSuggestion[] = [];
+        for (const { list, tier } of tiers) {
+          for (const m of list) {
+            const a = m.asset || {};
+            if (!a.id || seen.has(a.id) || a.status !== "approved") continue;
+            seen.add(a.id);
+            flat.push({
+              id: a.id,
+              name: a.name || "Untitled asset",
+              thumbnailUrl: a.thumbnailUrl || a.fileUrl || null,
+              description: a.description || null,
+              matchedTerms: m.matchedTerms || [],
+              tier,
+            });
+          }
+        }
+        if (flat.length === 0) {
+          dispatch({ type: "setSelectedAssets", assets: [] });
+          onAdvance();
+          return;
+        }
+        setSuggestions(flat);
+        // Pre-check the image-reference tier — those are the strongest matches.
+        setPicked(new Set(flat.filter((s) => s.tier === "image").map((s) => s.id)));
+      } catch {
+        // Matching is best-effort; never block generation on it.
+        dispatch({ type: "setSelectedAssets", assets: [] });
+        onAdvance();
+      } finally {
+        setMatchLoading(false);
+      }
+    },
+    [brandId, dispatch, onAdvance],
+  );
+
+  function confirmPicks() {
+    if (!suggestions) return;
+    const ordered = suggestions.filter((s) => picked.has(s.id));
+    dispatch({
+      type: "setSelectedAssets",
+      assets: ordered.map((s, i) => ({ assetId: s.id, role: i === 0 ? "primary" : "supporting" })),
+    });
+    setSuggestions(null);
+    onAdvance();
+  }
+
   function pickConcept(concept: Concept) {
     dispatch({ type: "setBrief", briefText: brief.trim() });
     dispatch({ type: "selectConcept", concept });
-    onAdvance();
+    void openAssetPicks([brief.trim(), `${concept.title}: ${concept.angle}`].filter(Boolean).join("\n"));
   }
 
   function generateFromPrompt() {
@@ -270,7 +380,86 @@ function BeatHome({
     }
     dispatch({ type: "setBrief", briefText: brief.trim() });
     dispatch({ type: "selectConcept", concept: null });
-    onAdvance();
+    void openAssetPicks(brief.trim());
+  }
+
+  if (suggestions) {
+    return (
+      <div className="max-w-3xl mx-auto px-6 py-10 space-y-6">
+        <div className="space-y-1">
+          <h1 className="font-display text-3xl font-semibold tracking-tight text-foreground">
+            Use these brand assets?
+          </h1>
+          <p className="text-muted-foreground">
+            These approved assets match your brief. Checked assets guide the generated images.
+          </p>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {suggestions.map((s) => {
+            const checked = picked.has(s.id);
+            return (
+              <Card
+                key={s.id}
+                role="button"
+                tabIndex={0}
+                onClick={() =>
+                  setPicked((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(s.id)) next.delete(s.id);
+                    else next.add(s.id);
+                    return next;
+                  })
+                }
+                className={cn(
+                  "p-3 flex items-start gap-3 cursor-pointer transition-colors",
+                  checked ? "border-primary bg-primary/5" : "hover:border-primary/50",
+                )}
+                data-testid={`asset-pick-${s.id}`}
+              >
+                <div className="w-16 h-16 rounded-md bg-muted overflow-hidden shrink-0 flex items-center justify-center">
+                  {s.thumbnailUrl ? (
+                    <img src={`${API_BASE}${s.thumbnailUrl}`} alt={s.name} className="w-full h-full object-cover" />
+                  ) : (
+                    <Sparkles size={18} className="text-muted-foreground" />
+                  )}
+                </div>
+                <div className="flex-1 min-w-0 space-y-1">
+                  <div className="flex items-center gap-2">
+                    <Checkbox checked={checked} className="pointer-events-none" />
+                    <span className="text-sm font-medium text-foreground truncate">{s.name}</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground line-clamp-2">
+                    {s.description || TIER_LABELS[s.tier]}
+                  </p>
+                  {s.matchedTerms.length > 0 && (
+                    <p className="text-[11px] text-primary truncate">
+                      Matches: {s.matchedTerms.slice(0, 4).join(", ")}
+                    </p>
+                  )}
+                </div>
+              </Card>
+            );
+          })}
+        </div>
+        <div className="flex items-center justify-between">
+          <Button
+            variant="ghost"
+            onClick={() => {
+              dispatch({ type: "setSelectedAssets", assets: [] });
+              setSuggestions(null);
+              onAdvance();
+            }}
+            data-testid="asset-picks-skip"
+          >
+            Skip assets
+          </Button>
+          <Button onClick={confirmPicks} data-testid="asset-picks-confirm">
+            Continue{picked.size > 0 ? ` with ${picked.size} asset${picked.size === 1 ? "" : "s"}` : " without assets"}
+            <ArrowRight size={16} className="ml-1.5" />
+          </Button>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -326,9 +515,18 @@ function BeatHome({
             <RefreshCw size={14} className={cn("mr-1.5", loadingConcepts && "animate-spin")} />
             Refresh concepts
           </Button>
-          <Button onClick={generateFromPrompt} disabled={!brandId} data-testid="studio-next-generate">
-            Generate
-            <ArrowRight size={16} className="ml-1.5" />
+          <Button onClick={generateFromPrompt} disabled={!brandId || matchLoading} data-testid="studio-next-generate">
+            {matchLoading ? (
+              <>
+                <Loader2 size={16} className="mr-1.5 animate-spin" />
+                Matching assets
+              </>
+            ) : (
+              <>
+                Generate
+                <ArrowRight size={16} className="ml-1.5" />
+              </>
+            )}
           </Button>
         </div>
       </div>
@@ -475,7 +673,28 @@ function BeatBoard({
   const [phase, setPhase] = useState<"working" | "ready" | "error">("working");
   const [varyingId, setVaryingId] = useState<string | null>(null);
   const [moreLoading, setMoreLoading] = useState(false);
+  const [usedAssets, setUsedAssets] = useState<UsedAssetChip[]>([]);
   const startedRef = useRef(false);
+
+  // Attribution chips: which brand assets this creative was generated with.
+  useEffect(() => {
+    if (!state.creativeId) {
+      setUsedAssets([]);
+      return;
+    }
+    let cancelled = false;
+    void apiFetch(`${API_BASE}/api/creatives/${state.creativeId}/asset-usage`)
+      .then((r) => (r.ok ? r.json() : { assets: [] }))
+      .then((data) => {
+        if (!cancelled) setUsedAssets(Array.isArray(data.assets) ? data.assets : []);
+      })
+      .catch(() => {
+        if (!cancelled) setUsedAssets([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [state.creativeId]);
 
   const generateTakes = useCallback(async (creativeId: string, count: number) => {
     const res = await postJson(`${API_BASE}/api/creatives/${creativeId}/takes`, { count });
@@ -523,7 +742,7 @@ function BeatBoard({
           templateId,
           name,
           briefText: brief || undefined,
-          selectedAssets: [],
+          selectedAssets: state.selectedAssets,
           createdBy: "self", // server overrides this with the authenticated user
         });
         dispatch({ type: "setCreative", creativeId: creative.id });
@@ -604,6 +823,31 @@ function BeatBoard({
           </Button>
         </div>
       </div>
+
+      {usedAssets.length > 0 && (
+        <div className="flex items-center gap-2 flex-wrap" data-testid="board-asset-chips">
+          <span className="text-xs text-muted-foreground">Made with:</span>
+          {usedAssets.map((a) => (
+            <span
+              key={a.id}
+              className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/50 pl-1 pr-2.5 py-0.5 text-xs text-foreground"
+              data-testid={`asset-chip-${a.id}`}
+            >
+              {a.thumbnailUrl || a.fileUrl ? (
+                <img
+                  src={`${API_BASE}${a.thumbnailUrl || a.fileUrl}`}
+                  alt=""
+                  className="w-5 h-5 rounded-full object-cover"
+                />
+              ) : (
+                <Sparkles size={12} className="ml-1 text-muted-foreground" />
+              )}
+              {a.name}
+              {a.role === "primary" && <span className="text-[10px] text-primary font-medium">primary</span>}
+            </span>
+          ))}
+        </div>
+      )}
 
       {working && takes.length === 0 ? (
         <div className="grid gap-4 sm:grid-cols-3">

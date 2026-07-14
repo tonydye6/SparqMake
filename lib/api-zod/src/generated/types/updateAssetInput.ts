@@ -26,4 +26,7 @@ export interface UpdateAssetInput {
   referencePriorityDefault?: number | null;
   freshnessScore?: number | null;
   characterIdentityNote?: string;
+  depictedEntities?: string[] | null;
+  colors?: string[] | null;
+  styleNotes?: string | null;
 }

@@ -52,6 +52,26 @@ function buildImagePrompt(ctx: AssembledContext, referenceImages?: ReferenceImag
     parts.push("REFERENCE IMAGES:\n" + refDescriptions.join("\n"));
   }
 
+  // Tiered reference injection: generation assets beyond the attached image
+  // references are injected as text descriptors so their content still guides
+  // the scene without consuming reference-image slots.
+  const attachedCount = Math.min(referenceImages?.length ?? 0, 3);
+  const descriptorAssets = (ctx.generationPacket?.generationAssets || [])
+    .slice(Math.max(attachedCount, 3))
+    .map(g => g.asset)
+    .filter(a => a.description || a.styleNotes || (a.depictedEntities || []).length > 0);
+  if (descriptorAssets.length > 0) {
+    const lines = descriptorAssets.map(a => {
+      const bits: string[] = [];
+      if (a.description) bits.push(a.description);
+      if ((a.depictedEntities || []).length > 0) bits.push(`Depicts: ${(a.depictedEntities || []).join(", ")}`);
+      if (a.styleNotes) bits.push(`Style: ${a.styleNotes}`);
+      if ((a.colors || []).length > 0) bits.push(`Colors: ${(a.colors || []).join(", ")}`);
+      return `- ${a.name}: ${bits.join(" ")}`;
+    });
+    parts.push("ADDITIONAL BRAND ASSET DESCRIPTORS (not attached as images; incorporate their subjects and look):\n" + lines.join("\n"));
+  }
+
   if (ctx.brand.imagenPrefix) {
     parts.push(ctx.brand.imagenPrefix);
   }

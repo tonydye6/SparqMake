@@ -15,6 +15,8 @@ import {
   DeleteAssetResponse,
 } from "@workspace/api-zod";
 import { backfillAssetClassifications } from "../services/backfill-assets.js";
+import { analyzeAndStoreAsset, backfillAssetAnalysis, analyzeAssetInBackground, isAnalyzableAsset } from "../services/asset-analysis.js";
+import { matchAssetsToBrief } from "../services/asset-matching.js";
 import { validateRequest } from "../middleware/validate.js";
 import { requireBulkMutation, requireDestructive } from "../middleware/auth.js";
 import { recordAudit, actorFromRequest } from "../lib/audit.js";
@@ -93,7 +95,42 @@ router.get("/assets", async (req, res): Promise<void> => {
 router.post("/assets", validateRequest({ body: CreateAssetBody }), async (req, res): Promise<void> => {
   const userId = ((req as unknown as Record<string, unknown>).user as AuthenticatedUser | undefined)?.id || "system";
   const [asset] = await db.insert(assetsTable).values({ ...req.body, uploadedBy: userId }).returning();
+  if (asset && isAnalyzableAsset(asset)) {
+    analyzeAssetInBackground(asset.id);
+  }
   res.status(201).json(GetAssetResponse.parse(asset));
+});
+
+router.post("/assets/match", async (req, res): Promise<void> => {
+  const { brandId, briefText } = req.body as { brandId?: string; briefText?: string };
+  if (!brandId || !briefText || !briefText.trim()) {
+    res.status(400).json({ error: "brandId and briefText are required" });
+    return;
+  }
+  const result = await matchAssetsToBrief({ brandId, briefText });
+  const serialize = (m: { asset: Record<string, unknown>; score: number; role: string; matchedTerms: string[] }) => ({
+    asset: m.asset,
+    score: Math.round(m.score * 100) / 100,
+    role: m.role,
+    matchedTerms: m.matchedTerms,
+  });
+  res.json({
+    imageReferences: result.imageReferences.map(serialize),
+    textDescriptions: result.textDescriptions.map(serialize),
+    compositing: result.compositing.map(serialize),
+    context: result.context.map(serialize),
+  });
+});
+
+router.post("/assets/analyze-backfill", requireBulkMutation, async (req, res): Promise<void> => {
+  const { brandId, force, limit } = (req.body || {}) as { brandId?: string; force?: boolean; limit?: number };
+  try {
+    const result = await backfillAssetAnalysis({ brandId, force: !!force, limit });
+    res.json(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: `Analysis backfill failed: ${message}` });
+  }
 });
 
 const VALID_ASSET_STATUSES = ["uploaded", "approved", "archived"];
@@ -378,6 +415,24 @@ router.delete("/assets/:id", requireDestructive, validateRequest({ params: Delet
   });
 });
 
+router.post("/assets/:id/analyze", async (req, res): Promise<void> => {
+  try {
+    const updated = await analyzeAndStoreAsset(str(req.params.id));
+    res.json(GetAssetResponse.parse(updated));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message === "Asset not found") {
+      res.status(404).json({ error: message });
+      return;
+    }
+    if (message === "Asset is not an analyzable image") {
+      res.status(400).json({ error: message });
+      return;
+    }
+    res.status(500).json({ error: `Analysis failed: ${message}` });
+  }
+});
+
 router.get("/assets/:id/usage", async (req, res): Promise<void> => {
   const assetId = str(req.params.id);
 
@@ -399,6 +454,32 @@ router.get("/assets/:id/usage", async (req, res): Promise<void> => {
     .orderBy(creativesTable.createdAt);
 
   res.json(usedIn);
+});
+
+// Attribution for board chips: which assets a creative was generated with.
+router.get("/creatives/:id/asset-usage", async (req, res): Promise<void> => {
+  const creativeId = str(req.params.id);
+  const [creative] = await db.select().from(creativesTable).where(eq(creativesTable.id, creativeId));
+  if (!creative) {
+    res.status(404).json({ error: "Creative not found" });
+    return;
+  }
+  const refs = (creative.selectedAssets || []) as Array<{ assetId: string; role?: string }>;
+  const ids = [...new Set(refs.map(r => r.assetId).filter(Boolean))];
+  if (ids.length === 0) {
+    res.json({ assets: [] });
+    return;
+  }
+  const rows = await db.select({
+    id: assetsTable.id,
+    name: assetsTable.name,
+    thumbnailUrl: assetsTable.thumbnailUrl,
+    fileUrl: assetsTable.fileUrl,
+    assetClass: assetsTable.assetClass,
+    type: assetsTable.type,
+  }).from(assetsTable).where(inArray(assetsTable.id, ids));
+  const roleById = new Map(refs.map(r => [r.assetId, r.role || "supporting"]));
+  res.json({ assets: rows.map(r => ({ ...r, role: roleById.get(r.id) || "supporting" })) });
 });
 
 router.post("/assets/backfill", async (_req, res): Promise<void> => {

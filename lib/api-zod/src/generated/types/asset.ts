@@ -39,6 +39,11 @@ export interface Asset {
   conflictTags: string[];
   freshnessScore?: number | null;
   characterIdentityNote?: string;
+  depictedEntities?: string[] | null;
+  colors?: string[] | null;
+  styleNotes?: string | null;
+  aiAnalyzedAt?: Date | null;
+  lastUsedAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }

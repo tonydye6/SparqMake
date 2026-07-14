@@ -83,6 +83,7 @@ export default function AssetLibrary() {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkLoading, setBulkLoading] = useState(false);
+  const [backfillLoading, setBackfillLoading] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   
   const { data: brands } = useGetBrands();
@@ -303,6 +304,37 @@ export default function AssetLibrary() {
 
   const bulkMode = selectedIds.size > 0;
 
+  // Kicks off AI vision analysis for every unanalyzed image asset (optionally
+  // scoped to the selected brand). Runs server-side; can take a while.
+  const runAnalyzeBackfill = async () => {
+    setBackfillLoading(true);
+    try {
+      const res = await apiFetch(`${API_BASE}/api/assets/analyze-backfill`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(selectedBrand !== "all" ? { brandId: selectedBrand } : {}),
+      });
+      if (!res.ok) {
+        if (isForbidden(res)) {
+          toast({ variant: "destructive", title: PERMISSION_DENIED_MESSAGE });
+          return;
+        }
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Analysis failed");
+      }
+      const data = await res.json();
+      queryClient.invalidateQueries({ queryKey: ["/api/assets"] });
+      toast({
+        title: "Analysis complete",
+        description: `${data.analyzed ?? 0} analyzed, ${data.skipped ?? 0} skipped${data.failed ? `, ${data.failed} failed` : ""}.`,
+      });
+    } catch (err) {
+      toast({ variant: "destructive", title: "Analysis failed", description: err instanceof Error ? err.message : "Please try again." });
+    } finally {
+      setBackfillLoading(false);
+    }
+  };
+
   return (
     <div className="flex flex-col h-full overflow-hidden p-6 max-w-[1600px] mx-auto w-full">
       <div className="flex items-center justify-between mb-8 shrink-0">
@@ -359,6 +391,19 @@ export default function AssetLibrary() {
               <SelectItem value="archived">Archived</SelectItem>
             </SelectContent>
           </Select>
+
+          {canWrite && (
+            <Button
+              variant="outline"
+              onClick={runAnalyzeBackfill}
+              disabled={backfillLoading}
+              className="border-border"
+              data-testid="analyze-all-assets"
+            >
+              {backfillLoading ? <Loader2 size={16} className="mr-2 animate-spin" /> : <Zap size={16} className="mr-2" />}
+              {backfillLoading ? "Analyzing..." : "Analyze all"}
+            </Button>
+          )}
         </div>
 
         <TabsContent value="visuals" className="flex-1 overflow-y-auto mt-0 border-none p-0 outline-none pr-4 pb-10">
@@ -575,6 +620,7 @@ function VisualAssetCard({ asset, selected, onToggleSelect, bulkMode, canWrite }
   const [formData, setFormData] = useState({ name: asset.name, description: asset.description || "", tags: asset.tags?.join(", ") || "", characterIdentityNote: asset.characterIdentityNote || "" });
   const [usageData, setUsageData] = useState<CreativeUsage[] | null>(null);
   const [usageLoading, setUsageLoading] = useState(false);
+  const [analyzing, setAnalyzing] = useState(false);
   const [thumbBroken, setThumbBroken] = useState(false);
   const [fileBroken, setFileBroken] = useState(false);
 
@@ -635,6 +681,28 @@ function VisualAssetCard({ asset, selected, onToggleSelect, bulkMode, canWrite }
   };
 
   const isSubjectReference = asset.assetClass === "subject_reference";
+  const isImage = !asset.mimeType?.includes("video");
+
+  const runAnalysis = async () => {
+    setAnalyzing(true);
+    try {
+      const res = await apiFetch(`${API_BASE}/api/assets/${asset.id}/analyze`, { method: "POST" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `Analysis failed (${res.status})`);
+      }
+      queryClient.invalidateQueries({ queryKey: ["/api/assets"] });
+      toast({ title: "Asset analyzed", description: "AI metadata has been updated." });
+    } catch (err) {
+      toast({
+        variant: "destructive",
+        title: "Analysis failed",
+        description: err instanceof Error ? err.message : "Please try again.",
+      });
+    } finally {
+      setAnalyzing(false);
+    }
+  };
 
   const handleCheckboxClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -814,6 +882,69 @@ function VisualAssetCard({ asset, selected, onToggleSelect, bulkMode, canWrite }
                     </div>
                   )}
                 </div>
+
+                {isImage && (
+                  <div className="bg-background p-4 rounded-lg border border-border space-y-3" data-testid={`ai-analysis-${asset.id}`}>
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-xs uppercase text-muted-foreground font-semibold flex items-center gap-1.5">
+                        <Zap size={12} /> AI Analysis
+                      </h4>
+                      <div className="flex items-center gap-2">
+                        {asset.aiAnalyzedAt ? (
+                          <Badge variant="secondary" className="text-[10px]">
+                            Analyzed {new Date(asset.aiAnalyzedAt).toLocaleDateString()}
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="text-[10px]">Not analyzed</Badge>
+                        )}
+                        {canWrite && (
+                          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={runAnalysis} disabled={analyzing} data-testid={`analyze-asset-${asset.id}`}>
+                            {analyzing ? <Loader2 size={12} className="mr-1 animate-spin" /> : <Zap size={12} className="mr-1" />}
+                            {asset.aiAnalyzedAt ? "Re-analyze" : "Analyze"}
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                    {(asset.depictedEntities?.length || 0) > 0 && (
+                      <div>
+                        <span className="text-xs text-muted-foreground block mb-1">Depicts</span>
+                        <div className="flex flex-wrap gap-1">
+                          {(asset.depictedEntities || []).map((e: string) => <Badge key={e} variant="secondary" className="text-[10px]">{e}</Badge>)}
+                        </div>
+                      </div>
+                    )}
+                    {(asset.colors?.length || 0) > 0 && (
+                      <div>
+                        <span className="text-xs text-muted-foreground block mb-1">Colors</span>
+                        <div className="flex flex-wrap gap-1.5">
+                          {(asset.colors || []).map((c: string) => (
+                            <span key={c} className="inline-flex items-center gap-1 text-xs text-foreground">
+                              <span className="w-3 h-3 rounded-full border border-border inline-block" style={{ backgroundColor: c }} />
+                              {c}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {asset.styleNotes && (
+                      <div>
+                        <span className="text-xs text-muted-foreground block mb-1">Style notes</span>
+                        <p className="text-sm text-foreground">{asset.styleNotes}</p>
+                      </div>
+                    )}
+                    {(asset.usageCount || 0) > 0 && (
+                      <p className="text-xs text-muted-foreground">
+                        Used in generation {asset.usageCount} time{asset.usageCount === 1 ? "" : "s"}
+                        {asset.lastUsedAt ? ` · last on ${new Date(asset.lastUsedAt).toLocaleDateString()}` : ""}
+                      </p>
+                    )}
+                    {!asset.aiAnalyzedAt && (
+                      <p className="text-xs text-muted-foreground">
+                        Analysis extracts a description, subjects, colors, and style notes so this asset can be matched to prompts automatically.
+                      </p>
+                    )}
+                  </div>
+                )}
 
                 {canWrite && (
                   <IntelligenceEditor asset={asset} onUpdate={handleUpdate} isPending={updateMutation.isPending} />

@@ -76,6 +76,11 @@ export interface Asset {
   conflictTags: string[];
   freshnessScore?: number | null;
   characterIdentityNote?: string;
+  depictedEntities?: string[] | null;
+  colors?: string[] | null;
+  styleNotes?: string | null;
+  aiAnalyzedAt?: string | null;
+  lastUsedAt?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -457,6 +462,9 @@ export interface UpdateAssetInput {
   referencePriorityDefault?: number | null;
   freshnessScore?: number | null;
   characterIdentityNote?: string;
+  depictedEntities?: string[] | null;
+  colors?: string[] | null;
+  styleNotes?: string | null;
 }
 
 export interface CreateHashtagSetInput {

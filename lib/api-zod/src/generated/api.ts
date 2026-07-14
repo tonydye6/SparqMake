@@ -328,6 +328,11 @@ export const GetAssetsResponse = zod.object({
       conflictTags: zod.array(zod.string()),
       freshnessScore: zod.number().nullish(),
       characterIdentityNote: zod.string().optional(),
+      depictedEntities: zod.array(zod.string()).nullish(),
+      colors: zod.array(zod.string()).nullish(),
+      styleNotes: zod.string().nullish(),
+      aiAnalyzedAt: zod.date().nullish(),
+      lastUsedAt: zod.date().nullish(),
       createdAt: zod.date(),
       updatedAt: zod.date(),
     }),
@@ -402,6 +407,11 @@ export const GetAssetResponse = zod.object({
   conflictTags: zod.array(zod.string()),
   freshnessScore: zod.number().nullish(),
   characterIdentityNote: zod.string().optional(),
+  depictedEntities: zod.array(zod.string()).nullish(),
+  colors: zod.array(zod.string()).nullish(),
+  styleNotes: zod.string().nullish(),
+  aiAnalyzedAt: zod.date().nullish(),
+  lastUsedAt: zod.date().nullish(),
   createdAt: zod.date(),
   updatedAt: zod.date(),
 });
@@ -433,6 +443,9 @@ export const UpdateAssetBody = zod.object({
   referencePriorityDefault: zod.number().nullish(),
   freshnessScore: zod.number().nullish(),
   characterIdentityNote: zod.string().optional(),
+  depictedEntities: zod.array(zod.string()).nullish(),
+  colors: zod.array(zod.string()).nullish(),
+  styleNotes: zod.string().nullish(),
 });
 
 export const UpdateAssetResponse = zod.object({
@@ -468,6 +481,11 @@ export const UpdateAssetResponse = zod.object({
   conflictTags: zod.array(zod.string()),
   freshnessScore: zod.number().nullish(),
   characterIdentityNote: zod.string().optional(),
+  depictedEntities: zod.array(zod.string()).nullish(),
+  colors: zod.array(zod.string()).nullish(),
+  styleNotes: zod.string().nullish(),
+  aiAnalyzedAt: zod.date().nullish(),
+  lastUsedAt: zod.date().nullish(),
   createdAt: zod.date(),
   updatedAt: zod.date(),
 });

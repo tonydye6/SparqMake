@@ -16,6 +16,9 @@ export interface PacketAsset {
   score: number;
 }
 
+export const MAX_GENERATION_ASSETS = 6;
+export const MAX_IMAGE_REFERENCES = 3;
+
 export interface PacketReasoning {
   selections: Array<{ assetId: string; assetName: string; role: string; reason: string }>;
   exclusions: Array<{ assetId: string; assetName: string; reason: string }>;
@@ -149,7 +152,7 @@ export async function buildGenerationPacket(params: {
   }
 
   for (const style of styleCandidates) {
-    if (generationAssets.length >= 3) break;
+    if (generationAssets.length >= MAX_GENERATION_ASSETS) break;
     const noConflict = generationAssets.every(g => !hasConflict(g.asset, style.asset));
     if (noConflict) {
       generationAssets.push(style);
@@ -162,8 +165,8 @@ export async function buildGenerationPacket(params: {
     }
   }
 
-  if (generationAssets.length < 3 && subjectCandidates.length > 1) {
-    for (let i = 1; i < subjectCandidates.length && generationAssets.length < 3; i++) {
+  if (generationAssets.length < MAX_GENERATION_ASSETS && subjectCandidates.length > 1) {
+    for (let i = 1; i < subjectCandidates.length && generationAssets.length < MAX_GENERATION_ASSETS; i++) {
       const candidate = subjectCandidates[i];
       const noConflict = generationAssets.every(g => !hasConflict(g.asset, candidate.asset));
       if (noConflict) {
@@ -180,7 +183,7 @@ export async function buildGenerationPacket(params: {
 
   reasoning.strategy = generationAssets.length === 0
     ? "No generation-eligible assets selected; text-only generation will be used"
-    : `Selected ${generationAssets.length} reference image(s) for generation: ${generationAssets.map(g => g.role).join(", ")}`;
+    : `Selected ${generationAssets.length} generation asset(s): top ${Math.min(generationAssets.length, MAX_IMAGE_REFERENCES)} as reference image(s), rest as text descriptors (${generationAssets.map(g => g.role).join(", ")})`;
 
   try {
     await db.insert(generationPacketLogsTable).values({
