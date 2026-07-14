@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useDropzone } from "react-dropzone";
-import { UploadCloud, Search, Filter, FolderPlus, MoreVertical, Image as ImageIcon, Video, FileText, Hash, Check, X, Trash2, Edit2, Plus, CheckSquare, Square, Tag, Archive, Star, Shield, Layers, Eye, EyeOff, Zap, ImagePlus, CheckCircle2, XCircle, Loader2 } from "lucide-react";
+import { UploadCloud, Search, Filter, FolderPlus, MoreVertical, Image as ImageIcon, Video, FileText, Hash, Check, X, Trash2, Edit2, Plus, CheckSquare, Square, Tag, Archive, Star, Shield, Layers, Eye, EyeOff, Zap, ImagePlus, CheckCircle2, XCircle, Loader2, ImageOff } from "lucide-react";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -575,6 +575,8 @@ function VisualAssetCard({ asset, selected, onToggleSelect, bulkMode, canWrite }
   const [formData, setFormData] = useState({ name: asset.name, description: asset.description || "", tags: asset.tags?.join(", ") || "", characterIdentityNote: asset.characterIdentityNote || "" });
   const [usageData, setUsageData] = useState<CreativeUsage[] | null>(null);
   const [usageLoading, setUsageLoading] = useState(false);
+  const [thumbBroken, setThumbBroken] = useState(false);
+  const [fileBroken, setFileBroken] = useState(false);
 
   useEffect(() => {
     if (isOpen && usageData === null) {
@@ -657,12 +659,18 @@ function VisualAssetCard({ asset, selected, onToggleSelect, bulkMode, canWrite }
         onClick={() => setIsOpen(true)}
       >
         <div className="aspect-square bg-muted/30 relative overflow-hidden">
-          {asset.thumbnailUrl || asset.fileUrl ? (
+          {(asset.thumbnailUrl || asset.fileUrl) && !thumbBroken ? (
             <img 
               src={asset.thumbnailUrl || asset.fileUrl || ""} 
               alt={asset.name}
               className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105 opacity-90 group-hover:opacity-100"
+              onError={() => setThumbBroken(true)}
             />
+          ) : thumbBroken ? (
+            <div className="w-full h-full flex flex-col items-center justify-center gap-1.5 text-muted-foreground" data-testid={`asset-file-missing-${asset.id}`}>
+              <ImageOff size={28} />
+              <span className="text-[11px] font-medium">File missing</span>
+            </div>
           ) : (
             <div className="w-full h-full flex items-center justify-center text-muted-foreground">
               <ImageIcon size={32} />
@@ -728,12 +736,17 @@ function VisualAssetCard({ asset, selected, onToggleSelect, bulkMode, canWrite }
           
           <div className="flex-1 overflow-y-auto p-6 space-y-6">
             <div className="aspect-video bg-muted rounded-lg overflow-hidden flex items-center justify-center border border-border">
-              {asset.fileUrl ? (
+              {asset.fileUrl && !fileBroken ? (
                 asset.mimeType?.includes('video') ? (
-                  <video src={asset.fileUrl} controls className="max-w-full max-h-full" />
+                  <video src={asset.fileUrl} controls className="max-w-full max-h-full" onError={() => setFileBroken(true)} />
                 ) : (
-                  <img src={asset.fileUrl} alt={asset.name} className="max-w-full max-h-full object-contain" />
+                  <img src={asset.fileUrl} alt={asset.name} className="max-w-full max-h-full object-contain" onError={() => setFileBroken(true)} />
                 )
+              ) : fileBroken ? (
+                <div className="flex flex-col items-center gap-2 text-muted-foreground">
+                  <ImageOff size={40} />
+                  <span className="text-sm font-medium">File missing from storage</span>
+                </div>
               ) : (
                 <ImageIcon size={48} className="text-muted-foreground" />
               )}
