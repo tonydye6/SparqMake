@@ -406,6 +406,15 @@ export interface CreateTemplateInput {
   targetAspectRatios: string[];
 }
 
+export type CreateAssetInputStatus =
+  (typeof CreateAssetInputStatus)[keyof typeof CreateAssetInputStatus];
+
+export const CreateAssetInputStatus = {
+  uploaded: "uploaded",
+  approved: "approved",
+  archived: "archived",
+} as const;
+
 export interface CreateAssetInput {
   brandId: string;
   type: string;
@@ -418,7 +427,7 @@ export interface CreateAssetInput {
   content?: string | null;
   mimeType?: string | null;
   fileSizeBytes?: number | null;
-  uploadedBy: string;
+  status?: CreateAssetInputStatus;
   assetClass?: string | null;
   generationRole?: string | null;
   brandLayer?: string | null;

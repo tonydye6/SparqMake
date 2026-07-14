@@ -352,7 +352,7 @@ export const CreateAssetBody = zod.object({
   content: zod.string().nullish(),
   mimeType: zod.string().nullish(),
   fileSizeBytes: zod.number().nullish(),
-  uploadedBy: zod.string(),
+  status: zod.enum(["uploaded", "approved", "archived"]).optional(),
   assetClass: zod.string().nullish(),
   generationRole: zod.string().nullish(),
   brandLayer: zod.string().nullish(),

@@ -5,6 +5,7 @@
  * SparqMake API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { CreateAssetInputStatus } from "./createAssetInputStatus";
 
 export interface CreateAssetInput {
   brandId: string;
@@ -18,7 +19,7 @@ export interface CreateAssetInput {
   content?: string | null;
   mimeType?: string | null;
   fileSizeBytes?: number | null;
-  uploadedBy: string;
+  status?: CreateAssetInputStatus;
   assetClass?: string | null;
   generationRole?: string | null;
   brandLayer?: string | null;

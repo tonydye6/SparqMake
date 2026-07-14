@@ -33,6 +33,7 @@ export * from "./costSummaryByOperationItem";
 export * from "./costSummaryByServiceItem";
 export * from "./costSummaryDailySpendItem";
 export * from "./createAssetInput";
+export * from "./createAssetInputStatus";
 export * from "./createBrandInput";
 export * from "./createBrandInputBrandFontsItem";
 export * from "./createBrandInputHashtagStrategy";

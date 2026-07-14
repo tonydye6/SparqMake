@@ -2160,8 +2160,9 @@ components:
         fileSizeBytes:
           type: integer
           nullable: true
-        uploadedBy:
+        status:
           type: string
+          enum: [uploaded, approved, archived]
         assetClass:
           type: string
           nullable: true
@@ -2185,7 +2186,6 @@ components:
         - type
         - name
         - tags
-        - uploadedBy
 
     UpdateAssetInput:
       type: object
