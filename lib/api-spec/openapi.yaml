@@ -2362,6 +2362,9 @@ components:
         sourceCreativeId:
           type: string
           nullable: true
+        intent:
+          type: string
+          nullable: true
         createdBy:
           type: string
         reviewedBy:
@@ -2412,6 +2415,9 @@ components:
           items:
             type: string
           nullable: true
+        intent:
+          type: string
+          nullable: true
         createdBy:
           type: string
       required:
@@ -2445,6 +2451,9 @@ components:
           type: array
           items:
             type: string
+          nullable: true
+        intent:
+          type: string
           nullable: true
         reviewedBy:
           type: string

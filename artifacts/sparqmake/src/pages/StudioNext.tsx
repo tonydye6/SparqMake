@@ -33,6 +33,35 @@ interface Concept {
   id: string;
   title: string;
   angle: string;
+  // Goal-aware posting: the strategic intent this concept serves.
+  intent?: string;
+  intentLabel?: string;
+}
+
+// Client-side copy of the intent taxonomy labels (source of truth lives on the
+// server; this mirror keeps chips rendering without an extra fetch).
+const INTENT_LABELS: Record<string, string> = {
+  awareness: "Awareness",
+  acquisition: "Acquisition",
+  community_engagement: "Community engagement",
+  recognition_reward: "Recognition & reward",
+  announcement_launch: "Announcement / launch",
+  education: "Education",
+  retention: "Retention",
+};
+const INTENT_KEYS = Object.keys(INTENT_LABELS);
+
+function intentLabel(intent: string | null | undefined): string | null {
+  if (!intent) return null;
+  return INTENT_LABELS[intent] || intent.replace(/_/g, " ");
+}
+
+// The inference result for the express (free-prompt) path, surfaced as a
+// confirm/adjust chip on the Board.
+interface IntentInfo {
+  intent: string;
+  confidence: number | null;
+  alternates: { intent: string; confidence?: number }[];
 }
 
 // A matched asset offered on the confirm-picks screen, flattened from the
@@ -76,6 +105,9 @@ interface StudioState {
   brandId: string | null;
   briefText: string;
   selectedConcept: Concept | null;
+  // Goal-aware posting: the intent behind this creative — set by picking a
+  // concept (each concept carries one) or inferred from the free prompt.
+  intent: IntentInfo | null;
   // Confirmed asset picks from the Home beat, persisted onto the creative.
   selectedAssets: SelectedAssetPick[];
   // The take chosen on the Board, carried into Finish.
@@ -91,6 +123,7 @@ type StudioAction =
   | { type: "setBrand"; brandId: string }
   | { type: "setBrief"; briefText: string }
   | { type: "selectConcept"; concept: Concept | null }
+  | { type: "setIntent"; intent: IntentInfo | null }
   | { type: "setSelectedAssets"; assets: SelectedAssetPick[] }
   | { type: "setCreative"; creativeId: string }
   | { type: "selectVariant"; variantId: string }
@@ -103,6 +136,7 @@ const initialState: StudioState = {
   brandId: null,
   briefText: "",
   selectedConcept: null,
+  intent: null,
   selectedAssets: [],
   selectedVariantId: null,
   fanoutApproved: [],
@@ -118,6 +152,7 @@ function reducer(state: StudioState, action: StudioAction): StudioState {
         ...state,
         brandId: action.brandId,
         selectedConcept: null,
+        intent: null,
         selectedAssets: [],
         creativeId: null,
         selectedVariantId: null,
@@ -126,7 +161,17 @@ function reducer(state: StudioState, action: StudioAction): StudioState {
     case "setBrief":
       return { ...state, briefText: action.briefText };
     case "selectConcept":
-      return { ...state, selectedConcept: action.concept };
+      // Picking a concept sets the intent it carries; clearing a concept keeps
+      // whatever intent was set (the express path infers its own).
+      return {
+        ...state,
+        selectedConcept: action.concept,
+        intent: action.concept?.intent
+          ? { intent: action.concept.intent, confidence: null, alternates: [] }
+          : state.intent,
+      };
+    case "setIntent":
+      return { ...state, intent: action.intent };
     case "setSelectedAssets":
       return { ...state, selectedAssets: action.assets };
     case "setCreative":
@@ -380,6 +425,25 @@ function BeatHome({
     }
     dispatch({ type: "setBrief", briefText: brief.trim() });
     dispatch({ type: "selectConcept", concept: null });
+    dispatch({ type: "setIntent", intent: null });
+    // Infer the post's goal from the brief in the background (never blocks the
+    // flow); the Board surfaces it as a confirm/adjust chip.
+    void postJson(`${API_BASE}/api/intent-inference`, { brandId, briefText: brief.trim() })
+      .then((res) => {
+        if (res && typeof res.intent === "string") {
+          dispatch({
+            type: "setIntent",
+            intent: {
+              intent: res.intent,
+              confidence: typeof res.confidence === "number" ? res.confidence : null,
+              alternates: Array.isArray(res.alternates) ? res.alternates : [],
+            },
+          });
+        }
+      })
+      .catch(() => {
+        /* inference is best-effort; the chip just won't show */
+      });
     void openAssetPicks(brief.trim());
   }
 
@@ -558,9 +622,19 @@ function BeatHome({
                   }}
                   data-testid={`studio-next-concept-${concept.id}`}
                 >
-                  <h3 className="font-display font-semibold text-foreground leading-snug">
-                    {concept.title}
-                  </h3>
+                  <div className="space-y-1.5">
+                    {concept.intent && (
+                      <span
+                        className="inline-flex items-center rounded-full bg-primary/10 text-primary px-2 py-0.5 text-[11px] font-medium"
+                        data-testid={`concept-intent-${concept.id}`}
+                      >
+                        {concept.intentLabel || intentLabel(concept.intent)}
+                      </span>
+                    )}
+                    <h3 className="font-display font-semibold text-foreground leading-snug">
+                      {concept.title}
+                    </h3>
+                  </div>
                   <p className="text-sm text-muted-foreground flex-1">{concept.angle}</p>
                   <span className="text-xs font-medium text-primary inline-flex items-center">
                     Use this <ArrowRight size={12} className="ml-1" />
@@ -743,6 +817,8 @@ function BeatBoard({
           name,
           briefText: brief || undefined,
           selectedAssets: state.selectedAssets,
+          // Goal-aware posting: persist the concept-selected or inferred intent.
+          intent: state.intent?.intent || undefined,
           createdBy: "self", // server overrides this with the authenticated user
         });
         dispatch({ type: "setCreative", creativeId: creative.id });
@@ -806,8 +882,11 @@ function BeatBoard({
   return (
     <div className="max-w-5xl mx-auto px-6 py-8 space-y-6">
       <div className="flex items-center justify-between gap-4">
-        <div>
-          <h1 className="font-display text-2xl font-semibold text-foreground">Board</h1>
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-3">
+            <h1 className="font-display text-2xl font-semibold text-foreground">Board</h1>
+            <IntentChip state={state} dispatch={dispatch} />
+          </div>
           <p className="text-sm text-muted-foreground">
             Explore takes of your concept. Vary any take to branch a new direction.
           </p>
@@ -880,6 +959,92 @@ function BeatBoard({
         </div>
       )}
     </div>
+  );
+}
+
+// Goal-aware posting: one-tap confirm/adjust chip for the creative's intent.
+// Shows the inferred/selected goal (with confidence when inferred); tapping it
+// opens the alternates so the creator can adjust. Adjusting persists onto the
+// creative so generation and calendar entries pick it up.
+function IntentChip({ state, dispatch }: { state: StudioState; dispatch: Dispatch<StudioAction> }) {
+  const { toast } = useToast();
+  const [open, setOpen] = useState(false);
+  const [confirmed, setConfirmed] = useState(false);
+  const info = state.intent;
+  if (!info) return null;
+
+  async function choose(intent: string) {
+    setOpen(false);
+    setConfirmed(true);
+    const prev = info;
+    dispatch({ type: "setIntent", intent: { intent, confidence: null, alternates: [] } });
+    if (state.creativeId && intent !== prev?.intent) {
+      try {
+        await putJson(`${API_BASE}/api/creatives/${state.creativeId}`, { intent });
+        toast({ title: `Goal set to ${intentLabel(intent)}` });
+      } catch (err) {
+        dispatch({ type: "setIntent", intent: prev });
+        setConfirmed(false);
+        toast({ variant: "destructive", title: "Could not update goal", description: err instanceof Error ? err.message : "Please try again." });
+      }
+    }
+  }
+
+  const pct = info.confidence != null ? Math.round(info.confidence * 100) : null;
+  // Adjust list: the alternates first, then any remaining taxonomy entries.
+  const options = [
+    ...info.alternates.map((a) => a.intent),
+    ...INTENT_KEYS.filter((k) => k !== info.intent && !info.alternates.some((a) => a.intent === k)),
+  ];
+
+  return (
+    <div className="relative">
+      <div className="inline-flex items-center rounded-full border border-primary/30 bg-primary/10 text-primary text-xs font-medium overflow-hidden" data-testid="intent-chip">
+        <button
+          className="flex items-center gap-1.5 pl-2.5 pr-1.5 py-1 hover:bg-primary/15"
+          onClick={() => setOpen((o) => !o)}
+          data-testid="intent-chip-adjust"
+          title="Adjust the goal for this post"
+        >
+          <span>Goal · {intentLabel(info.intent)}</span>
+          {pct != null && !confirmed && <span className="text-primary/70">{pct}%</span>}
+        </button>
+        {!confirmed && (
+          <button
+            className="px-1.5 py-1 border-l border-primary/20 hover:bg-primary/15"
+            onClick={() => void choose(info!.intent)}
+            data-testid="intent-chip-confirm"
+            title="Confirm this goal"
+          >
+            <Check size={12} />
+          </button>
+        )}
+      </div>
+      {open && (
+        <div className="absolute z-20 mt-1 w-56 rounded-lg border border-border bg-popover shadow-md py-1" data-testid="intent-chip-menu">
+          {options.map((k) => (
+            <button
+              key={k}
+              className="w-full text-left px-3 py-1.5 text-xs text-foreground hover:bg-muted"
+              onClick={() => void choose(k)}
+              data-testid={`intent-option-${k}`}
+            >
+              {intentLabel(k)}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Read-only badge showing the creative's goal on Finish and Fan-out.
+function IntentBadge({ intent }: { intent: string | null | undefined }) {
+  if (!intent) return null;
+  return (
+    <span className="inline-flex items-center rounded-full bg-primary/10 text-primary px-2.5 py-0.5 text-xs font-medium" data-testid="intent-badge">
+      Goal · {intentLabel(intent)}
+    </span>
   );
 }
 
@@ -1104,8 +1269,11 @@ function BeatFinish({ state, onAdvance }: { state: StudioState; onAdvance: () =>
 
       {/* Edit lanes */}
       <div className="space-y-6">
-        <div>
-          <h1 className="font-display text-2xl font-semibold text-foreground">Finish</h1>
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-3">
+            <h1 className="font-display text-2xl font-semibold text-foreground">Finish</h1>
+            <IntentBadge intent={state.intent?.intent} />
+          </div>
           <p className="text-sm text-muted-foreground">Polish the post. Scheduling and publishing come next.</p>
         </div>
 
@@ -1578,8 +1746,11 @@ function BeatFanout({ state, dispatch }: { state: StudioState; dispatch: Dispatc
   if (phase === "select") {
     return (
       <div className="max-w-2xl mx-auto px-6 py-10 space-y-6">
-        <div>
-          <h1 className="font-display text-2xl font-semibold text-foreground">Make platform set</h1>
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-3">
+            <h1 className="font-display text-2xl font-semibold text-foreground">Make platform set</h1>
+            <IntentBadge intent={state.intent?.intent} />
+          </div>
           <p className="text-sm text-muted-foreground">
             Reframe your winning take to each platform, with a caption tuned per channel. No regeneration.
           </p>
@@ -1640,8 +1811,11 @@ function BeatFanout({ state, dispatch }: { state: StudioState; dispatch: Dispatc
   return (
     <div className="max-w-5xl mx-auto px-6 py-8 space-y-5">
       <div className="flex items-center justify-between gap-4">
-        <div>
-          <h1 className="font-display text-2xl font-semibold text-foreground">Platform set</h1>
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-3">
+            <h1 className="font-display text-2xl font-semibold text-foreground">Platform set</h1>
+            <IntentBadge intent={state.intent?.intent} />
+          </div>
           <p className="text-sm text-muted-foreground">
             {variants.length} variants · {approvedCount} approved. Edit captions, fix any clipped subjects, then approve.
           </p>

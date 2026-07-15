@@ -2,6 +2,7 @@ import { anthropic } from "@workspace/integrations-anthropic-ai";
 import type { AssembledContext } from "./context-assembly.js";
 import { AI_MODELS, estimateClaudeCost } from "../lib/ai-config.js";
 import { extractJSON } from "../lib/extract-json.js";
+import { INTENT_COPY_DIRECTIVES, isIntent } from "../lib/intents.js";
 
 export interface CaptionResult {
   instagram_feed: { caption: string; headline: string };
@@ -73,6 +74,12 @@ function buildUserMessage(ctx: AssembledContext): string {
 
   if (ctx.combinedBrief) {
     message += `ADDITIONAL CONTEXT:\n${ctx.combinedBrief}\n\n`;
+  }
+
+  // Goal-aware posting: the creative's intent shapes caption structure/CTA and
+  // headline framing across every platform.
+  if (ctx.intent && isIntent(ctx.intent)) {
+    message += `POST GOAL:\n${INTENT_COPY_DIRECTIVES[ctx.intent]}\n\n`;
   }
 
   if (ctx.referenceAnalysis) {

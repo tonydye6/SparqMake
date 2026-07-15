@@ -123,6 +123,7 @@ export interface Creative {
   selectedAssets: CreativeSelectedAssetsItem[];
   selectedHashtagSets?: string[] | null;
   sourceCreativeId?: string | null;
+  intent?: string | null;
   createdBy: string;
   reviewedBy?: string | null;
   reviewComment?: string | null;
@@ -484,6 +485,7 @@ export interface CreateCreativeInput {
   referenceUrl?: string | null;
   selectedAssets: CreateCreativeInputSelectedAssetsItem[];
   selectedHashtagSets?: string[] | null;
+  intent?: string | null;
   createdBy: string;
 }
 
@@ -497,6 +499,7 @@ export interface UpdateCreativeInput {
   templateId?: string | null;
   selectedAssets?: UpdateCreativeInputSelectedAssetsItem[];
   selectedHashtagSets?: string[] | null;
+  intent?: string | null;
   reviewedBy?: string | null;
   reviewComment?: string | null;
 }

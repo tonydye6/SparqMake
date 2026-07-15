@@ -43,6 +43,7 @@ router.get("/calendar-entries", async (req, res): Promise<void> => {
       publishStatus: calendarEntriesTable.publishStatus,
       publishError: calendarEntriesTable.publishError,
       retryCount: calendarEntriesTable.retryCount,
+      intent: calendarEntriesTable.intent,
       scheduleMethod: calendarEntriesTable.scheduleMethod,
       smartScheduleRationale: calendarEntriesTable.smartScheduleRationale,
       proposalId: calendarEntriesTable.proposalId,
@@ -80,7 +81,7 @@ router.get("/calendar-entries", async (req, res): Promise<void> => {
 router.post("/calendar-entries", validateRequest({ body: CreateCalendarEntryBody }), async (req, res): Promise<void> => {
   const { creativeId, variantId, platform, scheduledAt, socialAccountId } = req.body;
 
-  const [creative] = await db.select({ id: creativesTable.id, brandId: creativesTable.brandId })
+  const [creative] = await db.select({ id: creativesTable.id, brandId: creativesTable.brandId, intent: creativesTable.intent })
     .from(creativesTable).where(eq(creativesTable.id, creativeId));
   if (!creative) {
     res.status(400).json({ error: "Creative not found" });
@@ -113,6 +114,8 @@ router.post("/calendar-entries", validateRequest({ body: CreateCalendarEntryBody
     platform,
     scheduledAt: new Date(scheduledAt),
     socialAccountId: socialAccountId || null,
+    // Goal-aware posting: snapshot the creative's intent onto the entry.
+    intent: creative.intent || null,
   }).returning();
 
   res.status(201).json(entry);
@@ -314,6 +317,8 @@ router.post("/calendar-entries/batch", async (req, res): Promise<void> => {
             platform: variant.platform,
             scheduledAt: new Date(entry.scheduledAt),
             socialAccountId,
+            // Goal-aware posting: snapshot the creative's intent onto the entry.
+            intent: creativeMap.get(entry.creativeId)?.intent || null,
           })
           .returning();
 

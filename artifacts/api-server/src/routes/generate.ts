@@ -329,6 +329,7 @@ router.post("/creatives/:id/generate", generationLimiter, async (req: Request, r
       selectedHashtagSetIds: (campaign.selectedHashtagSets || []) as string[],
       briefText: campaign.briefText || undefined,
       referenceAnalysis: campaign.referenceAnalysis as Record<string, unknown> | null,
+      intent: campaign.intent || undefined,
       generationPacket: packet,
     });
     sendEvent("progress", { step: "context", message: "Context assembled", done: true });
@@ -961,6 +962,7 @@ async function generateVariantImage(
     selectedHashtagSetIds: (campaign.selectedHashtagSets || []) as string[],
     briefText: campaign.briefText || undefined,
     referenceAnalysis: campaign.referenceAnalysis as Record<string, unknown> | null,
+      intent: campaign.intent || undefined,
     generationPacket: packet,
   });
 
@@ -1092,6 +1094,7 @@ async function runVariantImageGeneration(
       selectedHashtagSetIds: (campaign.selectedHashtagSets || []) as string[],
       briefText: opts.briefText,
       referenceAnalysis: campaign.referenceAnalysis as Record<string, unknown> | null,
+      intent: campaign.intent || undefined,
       generationPacket: packet,
     });
 
@@ -1472,6 +1475,7 @@ router.post("/creatives/:id/variants/:variantId/fan-out", generationLimiter, val
       selectedHashtagSetIds: (campaign.selectedHashtagSets || []) as string[],
       briefText: campaign.briefText || undefined,
       referenceAnalysis: campaign.referenceAnalysis as Record<string, unknown> | null,
+      intent: campaign.intent || undefined,
     });
     const captions = await generateCaptions(ctx);
     const captionsByPlatform = captions as unknown as Record<string, { caption?: string; headline?: string }>;

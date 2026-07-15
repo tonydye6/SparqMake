@@ -15,6 +15,7 @@ export interface UpdateCreativeInput {
   templateId?: string | null;
   selectedAssets?: UpdateCreativeInputSelectedAssetsItem[];
   selectedHashtagSets?: string[] | null;
+  intent?: string | null;
   reviewedBy?: string | null;
   reviewComment?: string | null;
 }

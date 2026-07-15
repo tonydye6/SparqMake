@@ -6,6 +6,7 @@ import { AI_MODELS } from "../lib/ai-config.js";
 import { z } from "zod";
 import { validateRequest } from "../middleware/validate.js";
 import { generationLimiter } from "../lib/rate-limit.js";
+import { INTENTS, INTENT_LABELS, intentPromptCatalog, type Intent } from "../lib/intents.js";
 
 // Beat 1 (Home): brand-aware concept ideation. Stateless — returns ephemeral
 // named concept cards the creator picks from before a creative exists. (The
@@ -20,6 +21,8 @@ const ConceptSuggestionsBody = z.object({
 const ConceptSchema = z.object({
   title: z.string().min(1).max(120),
   angle: z.string().min(1).max(400),
+  // Goal-aware posting: every concept carries the intent it serves.
+  intent: z.enum(INTENTS),
 });
 
 const router: IRouter = Router();
@@ -65,13 +68,17 @@ router.post(
 
 ${brandContext}${briefLine}
 
+Every concept serves exactly one strategic goal (intent) from this taxonomy:
+${intentPromptCatalog()}
+
 Rules:
 - Each concept must be specific and thematic (a real angle, hook, or series idea), never generic ("engage your audience", "post a meme").
 - Honor the brand voice and rules above. Do not use any banned term.
 - Do not use em dashes. Use a middot, comma, or colon instead.
-- "title" = a short punchy name (2 to 6 words). "angle" = one or two sentences describing the creative idea.
+- "title" = a short punchy name (2 to 6 words). "angle" = one or two sentences describing the creative idea. "intent" = the taxonomy key the concept serves, and the angle should visibly serve that goal.
+- Vary the intents across the set when the brief allows it, so the creator sees a mix of goals.
 
-Respond with ONLY a JSON array of exactly ${count} objects, each {"title": string, "angle": string}. No markdown, no code fence, no preamble.`,
+Respond with ONLY a JSON array of exactly ${count} objects, each {"title": string, "angle": string, "intent": string}. No markdown, no code fence, no preamble.`,
           },
         ],
       });
@@ -84,7 +91,11 @@ Respond with ONLY a JSON array of exactly ${count} objects, each {"title": strin
       }
 
       res.json({
-        concepts: concepts.map((c, i) => ({ id: `concept-${i + 1}`, ...c })),
+        concepts: concepts.map((c, i) => ({
+          id: `concept-${i + 1}`,
+          ...c,
+          intentLabel: INTENT_LABELS[c.intent as Intent],
+        })),
       });
     } catch {
       res.status(500).json({ error: "Concept suggestions failed. Please try again." });
@@ -94,7 +105,7 @@ Respond with ONLY a JSON array of exactly ${count} objects, each {"title": strin
 
 // Claude is told to emit a bare JSON array, but defensively strip a ```json fence
 // and tolerate a wrapping object before validating each item against the schema.
-function parseConcepts(raw: string): { title: string; angle: string }[] {
+function parseConcepts(raw: string): { title: string; angle: string; intent: Intent }[] {
   let text = raw.trim();
   const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
   if (fence) text = fence[1].trim();
@@ -112,7 +123,7 @@ function parseConcepts(raw: string): { title: string; angle: string }[] {
       ? (parsed as { concepts: unknown[] }).concepts
       : [];
 
-  const result: { title: string; angle: string }[] = [];
+  const result: { title: string; angle: string; intent: Intent }[] = [];
   for (const item of arr) {
     const ok = ConceptSchema.safeParse(item);
     if (ok.success) result.push(ok.data);

@@ -2,6 +2,7 @@ import { ai } from "@workspace/integrations-gemini-ai";
 import { Modality } from "@google/genai";
 import type { AssembledContext } from "./context-assembly.js";
 import { AI_MODELS, estimateImagenCost } from "../lib/ai-config.js";
+import { INTENT_IMAGE_DIRECTIVES, isIntent } from "../lib/intents.js";
 
 export const PLATFORM_CONFIGS: Record<string, { platform: string; aspectRatio: string; width: number; height: number }> = {
   instagram_feed: { platform: "instagram_feed", aspectRatio: "1:1", width: 1080, height: 1080 },
@@ -82,6 +83,11 @@ function buildImagePrompt(ctx: AssembledContext, referenceImages?: ReferenceImag
 
   if (ctx.combinedBrief) {
     parts.push(ctx.combinedBrief);
+  }
+
+  // Goal-aware posting: the creative's intent steers the image's tone/energy.
+  if (ctx.intent && isIntent(ctx.intent)) {
+    parts.push(INTENT_IMAGE_DIRECTIVES[ctx.intent]);
   }
 
   if (varyMode) {

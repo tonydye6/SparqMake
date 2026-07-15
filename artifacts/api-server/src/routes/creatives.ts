@@ -217,6 +217,8 @@ router.post("/creatives/:id/schedule", async (req, res): Promise<void> => {
       platform: variant.platform,
       scheduledAt: new Date(time),
       socialAccountId,
+      // Goal-aware posting: snapshot the creative's intent onto the entry.
+      intent: campaign.intent || null,
     }).returning();
     created.push(entry);
   }

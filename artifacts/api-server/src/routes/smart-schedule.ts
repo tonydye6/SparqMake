@@ -602,6 +602,14 @@ router.post(
       existingProposals.map((p) => [`${p.creativeId}:${p.variantId}`, p]),
     );
 
+    // Goal-aware posting: snapshot each creative's intent onto its entries.
+    const confirmCreativeIds = [...new Set(proposalInputs.map((p: { creativeId: string }) => p.creativeId))];
+    const confirmCreatives = await db
+      .select({ id: creativesTable.id, intent: creativesTable.intent })
+      .from(creativesTable)
+      .where(sql`${creativesTable.id} = ANY(${confirmCreativeIds})`);
+    const intentByCreative = new Map(confirmCreatives.map((c) => [c.id, c.intent]));
+
     const created: (typeof calendarEntriesTable.$inferSelect)[] = [];
     const creativesScheduled: string[] = [];
     const creativeIdSet = new Set<string>();
@@ -646,6 +654,7 @@ router.post(
             scheduledAt,
             scheduleMethod: "smart_schedule",
             proposalId: matchedProposal?.id || null,
+            intent: intentByCreative.get(p.creativeId) || null,
           })
           .returning();
 
@@ -751,6 +760,12 @@ router.post(
           scheduleMethod: method,
           smartScheduleRationale: proposal.rationale,
           proposalId: proposal.id,
+          intent: (
+            await db
+              .select({ intent: creativesTable.intent })
+              .from(creativesTable)
+              .where(eq(creativesTable.id, proposal.creativeId))
+          )[0]?.intent || null,
         })
         .returning();
 

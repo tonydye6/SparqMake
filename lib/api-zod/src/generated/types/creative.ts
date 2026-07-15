@@ -18,6 +18,7 @@ export interface Creative {
   selectedAssets: CreativeSelectedAssetsItem[];
   selectedHashtagSets?: string[] | null;
   sourceCreativeId?: string | null;
+  intent?: string | null;
   createdBy: string;
   reviewedBy?: string | null;
   reviewComment?: string | null;

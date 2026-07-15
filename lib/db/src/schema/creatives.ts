@@ -25,6 +25,15 @@ export const creativesTable = pgTable("creatives", {
   // (free prompt, no card) leaves them empty.
   conceptSuggestions: json("concept_suggestions"),
   selectedConceptId: text("selected_concept_id"),
+  // Goal-aware posting: the strategic intent behind this creative (one of the
+  // intent taxonomy keys, e.g. awareness | acquisition | community_engagement |
+  // recognition_reward | announcement_launch | education | retention). Nullable —
+  // creatives predating the intent engine, or where the creator skipped it.
+  intent: text("intent"),
+  // Snapshot of the Claude intent inference that produced `intent`:
+  // { intent, confidence, alternates: [{intent, confidence}], reasoning }.
+  // Kept for audit/analysis; NULL when intent was set manually or via concept.
+  intentInference: json("intent_inference"),
   estimatedCost: real("estimated_cost"),
   createdBy: text("created_by").notNull().references(() => usersTable.id, { onDelete: "restrict" }),
   reviewedBy: text("reviewed_by").references(() => usersTable.id, { onDelete: "set null" }),
@@ -125,6 +134,10 @@ export const calendarEntriesTable = pgTable("calendar_entries", {
   // NULL means "not alerted yet" — the scheduler's alert sweep picks the entry
   // up. Reset to NULL on manual retry so a later permanent failure re-alerts.
   alertedAt: timestamp("alerted_at"),
+  // Copied from the creative at scheduling time so per-intent performance can
+  // be analyzed later even if the creative's intent changes. Nullable for
+  // entries created before the intent engine or from intent-less creatives.
+  intent: text("intent"),
   scheduleMethod: text("schedule_method").notNull().default("manual"),
   smartScheduleRationale: text("smart_schedule_rationale"),
   proposalId: text("proposal_id"),

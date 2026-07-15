@@ -17,6 +17,9 @@ export interface AssembledContext {
   hashtagSets: (typeof hashtagSetsTable.$inferSelect)[];
   referenceAnalysis: Record<string, unknown> | null;
   generationPacket?: GenerationPacket | null;
+  // Goal-aware posting: the creative's strategic intent (taxonomy key), used
+  // to shape image tone/energy, caption structure/CTA, and headline framing.
+  intent?: string | null;
 }
 
 export async function assembleContext(params: {
@@ -27,6 +30,7 @@ export async function assembleContext(params: {
   briefText?: string;
   referenceAnalysis?: Record<string, unknown> | null;
   generationPacket?: GenerationPacket | null;
+  intent?: string | null;
 }): Promise<AssembledContext> {
   const [brand] = await db.select().from(brandsTable).where(eq(brandsTable.id, params.brandId));
   if (!brand) throw new Error(`Brand not found: ${params.brandId}`);
@@ -112,5 +116,6 @@ export async function assembleContext(params: {
     hashtagSets,
     referenceAnalysis: params.referenceAnalysis || null,
     generationPacket: params.generationPacket || null,
+    intent: params.intent || null,
   };
 }

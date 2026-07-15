@@ -594,6 +594,7 @@ export const GetCreativesResponse = zod.object({
       selectedAssets: zod.array(zod.record(zod.string(), zod.unknown())),
       selectedHashtagSets: zod.array(zod.string()).nullish(),
       sourceCreativeId: zod.string().nullish(),
+      intent: zod.string().nullish(),
       createdBy: zod.string(),
       reviewedBy: zod.string().nullish(),
       reviewComment: zod.string().nullish(),
@@ -617,6 +618,7 @@ export const CreateCreativeBody = zod.object({
   referenceUrl: zod.string().nullish(),
   selectedAssets: zod.array(zod.record(zod.string(), zod.unknown())),
   selectedHashtagSets: zod.array(zod.string()).nullish(),
+  intent: zod.string().nullish(),
   createdBy: zod.string(),
 });
 
@@ -638,6 +640,7 @@ export const GetCreativeResponse = zod.object({
   selectedAssets: zod.array(zod.record(zod.string(), zod.unknown())),
   selectedHashtagSets: zod.array(zod.string()).nullish(),
   sourceCreativeId: zod.string().nullish(),
+  intent: zod.string().nullish(),
   createdBy: zod.string(),
   reviewedBy: zod.string().nullish(),
   reviewComment: zod.string().nullish(),
@@ -660,6 +663,7 @@ export const UpdateCreativeBody = zod.object({
   templateId: zod.string().nullish(),
   selectedAssets: zod.array(zod.record(zod.string(), zod.unknown())).optional(),
   selectedHashtagSets: zod.array(zod.string()).nullish(),
+  intent: zod.string().nullish(),
   reviewedBy: zod.string().nullish(),
   reviewComment: zod.string().nullish(),
 });
@@ -675,6 +679,7 @@ export const UpdateCreativeResponse = zod.object({
   selectedAssets: zod.array(zod.record(zod.string(), zod.unknown())),
   selectedHashtagSets: zod.array(zod.string()).nullish(),
   sourceCreativeId: zod.string().nullish(),
+  intent: zod.string().nullish(),
   createdBy: zod.string(),
   reviewedBy: zod.string().nullish(),
   reviewComment: zod.string().nullish(),
