@@ -1,9 +1,17 @@
 import { str } from "../lib/http-params.js";
 import { Router, type IRouter } from "express";
-import { eq, and } from "drizzle-orm";
-import { db, brandsTable, assetsTable } from "@workspace/db";
+import { eq, and, inArray } from "drizzle-orm";
+import { db, brandsTable, assetsTable, styleProfilesTable } from "@workspace/db";
 import {
   CreateBrandBody,
+  GetStyleProfilesParams,
+  GetStyleProfilesResponse,
+  CreateStyleProfileParams,
+  CreateStyleProfileBody,
+  UpdateStyleProfileParams,
+  UpdateStyleProfileBody,
+  UpdateStyleProfileResponse,
+  DeleteStyleProfileParams,
   GetBrandParams,
   GetBrandsResponse,
   GetBrandResponse,
@@ -394,6 +402,132 @@ router.delete("/brands/:id/fonts/:assetId", requireDestructive, async (req, res)
     message: "Font deleted",
     ...(cleanup.failed.length > 0 ? { storageCleanupFailed: cleanup.failed } : {}),
   });
+});
+
+// --- Style profiles: named, reusable design styles per brand ---
+
+/** Verify all referenced asset IDs belong to this brand; returns bad IDs. */
+async function invalidAssetIds(brandId: string, assetIds: string[]): Promise<string[]> {
+  if (assetIds.length === 0) return [];
+  const rows = await db.select({ id: assetsTable.id }).from(assetsTable)
+    .where(and(inArray(assetsTable.id, assetIds), eq(assetsTable.brandId, brandId)));
+  const found = new Set(rows.map(r => r.id));
+  return assetIds.filter(id => !found.has(id));
+}
+
+router.get("/brands/:id/style-profiles", validateRequest({ params: GetStyleProfilesParams }), async (req, res): Promise<void> => {
+  const brandId = str(req.params.id);
+  const profiles = await db.select().from(styleProfilesTable)
+    .where(eq(styleProfilesTable.brandId, brandId))
+    .orderBy(styleProfilesTable.name);
+  res.json(GetStyleProfilesResponse.parse(profiles));
+});
+
+router.post("/brands/:id/style-profiles", validateRequest({ params: CreateStyleProfileParams, body: CreateStyleProfileBody }), async (req, res): Promise<void> => {
+  const brandId = str(req.params.id);
+
+  const [brand] = await db.select().from(brandsTable).where(eq(brandsTable.id, brandId));
+  if (!brand) {
+    res.status(404).json({ error: "Brand not found" });
+    return;
+  }
+
+  const refIds = (req.body.referenceAssetIds || []) as string[];
+  const logoId = req.body.defaultLogoAssetId as string | null | undefined;
+  const bad = await invalidAssetIds(brandId, [...refIds, ...(logoId ? [logoId] : [])]);
+  if (bad.length > 0) {
+    res.status(400).json({ error: "Some assets do not belong to this brand", assetIds: bad });
+    return;
+  }
+
+  const profile = await db.transaction(async (tx) => {
+    // A new default unsets the previous one — at most one default per brand.
+    if (req.body.isDefault) {
+      await tx.update(styleProfilesTable)
+        .set({ isDefault: false, updatedAt: new Date() })
+        .where(eq(styleProfilesTable.brandId, brandId));
+    }
+    const [row] = await tx.insert(styleProfilesTable).values({
+      brandId,
+      name: req.body.name,
+      description: req.body.description ?? "",
+      styleDirection: req.body.styleDirection ?? "",
+      colorTreatment: req.body.colorTreatment ?? "",
+      referenceAssetIds: refIds,
+      defaultLogoAssetId: logoId ?? null,
+      isDefault: req.body.isDefault ?? false,
+    }).returning();
+    return row;
+  });
+
+  res.status(201).json(UpdateStyleProfileResponse.parse(profile));
+});
+
+router.put("/brands/:id/style-profiles/:profileId", validateRequest({ params: UpdateStyleProfileParams, body: UpdateStyleProfileBody }), async (req, res): Promise<void> => {
+  const brandId = str(req.params.id), profileId = str(req.params.profileId);
+
+  const [existing] = await db.select().from(styleProfilesTable)
+    .where(and(eq(styleProfilesTable.id, profileId), eq(styleProfilesTable.brandId, brandId)));
+  if (!existing) {
+    res.status(404).json({ error: "Style profile not found" });
+    return;
+  }
+
+  const refIds = req.body.referenceAssetIds as string[] | undefined;
+  const logoId = req.body.defaultLogoAssetId as string | null | undefined;
+  const bad = await invalidAssetIds(brandId, [...(refIds ?? []), ...(logoId ? [logoId] : [])]);
+  if (bad.length > 0) {
+    res.status(400).json({ error: "Some assets do not belong to this brand", assetIds: bad });
+    return;
+  }
+
+  const updates: Record<string, unknown> = { updatedAt: new Date() };
+  if (req.body.name !== undefined) updates.name = req.body.name;
+  if (req.body.description !== undefined) updates.description = req.body.description;
+  if (req.body.styleDirection !== undefined) updates.styleDirection = req.body.styleDirection;
+  if (req.body.colorTreatment !== undefined) updates.colorTreatment = req.body.colorTreatment;
+  if (refIds !== undefined) updates.referenceAssetIds = refIds;
+  if (logoId !== undefined) updates.defaultLogoAssetId = logoId;
+  if (req.body.isDefault !== undefined) updates.isDefault = req.body.isDefault;
+
+  const profile = await db.transaction(async (tx) => {
+    if (req.body.isDefault === true) {
+      await tx.update(styleProfilesTable)
+        .set({ isDefault: false, updatedAt: new Date() })
+        .where(eq(styleProfilesTable.brandId, brandId));
+    }
+    const [row] = await tx.update(styleProfilesTable)
+      .set(updates)
+      .where(and(eq(styleProfilesTable.id, profileId), eq(styleProfilesTable.brandId, brandId)))
+      .returning();
+    return row;
+  });
+
+  res.json(UpdateStyleProfileResponse.parse(profile));
+});
+
+router.delete("/brands/:id/style-profiles/:profileId", requireDestructive, validateRequest({ params: DeleteStyleProfileParams }), async (req, res): Promise<void> => {
+  const brandId = str(req.params.id), profileId = str(req.params.profileId);
+
+  const [deleted] = await db.delete(styleProfilesTable)
+    .where(and(eq(styleProfilesTable.id, profileId), eq(styleProfilesTable.brandId, brandId)))
+    .returning();
+
+  if (!deleted) {
+    res.status(404).json({ error: "Style profile not found" });
+    return;
+  }
+
+  await recordAudit({
+    actor: actorFromRequest(req),
+    action: "brand.style_profile_delete",
+    entityType: "style_profile",
+    entityIds: [profileId],
+    brandId,
+    metadata: { name: deleted.name },
+  });
+
+  res.json({ message: "Style profile deleted" });
 });
 
 const AssetConfigSchema = z.object({

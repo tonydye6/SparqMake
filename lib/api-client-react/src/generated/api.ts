@@ -37,6 +37,7 @@ import type {
   CreateCreativeInput,
   CreateHashtagSetInput,
   CreatePlanItemInput,
+  CreateStyleProfileInput,
   CreateTemplateInput,
   Creative,
   CreativeListResponse,
@@ -61,6 +62,7 @@ import type {
   SocialAccount,
   SocialAccountDeleteResponse,
   SocialAccountRefreshResponse,
+  StyleProfile,
   Template,
   TemplateListResponse,
   TemplateRecommendation,
@@ -70,6 +72,7 @@ import type {
   UpdateCalendarEntryInput,
   UpdateCreativeInput,
   UpdatePlanItemInput,
+  UpdateStyleProfileInput,
   UploadFileBody,
   UploadResponse,
   UploadVariantAudioBody,
@@ -564,6 +567,353 @@ export const useDeleteBrand = <
   TContext
 > => {
   return useMutation(getDeleteBrandMutationOptions(options));
+};
+
+/**
+ * @summary List style profiles for a brand
+ */
+export const getGetStyleProfilesUrl = (id: string) => {
+  return `/api/brands/${id}/style-profiles`;
+};
+
+export const getStyleProfiles = async (
+  id: string,
+  options?: RequestInit,
+): Promise<StyleProfile[]> => {
+  return customFetch<StyleProfile[]>(getGetStyleProfilesUrl(id), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetStyleProfilesQueryKey = (id: string) => {
+  return [`/api/brands/${id}/style-profiles`] as const;
+};
+
+export const getGetStyleProfilesQueryOptions = <
+  TData = Awaited<ReturnType<typeof getStyleProfiles>>,
+  TError = ErrorType<unknown>,
+>(
+  id: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getStyleProfiles>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetStyleProfilesQueryKey(id);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getStyleProfiles>>
+  > = ({ signal }) => getStyleProfiles(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!id,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getStyleProfiles>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetStyleProfilesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getStyleProfiles>>
+>;
+export type GetStyleProfilesQueryError = ErrorType<unknown>;
+
+/**
+ * @summary List style profiles for a brand
+ */
+
+export function useGetStyleProfiles<
+  TData = Awaited<ReturnType<typeof getStyleProfiles>>,
+  TError = ErrorType<unknown>,
+>(
+  id: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getStyleProfiles>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetStyleProfilesQueryOptions(id, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Create a style profile for a brand
+ */
+export const getCreateStyleProfileUrl = (id: string) => {
+  return `/api/brands/${id}/style-profiles`;
+};
+
+export const createStyleProfile = async (
+  id: string,
+  createStyleProfileInput: CreateStyleProfileInput,
+  options?: RequestInit,
+): Promise<StyleProfile> => {
+  return customFetch<StyleProfile>(getCreateStyleProfileUrl(id), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(createStyleProfileInput),
+  });
+};
+
+export const getCreateStyleProfileMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createStyleProfile>>,
+    TError,
+    { id: string; data: BodyType<CreateStyleProfileInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof createStyleProfile>>,
+  TError,
+  { id: string; data: BodyType<CreateStyleProfileInput> },
+  TContext
+> => {
+  const mutationKey = ["createStyleProfile"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof createStyleProfile>>,
+    { id: string; data: BodyType<CreateStyleProfileInput> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return createStyleProfile(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CreateStyleProfileMutationResult = NonNullable<
+  Awaited<ReturnType<typeof createStyleProfile>>
+>;
+export type CreateStyleProfileMutationBody = BodyType<CreateStyleProfileInput>;
+export type CreateStyleProfileMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Create a style profile for a brand
+ */
+export const useCreateStyleProfile = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createStyleProfile>>,
+    TError,
+    { id: string; data: BodyType<CreateStyleProfileInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof createStyleProfile>>,
+  TError,
+  { id: string; data: BodyType<CreateStyleProfileInput> },
+  TContext
+> => {
+  return useMutation(getCreateStyleProfileMutationOptions(options));
+};
+
+/**
+ * @summary Update a style profile
+ */
+export const getUpdateStyleProfileUrl = (id: string, profileId: string) => {
+  return `/api/brands/${id}/style-profiles/${profileId}`;
+};
+
+export const updateStyleProfile = async (
+  id: string,
+  profileId: string,
+  updateStyleProfileInput: UpdateStyleProfileInput,
+  options?: RequestInit,
+): Promise<StyleProfile> => {
+  return customFetch<StyleProfile>(getUpdateStyleProfileUrl(id, profileId), {
+    ...options,
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(updateStyleProfileInput),
+  });
+};
+
+export const getUpdateStyleProfileMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateStyleProfile>>,
+    TError,
+    { id: string; profileId: string; data: BodyType<UpdateStyleProfileInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof updateStyleProfile>>,
+  TError,
+  { id: string; profileId: string; data: BodyType<UpdateStyleProfileInput> },
+  TContext
+> => {
+  const mutationKey = ["updateStyleProfile"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof updateStyleProfile>>,
+    { id: string; profileId: string; data: BodyType<UpdateStyleProfileInput> }
+  > = (props) => {
+    const { id, profileId, data } = props ?? {};
+
+    return updateStyleProfile(id, profileId, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UpdateStyleProfileMutationResult = NonNullable<
+  Awaited<ReturnType<typeof updateStyleProfile>>
+>;
+export type UpdateStyleProfileMutationBody = BodyType<UpdateStyleProfileInput>;
+export type UpdateStyleProfileMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Update a style profile
+ */
+export const useUpdateStyleProfile = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateStyleProfile>>,
+    TError,
+    { id: string; profileId: string; data: BodyType<UpdateStyleProfileInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof updateStyleProfile>>,
+  TError,
+  { id: string; profileId: string; data: BodyType<UpdateStyleProfileInput> },
+  TContext
+> => {
+  return useMutation(getUpdateStyleProfileMutationOptions(options));
+};
+
+/**
+ * @summary Delete a style profile
+ */
+export const getDeleteStyleProfileUrl = (id: string, profileId: string) => {
+  return `/api/brands/${id}/style-profiles/${profileId}`;
+};
+
+export const deleteStyleProfile = async (
+  id: string,
+  profileId: string,
+  options?: RequestInit,
+): Promise<MessageResponse> => {
+  return customFetch<MessageResponse>(getDeleteStyleProfileUrl(id, profileId), {
+    ...options,
+    method: "DELETE",
+  });
+};
+
+export const getDeleteStyleProfileMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteStyleProfile>>,
+    TError,
+    { id: string; profileId: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof deleteStyleProfile>>,
+  TError,
+  { id: string; profileId: string },
+  TContext
+> => {
+  const mutationKey = ["deleteStyleProfile"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof deleteStyleProfile>>,
+    { id: string; profileId: string }
+  > = (props) => {
+    const { id, profileId } = props ?? {};
+
+    return deleteStyleProfile(id, profileId, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type DeleteStyleProfileMutationResult = NonNullable<
+  Awaited<ReturnType<typeof deleteStyleProfile>>
+>;
+
+export type DeleteStyleProfileMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Delete a style profile
+ */
+export const useDeleteStyleProfile = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteStyleProfile>>,
+    TError,
+    { id: string; profileId: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof deleteStyleProfile>>,
+  TError,
+  { id: string; profileId: string },
+  TContext
+> => {
+  return useMutation(getDeleteStyleProfileMutationOptions(options));
 };
 
 /**

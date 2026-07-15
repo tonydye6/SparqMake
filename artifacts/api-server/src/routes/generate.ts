@@ -3,7 +3,7 @@ import { Router, type IRouter, type Request, type Response } from "express";
 import { eq, and, inArray } from "drizzle-orm";
 import { db, creativesTable, creativeVariantsTable, costLogsTable, refinementLogsTable, templatesTable, appSettingsTable, assetsTable, assetPairingsTable, brandsTable, generationPacketLogsTable } from "@workspace/db";
 import { sql, gte } from "drizzle-orm";
-import { assembleContext, type SelectedAssetRef } from "../services/context-assembly.js";
+import { assembleContext, resolveStyleProfile, type SelectedAssetRef } from "../services/context-assembly.js";
 import { generateCaptions } from "../services/claude.js";
 import { generateAllImages, generateImage, outpaintImage, PLATFORM_CONFIGS, type ReferenceImage, type VaryMode } from "../services/imagen.js";
 import { AI_MODELS, estimateClaudeCost, estimateGeminiTextCost, estimateImagenCost } from "../lib/ai-config.js";
@@ -298,13 +298,20 @@ router.post("/creatives/:id/generate", generationLimiter, async (req: Request, r
     let packet: Awaited<ReturnType<typeof buildGenerationPacket>> | null = null;
     let referenceImages: ReferenceImage[] = [];
 
-    if (selectedAssetIds.length > 0) {
+    const styleProfile = await resolveStyleProfile(campaign.brandId, campaign.styleProfileId);
+    const styleRefIds = styleProfile?.referenceAssetIds || [];
+    if (styleProfile) {
+      sendEvent("progress", { step: "packet", message: `Applying design style "${styleProfile.name}"` });
+    }
+
+    if (selectedAssetIds.length > 0 || styleRefIds.length > 0) {
       packet = await buildGenerationPacket({
         creativeId,
         brandId: campaign.brandId,
         templateId: campaign.templateId,
         platform: "all",
         selectedAssetIds,
+        priorityStyleAssetIds: styleRefIds,
       });
       sendEvent("progress", {
         step: "packet",
@@ -331,6 +338,7 @@ router.post("/creatives/:id/generate", generationLimiter, async (req: Request, r
       referenceAnalysis: campaign.referenceAnalysis as Record<string, unknown> | null,
       intent: campaign.intent || undefined,
       generationPacket: packet,
+      styleProfile,
     });
     sendEvent("progress", { step: "context", message: "Context assembled", done: true });
 
@@ -942,15 +950,19 @@ async function generateVariantImage(
   const selectedAssets = (campaign.selectedAssets || []) as import("../services/context-assembly.js").SelectedAssetRef[];
   const selectedAssetIds = selectedAssets.map(a => a.assetId);
 
+  const styleProfile = await resolveStyleProfile(campaign.brandId, campaign.styleProfileId);
+  const styleRefIds = styleProfile?.referenceAssetIds || [];
+
   let packet: Awaited<ReturnType<typeof buildGenerationPacket>> | null = null;
   let referenceImages: ReferenceImage[] = [];
-  if (selectedAssetIds.length > 0) {
+  if (selectedAssetIds.length > 0 || styleRefIds.length > 0) {
     packet = await buildGenerationPacket({
       creativeId: campaign.id,
       brandId: campaign.brandId,
       templateId: campaign.templateId,
       platform,
       selectedAssetIds,
+      priorityStyleAssetIds: styleRefIds,
     });
     referenceImages = await buildReferenceImages(packet);
   }
@@ -964,6 +976,7 @@ async function generateVariantImage(
     referenceAnalysis: campaign.referenceAnalysis as Record<string, unknown> | null,
       intent: campaign.intent || undefined,
     generationPacket: packet,
+    styleProfile,
   });
 
   const imgResult = await generateImage(ctx, platform, referenceImages, opts.varyMode);
@@ -1073,16 +1086,20 @@ async function runVariantImageGeneration(
     const selectedAssets = (campaign.selectedAssets || []) as import("../services/context-assembly.js").SelectedAssetRef[];
     const selectedAssetIds = selectedAssets.map(a => a.assetId);
 
+    const styleProfile = await resolveStyleProfile(campaign.brandId, campaign.styleProfileId);
+    const styleRefIds = styleProfile?.referenceAssetIds || [];
+
     let packet: Awaited<ReturnType<typeof buildGenerationPacket>> | null = null;
     let referenceImages: ReferenceImage[] = [];
 
-    if (selectedAssetIds.length > 0) {
+    if (selectedAssetIds.length > 0 || styleRefIds.length > 0) {
       packet = await buildGenerationPacket({
         creativeId,
         brandId: campaign.brandId,
         templateId: campaign.templateId!,
         platform: variant.platform,
         selectedAssetIds,
+        priorityStyleAssetIds: styleRefIds,
       });
       referenceImages = await buildReferenceImages(packet);
     }
@@ -1096,6 +1113,7 @@ async function runVariantImageGeneration(
       referenceAnalysis: campaign.referenceAnalysis as Record<string, unknown> | null,
       intent: campaign.intent || undefined,
       generationPacket: packet,
+      styleProfile,
     });
 
     const imgResult = await generateImage(ctx, variant.platform, referenceImages, opts.varyMode);

@@ -3,7 +3,7 @@ import type { Dispatch, MouseEvent } from "react";
 import { Sparkles, LayoutGrid, Wand2, RefreshCw, ArrowRight, Check, Plus, Loader2, Share2, AlertTriangle, Send, Clapperboard, Music, Volume2, VolumeX } from "lucide-react";
 import { FaInstagram, FaXTwitter, FaTiktok, FaLinkedin } from "react-icons/fa6";
 import type { IconType } from "react-icons";
-import { useGetBrands, useGetTemplates } from "@workspace/api-client-react";
+import { useGetBrands, useGetTemplates, useGetStyleProfiles } from "@workspace/api-client-react";
 import { cn, apiFetch } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
@@ -110,6 +110,9 @@ interface StudioState {
   intent: IntentInfo | null;
   // Confirmed asset picks from the Home beat, persisted onto the creative.
   selectedAssets: SelectedAssetPick[];
+  // Design style profile applied to image generation. null = brand default /
+  // no style (server falls back to the brand's default profile if one exists).
+  styleProfileId: string | null;
   // The take chosen on the Board, carried into Finish.
   selectedVariantId: string | null;
   // Fan-out approve-selection (variant ids checked but not yet approved). Held in
@@ -125,6 +128,7 @@ type StudioAction =
   | { type: "selectConcept"; concept: Concept | null }
   | { type: "setIntent"; intent: IntentInfo | null }
   | { type: "setSelectedAssets"; assets: SelectedAssetPick[] }
+  | { type: "setStyleProfile"; styleProfileId: string | null }
   | { type: "setCreative"; creativeId: string }
   | { type: "selectVariant"; variantId: string }
   | { type: "toggleFanoutApprove"; id: string }
@@ -138,6 +142,7 @@ const initialState: StudioState = {
   selectedConcept: null,
   intent: null,
   selectedAssets: [],
+  styleProfileId: null,
   selectedVariantId: null,
   fanoutApproved: [],
 };
@@ -154,6 +159,7 @@ function reducer(state: StudioState, action: StudioAction): StudioState {
         selectedConcept: null,
         intent: null,
         selectedAssets: [],
+        styleProfileId: null,
         creativeId: null,
         selectedVariantId: null,
         fanoutApproved: [],
@@ -174,6 +180,8 @@ function reducer(state: StudioState, action: StudioAction): StudioState {
       return { ...state, intent: action.intent };
     case "setSelectedAssets":
       return { ...state, selectedAssets: action.assets };
+    case "setStyleProfile":
+      return { ...state, styleProfileId: action.styleProfileId };
     case "setCreative":
       return { ...state, creativeId: action.creativeId };
     case "selectVariant":
@@ -309,6 +317,17 @@ function BeatHome({
       dispatch({ type: "setBrand", brandId: brands[0].id });
     }
   }, [brandId, brands, dispatch]);
+
+  // Design style profiles for the active brand. The brand's default profile is
+  // preselected; "No style" opts out entirely (unchanged generation behavior).
+  const { data: styleProfiles } = useGetStyleProfiles(brandId ?? "", {
+    query: { enabled: Boolean(brandId) } as Parameters<typeof useGetStyleProfiles>[1] extends { query?: infer Q } ? Q : never,
+  });
+  useEffect(() => {
+    if (state.styleProfileId || !styleProfiles) return;
+    const def = styleProfiles.find((p) => p.isDefault);
+    if (def) dispatch({ type: "setStyleProfile", styleProfileId: def.id });
+  }, [styleProfiles, state.styleProfileId, dispatch]);
 
   const loadConcepts = useCallback(
     async (briefArg?: string) => {
@@ -547,6 +566,30 @@ function BeatHome({
             ))}
           </SelectContent>
         </Select>
+        {styleProfiles && styleProfiles.length > 0 && (
+          <>
+            <span className="text-sm text-muted-foreground">in style</span>
+            <Select
+              value={state.styleProfileId ?? "none"}
+              onValueChange={(v) =>
+                dispatch({ type: "setStyleProfile", styleProfileId: v === "none" ? null : v })
+              }
+            >
+              <SelectTrigger className="w-[220px]" data-testid="studio-next-style-profile">
+                <SelectValue placeholder="No style" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">No style</SelectItem>
+                {styleProfiles.map((p) => (
+                  <SelectItem key={p.id} value={p.id}>
+                    {p.name}
+                    {p.isDefault ? " (default)" : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </>
+        )}
       </div>
 
       {/* Brand-neutral hero. */}
@@ -819,6 +862,7 @@ function BeatBoard({
           selectedAssets: state.selectedAssets,
           // Goal-aware posting: persist the concept-selected or inferred intent.
           intent: state.intent?.intent || undefined,
+          styleProfileId: state.styleProfileId || undefined,
           createdBy: "self", // server overrides this with the authenticated user
         });
         dispatch({ type: "setCreative", creativeId: creative.id });

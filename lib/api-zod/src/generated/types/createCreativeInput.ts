@@ -16,5 +16,6 @@ export interface CreateCreativeInput {
   selectedAssets: CreateCreativeInputSelectedAssetsItem[];
   selectedHashtagSets?: string[] | null;
   intent?: string | null;
+  styleProfileId?: string | null;
   createdBy: string;
 }

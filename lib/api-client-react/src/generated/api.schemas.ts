@@ -124,6 +124,7 @@ export interface Creative {
   selectedHashtagSets?: string[] | null;
   sourceCreativeId?: string | null;
   intent?: string | null;
+  styleProfileId?: string | null;
   createdBy: string;
   reviewedBy?: string | null;
   reviewComment?: string | null;
@@ -368,6 +369,42 @@ export interface Brand {
   updatedAt: string;
 }
 
+export interface StyleProfile {
+  id: string;
+  brandId: string;
+  name: string;
+  description: string;
+  styleDirection: string;
+  colorTreatment: string;
+  referenceAssetIds: string[];
+  defaultLogoAssetId?: string | null;
+  isDefault: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateStyleProfileInput {
+  /** @minLength 1 */
+  name: string;
+  description?: string;
+  styleDirection?: string;
+  colorTreatment?: string;
+  referenceAssetIds?: string[];
+  defaultLogoAssetId?: string | null;
+  isDefault?: boolean;
+}
+
+export interface UpdateStyleProfileInput {
+  /** @minLength 1 */
+  name?: string;
+  description?: string;
+  styleDirection?: string;
+  colorTreatment?: string;
+  referenceAssetIds?: string[];
+  defaultLogoAssetId?: string | null;
+  isDefault?: boolean;
+}
+
 export type CreateBrandInputHashtagStrategy = { [key: string]: unknown };
 
 export type CreateBrandInputPlatformRules = { [key: string]: unknown };
@@ -486,6 +523,7 @@ export interface CreateCreativeInput {
   selectedAssets: CreateCreativeInputSelectedAssetsItem[];
   selectedHashtagSets?: string[] | null;
   intent?: string | null;
+  styleProfileId?: string | null;
   createdBy: string;
 }
 
@@ -500,6 +538,7 @@ export interface UpdateCreativeInput {
   selectedAssets?: UpdateCreativeInputSelectedAssetsItem[];
   selectedHashtagSets?: string[] | null;
   intent?: string | null;
+  styleProfileId?: string | null;
   reviewedBy?: string | null;
   reviewComment?: string | null;
 }

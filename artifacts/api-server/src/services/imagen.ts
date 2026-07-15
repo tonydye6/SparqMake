@@ -73,6 +73,17 @@ function buildImagePrompt(ctx: AssembledContext, referenceImages?: ReferenceImag
     parts.push("ADDITIONAL BRAND ASSET DESCRIPTORS (not attached as images; incorporate their subjects and look):\n" + lines.join("\n"));
   }
 
+  // Selected design style profile: its art-direction language and color
+  // treatment are layered before the brand's imagenPrefix so both apply.
+  if (ctx.styleProfile) {
+    const styleBits: string[] = [];
+    if (ctx.styleProfile.styleDirection) styleBits.push(ctx.styleProfile.styleDirection);
+    if (ctx.styleProfile.colorTreatment) styleBits.push(`COLOR TREATMENT: ${ctx.styleProfile.colorTreatment}`);
+    if (styleBits.length > 0) {
+      parts.push(`DESIGN STYLE — "${ctx.styleProfile.name}":\n` + styleBits.join("\n"));
+    }
+  }
+
   if (ctx.brand.imagenPrefix) {
     parts.push(ctx.brand.imagenPrefix);
   }

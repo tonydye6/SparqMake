@@ -134,6 +134,102 @@ paths:
               schema:
                 $ref: "#/components/schemas/MessageResponse"
 
+  /brands/{id}/style-profiles:
+    get:
+      operationId: getStyleProfiles
+      tags: [brands]
+      summary: List style profiles for a brand
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of style profiles
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/StyleProfile"
+    post:
+      operationId: createStyleProfile
+      tags: [brands]
+      summary: Create a style profile for a brand
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateStyleProfileInput"
+      responses:
+        "201":
+          description: Style profile created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StyleProfile"
+
+  /brands/{id}/style-profiles/{profileId}:
+    put:
+      operationId: updateStyleProfile
+      tags: [brands]
+      summary: Update a style profile
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: profileId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateStyleProfileInput"
+      responses:
+        "200":
+          description: Style profile updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StyleProfile"
+    delete:
+      operationId: deleteStyleProfile
+      tags: [brands]
+      summary: Delete a style profile
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: profileId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
   /templates:
     get:
       operationId: getTemplates
@@ -1847,6 +1943,94 @@ components:
         - createdAt
         - updatedAt
 
+    StyleProfile:
+      type: object
+      properties:
+        id:
+          type: string
+        brandId:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        styleDirection:
+          type: string
+        colorTreatment:
+          type: string
+        referenceAssetIds:
+          type: array
+          items:
+            type: string
+        defaultLogoAssetId:
+          type: string
+          nullable: true
+        isDefault:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - brandId
+        - name
+        - description
+        - styleDirection
+        - colorTreatment
+        - referenceAssetIds
+        - isDefault
+        - createdAt
+        - updatedAt
+
+    CreateStyleProfileInput:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+        description:
+          type: string
+        styleDirection:
+          type: string
+        colorTreatment:
+          type: string
+        referenceAssetIds:
+          type: array
+          items:
+            type: string
+        defaultLogoAssetId:
+          type: string
+          nullable: true
+        isDefault:
+          type: boolean
+      required:
+        - name
+
+    UpdateStyleProfileInput:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+        description:
+          type: string
+        styleDirection:
+          type: string
+        colorTreatment:
+          type: string
+        referenceAssetIds:
+          type: array
+          items:
+            type: string
+        defaultLogoAssetId:
+          type: string
+          nullable: true
+        isDefault:
+          type: boolean
+
     CreateBrandInput:
       type: object
       properties:
@@ -2365,6 +2549,9 @@ components:
         intent:
           type: string
           nullable: true
+        styleProfileId:
+          type: string
+          nullable: true
         createdBy:
           type: string
         reviewedBy:
@@ -2418,6 +2605,9 @@ components:
         intent:
           type: string
           nullable: true
+        styleProfileId:
+          type: string
+          nullable: true
         createdBy:
           type: string
       required:
@@ -2453,6 +2643,9 @@ components:
             type: string
           nullable: true
         intent:
+          type: string
+          nullable: true
+        styleProfileId:
           type: string
           nullable: true
         reviewedBy:

@@ -157,6 +157,89 @@ export const DeleteBrandResponse = zod.object({
 });
 
 /**
+ * @summary List style profiles for a brand
+ */
+export const GetStyleProfilesParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const GetStyleProfilesResponseItem = zod.object({
+  id: zod.string(),
+  brandId: zod.string(),
+  name: zod.string(),
+  description: zod.string(),
+  styleDirection: zod.string(),
+  colorTreatment: zod.string(),
+  referenceAssetIds: zod.array(zod.string()),
+  defaultLogoAssetId: zod.string().nullish(),
+  isDefault: zod.boolean(),
+  createdAt: zod.date(),
+  updatedAt: zod.date(),
+});
+export const GetStyleProfilesResponse = zod.array(GetStyleProfilesResponseItem);
+
+/**
+ * @summary Create a style profile for a brand
+ */
+export const CreateStyleProfileParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const CreateStyleProfileBody = zod.object({
+  name: zod.string().min(1),
+  description: zod.string().optional(),
+  styleDirection: zod.string().optional(),
+  colorTreatment: zod.string().optional(),
+  referenceAssetIds: zod.array(zod.string()).optional(),
+  defaultLogoAssetId: zod.string().nullish(),
+  isDefault: zod.boolean().optional(),
+});
+
+/**
+ * @summary Update a style profile
+ */
+export const UpdateStyleProfileParams = zod.object({
+  id: zod.coerce.string(),
+  profileId: zod.coerce.string(),
+});
+
+export const UpdateStyleProfileBody = zod.object({
+  name: zod.string().min(1).optional(),
+  description: zod.string().optional(),
+  styleDirection: zod.string().optional(),
+  colorTreatment: zod.string().optional(),
+  referenceAssetIds: zod.array(zod.string()).optional(),
+  defaultLogoAssetId: zod.string().nullish(),
+  isDefault: zod.boolean().optional(),
+});
+
+export const UpdateStyleProfileResponse = zod.object({
+  id: zod.string(),
+  brandId: zod.string(),
+  name: zod.string(),
+  description: zod.string(),
+  styleDirection: zod.string(),
+  colorTreatment: zod.string(),
+  referenceAssetIds: zod.array(zod.string()),
+  defaultLogoAssetId: zod.string().nullish(),
+  isDefault: zod.boolean(),
+  createdAt: zod.date(),
+  updatedAt: zod.date(),
+});
+
+/**
+ * @summary Delete a style profile
+ */
+export const DeleteStyleProfileParams = zod.object({
+  id: zod.coerce.string(),
+  profileId: zod.coerce.string(),
+});
+
+export const DeleteStyleProfileResponse = zod.object({
+  message: zod.string(),
+});
+
+/**
  * @summary Get all templates
  */
 export const GetTemplatesQueryParams = zod.object({
@@ -595,6 +678,7 @@ export const GetCreativesResponse = zod.object({
       selectedHashtagSets: zod.array(zod.string()).nullish(),
       sourceCreativeId: zod.string().nullish(),
       intent: zod.string().nullish(),
+      styleProfileId: zod.string().nullish(),
       createdBy: zod.string(),
       reviewedBy: zod.string().nullish(),
       reviewComment: zod.string().nullish(),
@@ -619,6 +703,7 @@ export const CreateCreativeBody = zod.object({
   selectedAssets: zod.array(zod.record(zod.string(), zod.unknown())),
   selectedHashtagSets: zod.array(zod.string()).nullish(),
   intent: zod.string().nullish(),
+  styleProfileId: zod.string().nullish(),
   createdBy: zod.string(),
 });
 
@@ -641,6 +726,7 @@ export const GetCreativeResponse = zod.object({
   selectedHashtagSets: zod.array(zod.string()).nullish(),
   sourceCreativeId: zod.string().nullish(),
   intent: zod.string().nullish(),
+  styleProfileId: zod.string().nullish(),
   createdBy: zod.string(),
   reviewedBy: zod.string().nullish(),
   reviewComment: zod.string().nullish(),
@@ -664,6 +750,7 @@ export const UpdateCreativeBody = zod.object({
   selectedAssets: zod.array(zod.record(zod.string(), zod.unknown())).optional(),
   selectedHashtagSets: zod.array(zod.string()).nullish(),
   intent: zod.string().nullish(),
+  styleProfileId: zod.string().nullish(),
   reviewedBy: zod.string().nullish(),
   reviewComment: zod.string().nullish(),
 });
@@ -680,6 +767,7 @@ export const UpdateCreativeResponse = zod.object({
   selectedHashtagSets: zod.array(zod.string()).nullish(),
   sourceCreativeId: zod.string().nullish(),
   intent: zod.string().nullish(),
+  styleProfileId: zod.string().nullish(),
   createdBy: zod.string(),
   reviewedBy: zod.string().nullish(),
   reviewComment: zod.string().nullish(),

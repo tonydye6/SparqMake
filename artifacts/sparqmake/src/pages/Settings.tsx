@@ -17,6 +17,12 @@ import {
   useUpdateAsset,
   useUploadFile,
   useCreateAsset,
+  useGetStyleProfiles,
+  useCreateStyleProfile,
+  useUpdateStyleProfile,
+  useDeleteStyleProfile,
+  getGetStyleProfilesQueryKey,
+  type StyleProfile,
   type Brand,
   type Asset,
   type Template,
@@ -136,6 +142,7 @@ const SETTINGS_SECTIONS = [
   { id: "section-schedule-profile", label: "Schedule Profile" },
   { id: "section-character-style", label: "Character Style" },
   { id: "section-imagen", label: "Image Generation Settings" },
+  { id: "section-design-styles", label: "Design Styles" },
   { id: "section-platform-rules", label: "Platform Rules" },
   { id: "section-templates", label: "Templates" },
   { id: "section-fonts", label: "Font Management" },
@@ -1397,6 +1404,15 @@ function BrandEditor({ brand }: { brand: Brand }) {
             </div>
           </section>
 
+          {/* Design Styles */}
+          <section id="section-design-styles" className="bg-card border border-border rounded-xl p-6 shadow-sm">
+            <div className="flex items-center gap-2 mb-6 border-b border-border pb-4">
+              <Layers className="text-primary" size={20} />
+              <h2 className="text-xl font-bold">Design Styles</h2>
+            </div>
+            <StyleProfilesSection brandId={brand.id} />
+          </section>
+
           {/* Platform Rules */}
           <section id="section-platform-rules" className="bg-card border border-border rounded-xl p-6 shadow-sm">
             <div className="flex items-center gap-2 mb-6 border-b border-border pb-4">
@@ -2309,6 +2325,308 @@ function RecommendationCard({ rec, onApply, onDismiss }: { rec: TemplateRecommen
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+// --- Design style profiles: named, reusable image-generation styles ---
+
+interface StyleProfileFormState {
+  name: string;
+  description: string;
+  styleDirection: string;
+  colorTreatment: string;
+  referenceAssetIds: string[];
+  defaultLogoAssetId: string | null;
+  isDefault: boolean;
+}
+
+const EMPTY_STYLE_PROFILE_FORM: StyleProfileFormState = {
+  name: "",
+  description: "",
+  styleDirection: "",
+  colorTreatment: "",
+  referenceAssetIds: [],
+  defaultLogoAssetId: null,
+  isDefault: false,
+};
+
+function StyleProfilesSection({ brandId }: { brandId: string }) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const { data: profiles } = useGetStyleProfiles(brandId);
+  const { data: allAssets } = useGetAssets({ brandId, limit: 200 });
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [editing, setEditing] = useState<StyleProfile | null>(null);
+  const [form, setForm] = useState<StyleProfileFormState>(EMPTY_STYLE_PROFILE_FORM);
+  const [deleteTarget, setDeleteTarget] = useState<StyleProfile | null>(null);
+
+  const visualAssets = (allAssets?.data || []).filter(a => a.type === "visual");
+  const assetById = new Map(visualAssets.map(a => [a.id, a]));
+
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: getGetStyleProfilesQueryKey(brandId) });
+
+  const createMutation = useCreateStyleProfile({
+    mutation: {
+      onSuccess: () => { invalidate(); setDialogOpen(false); toast({ title: "Design style created" }); },
+      onError: (err: unknown) => toast({ variant: "destructive", title: "Could not create design style", description: err instanceof Error ? err.message : "Unknown error" }),
+    },
+  });
+  const updateMutation = useUpdateStyleProfile({
+    mutation: {
+      onSuccess: () => { invalidate(); setDialogOpen(false); toast({ title: "Design style updated" }); },
+      onError: (err: unknown) => toast({ variant: "destructive", title: "Could not update design style", description: err instanceof Error ? err.message : "Unknown error" }),
+    },
+  });
+  const deleteMutation = useDeleteStyleProfile({
+    mutation: {
+      onSuccess: () => { invalidate(); setDeleteTarget(null); toast({ title: "Design style deleted" }); },
+      onError: (err: unknown) => {
+        setDeleteTarget(null);
+        toast({
+          variant: "destructive",
+          title: "Could not delete design style",
+          description: isForbidden(err) ? PERMISSION_DENIED_MESSAGE : err instanceof Error ? err.message : "Unknown error",
+        });
+      },
+    },
+  });
+
+  function openCreate() {
+    setEditing(null);
+    setForm(EMPTY_STYLE_PROFILE_FORM);
+    setDialogOpen(true);
+  }
+
+  function openEdit(p: StyleProfile) {
+    setEditing(p);
+    setForm({
+      name: p.name,
+      description: p.description || "",
+      styleDirection: p.styleDirection || "",
+      colorTreatment: p.colorTreatment || "",
+      referenceAssetIds: p.referenceAssetIds || [],
+      defaultLogoAssetId: p.defaultLogoAssetId || null,
+      isDefault: p.isDefault ?? false,
+    });
+    setDialogOpen(true);
+  }
+
+  function save() {
+    if (!form.name.trim()) {
+      toast({ variant: "destructive", title: "Name is required" });
+      return;
+    }
+    const data = {
+      name: form.name.trim(),
+      description: form.description,
+      styleDirection: form.styleDirection,
+      colorTreatment: form.colorTreatment,
+      referenceAssetIds: form.referenceAssetIds,
+      defaultLogoAssetId: form.defaultLogoAssetId,
+      isDefault: form.isDefault,
+    };
+    if (editing) {
+      updateMutation.mutate({ id: brandId, profileId: editing.id, data });
+    } else {
+      createMutation.mutate({ id: brandId, data });
+    }
+  }
+
+  function toggleReference(assetId: string) {
+    setForm(prev => ({
+      ...prev,
+      referenceAssetIds: prev.referenceAssetIds.includes(assetId)
+        ? prev.referenceAssetIds.filter(id => id !== assetId)
+        : [...prev.referenceAssetIds, assetId],
+    }));
+  }
+
+  const saving = createMutation.isPending || updateMutation.isPending;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-muted-foreground">
+          Named looks for image generation. Each style bundles art direction, color treatment, and reference images. The default style is preselected in the Studio.
+        </p>
+        <Button type="button" size="sm" onClick={openCreate} data-testid="style-profile-add">
+          <Plus className="mr-1.5 h-4 w-4" /> Add Style
+        </Button>
+      </div>
+
+      {(!profiles || profiles.length === 0) ? (
+        <div className="border-2 border-dashed border-border rounded-lg p-6 text-center text-sm text-muted-foreground">
+          No design styles yet. Create one to give generations a consistent, reusable look.
+        </div>
+      ) : (
+        <div className="grid gap-3 md:grid-cols-2">
+          {profiles.map(p => (
+            <div key={p.id} className="bg-background border border-border rounded-lg p-4 space-y-2" data-testid={`style-profile-${p.id}`}>
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="font-semibold truncate">{p.name}</span>
+                  {p.isDefault && <Badge className="text-[10px] shrink-0">Default</Badge>}
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <Button type="button" variant="ghost" size="icon" onClick={() => openEdit(p)} data-testid={`style-profile-edit-${p.id}`}>
+                    <Edit2 className="h-4 w-4" />
+                  </Button>
+                  <Button type="button" variant="ghost" size="icon" className="text-destructive" onClick={() => setDeleteTarget(p)} data-testid={`style-profile-delete-${p.id}`}>
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+              {p.description && <p className="text-xs text-muted-foreground line-clamp-2">{p.description}</p>}
+              {p.styleDirection && <p className="text-xs text-foreground/80 line-clamp-2 font-mono">{p.styleDirection}</p>}
+              {(p.referenceAssetIds?.length ?? 0) > 0 && (
+                <div className="flex items-center gap-1.5 pt-1">
+                  {(p.referenceAssetIds || []).slice(0, 5).map(id => {
+                    const a = assetById.get(id);
+                    return (
+                      <div key={id} className="w-9 h-9 rounded bg-muted overflow-hidden border border-border shrink-0">
+                        {a?.thumbnailUrl || a?.fileUrl ? (
+                          <img src={a.thumbnailUrl || a.fileUrl || ""} alt={a.name} className="w-full h-full object-cover" />
+                        ) : (
+                          <ImageIcon className="w-full h-full p-2 text-muted-foreground" />
+                        )}
+                      </div>
+                    );
+                  })}
+                  {(p.referenceAssetIds?.length ?? 0) > 5 && (
+                    <span className="text-[10px] text-muted-foreground">+{(p.referenceAssetIds || []).length - 5}</span>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{editing ? "Edit Design Style" : "New Design Style"}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="grid md:grid-cols-2 gap-4">
+              <div>
+                <label className="text-sm font-semibold mb-1.5 block">Name</label>
+                <Input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Neon Nights" data-testid="style-profile-name" />
+              </div>
+              <div className="flex items-end pb-2">
+                <label className="flex items-center gap-2 text-sm cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={form.isDefault}
+                    onChange={e => setForm(f => ({ ...f, isDefault: e.target.checked }))}
+                    className="h-4 w-4 accent-primary"
+                    data-testid="style-profile-default"
+                  />
+                  Use as this brand's default style
+                </label>
+              </div>
+            </div>
+            <div>
+              <label className="text-sm font-semibold mb-1.5 block">Description</label>
+              <Input value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="When to use this style" data-testid="style-profile-description" />
+            </div>
+            <div>
+              <label className="text-sm font-semibold mb-1.5 block">Style Direction</label>
+              <Textarea value={form.styleDirection} onChange={e => setForm(f => ({ ...f, styleDirection: e.target.value }))} placeholder="Art-direction language injected into the image prompt, e.g. gritty neon-lit arena, cinematic rim lighting, bold diagonal composition" className="min-h-20 font-mono text-sm" data-testid="style-profile-direction" />
+            </div>
+            <div>
+              <label className="text-sm font-semibold mb-1.5 block">Color Treatment</label>
+              <Textarea value={form.colorTreatment} onChange={e => setForm(f => ({ ...f, colorTreatment: e.target.value }))} placeholder="e.g. gold and black dominant, desaturated backgrounds, high-contrast highlights" className="min-h-16 font-mono text-sm" data-testid="style-profile-color" />
+            </div>
+            <div>
+              <label className="text-sm font-semibold mb-1.5 block">Default Logo (optional)</label>
+              <Select
+                value={form.defaultLogoAssetId ?? "none"}
+                onValueChange={v => setForm(f => ({ ...f, defaultLogoAssetId: v === "none" ? null : v }))}
+              >
+                <SelectTrigger data-testid="style-profile-logo">
+                  <SelectValue placeholder="No logo" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">No logo</SelectItem>
+                  {visualAssets.map(a => (
+                    <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <label className="text-sm font-semibold mb-1.5 block">
+                Style Reference Images ({form.referenceAssetIds.length} selected)
+              </label>
+              <p className="text-xs text-muted-foreground mb-2">Selected images are attached as top-priority style references during generation.</p>
+              {visualAssets.length === 0 ? (
+                <p className="text-sm text-muted-foreground border border-dashed border-border rounded-md p-3">No visual assets in the library yet.</p>
+              ) : (
+                <div className="grid grid-cols-4 sm:grid-cols-6 gap-2 max-h-56 overflow-y-auto pr-1">
+                  {visualAssets.map(a => {
+                    const selected = form.referenceAssetIds.includes(a.id);
+                    return (
+                      <button
+                        key={a.id}
+                        type="button"
+                        onClick={() => toggleReference(a.id)}
+                        className={cn(
+                          "relative aspect-square rounded-md overflow-hidden border-2 transition-colors",
+                          selected ? "border-primary" : "border-transparent hover:border-primary/40",
+                        )}
+                        title={a.name}
+                        data-testid={`style-profile-ref-${a.id}`}
+                      >
+                        {a.thumbnailUrl || a.fileUrl ? (
+                          <img src={a.thumbnailUrl || a.fileUrl || ""} alt={a.name} className="w-full h-full object-cover" />
+                        ) : (
+                          <div className="w-full h-full bg-muted flex items-center justify-center">
+                            <ImageIcon className="h-5 w-5 text-muted-foreground" />
+                          </div>
+                        )}
+                        {selected && (
+                          <div className="absolute top-1 right-1 bg-primary text-primary-foreground rounded-full p-0.5">
+                            <Check className="h-3 w-3" />
+                          </div>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="ghost" onClick={() => setDialogOpen(false)}>Cancel</Button>
+            <Button type="button" onClick={save} disabled={saving} data-testid="style-profile-save">
+              {saving && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />}
+              {editing ? "Save Changes" : "Create Style"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={Boolean(deleteTarget)} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete "{deleteTarget?.name}"?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Creatives that used this style keep their images; new generations simply stop using it. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => deleteTarget && deleteMutation.mutate({ id: brandId, profileId: deleteTarget.id })}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

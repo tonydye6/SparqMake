@@ -16,6 +16,7 @@ export interface UpdateCreativeInput {
   selectedAssets?: UpdateCreativeInputSelectedAssetsItem[];
   selectedHashtagSets?: string[] | null;
   intent?: string | null;
+  styleProfileId?: string | null;
   reviewedBy?: string | null;
   reviewComment?: string | null;
 }

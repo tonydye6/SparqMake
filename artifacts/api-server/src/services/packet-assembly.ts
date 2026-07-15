@@ -51,6 +51,10 @@ function hasConflict(a: Asset, b: Asset): boolean {
   return aTags.some((tag: string) => bTagsSet.has(tag));
 }
 
+// Score boost applied to a selected style profile's reference assets so they
+// always outrank organically-scored style candidates in packet assembly.
+const STYLE_PROFILE_PRIORITY_BOOST = 1000;
+
 export async function buildGenerationPacket(params: {
   creativeId: string;
   brandId: string;
@@ -58,14 +62,21 @@ export async function buildGenerationPacket(params: {
   platform: string;
   selectedAssetIds: string[];
   franchise?: string;
+  // Reference assets from the creative's selected style profile. These are
+  // loaded even when not among selectedAssetIds and are treated as top-priority
+  // style references.
+  priorityStyleAssetIds?: string[];
 }): Promise<GenerationPacket> {
   const { creativeId, brandId, templateId, platform, selectedAssetIds, franchise } = params;
+  const priorityStyleAssetIds = params.priorityStyleAssetIds || [];
+  const prioritySet = new Set(priorityStyleAssetIds);
 
+  const idsToLoad = [...new Set([...selectedAssetIds, ...priorityStyleAssetIds])];
   let assets: Asset[] = [];
-  if (selectedAssetIds.length > 0) {
+  if (idsToLoad.length > 0) {
     assets = await db.select().from(assetsTable)
       .where(and(
-        inArray(assetsTable.id, selectedAssetIds),
+        inArray(assetsTable.id, idsToLoad),
         eq(assetsTable.brandId, brandId),
       ));
   }
@@ -130,7 +141,11 @@ export async function buildGenerationPacket(params: {
       continue;
     }
 
-    if (asset.assetClass === "style_reference") {
+    if (prioritySet.has(asset.id)) {
+      // Style profile reference: always a style reference, boosted above any
+      // organically-scored candidate so the chosen style dominates the packet.
+      styleCandidates.push({ asset, role: "style_reference", score: STYLE_PROFILE_PRIORITY_BOOST + scoreAsset(asset, "style_reference") });
+    } else if (asset.assetClass === "style_reference") {
       styleCandidates.push({ asset, role: "style_reference", score: scoreAsset(asset, "style_reference") });
     } else {
       subjectCandidates.push({ asset, role: "subject_reference", score: scoreAsset(asset, "subject_reference") });

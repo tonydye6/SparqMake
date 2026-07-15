@@ -1,6 +1,7 @@
-import { db, brandsTable, templatesTable, assetsTable, hashtagSetsTable } from "@workspace/db";
-import { eq, inArray, sql } from "drizzle-orm";
+import { db, brandsTable, templatesTable, assetsTable, hashtagSetsTable, styleProfilesTable } from "@workspace/db";
+import { eq, and, inArray, sql } from "drizzle-orm";
 import type { GenerationPacket } from "./packet-assembly.js";
+import type { StyleProfile } from "@workspace/db";
 
 export interface SelectedAssetRef {
   assetId: string;
@@ -20,6 +21,26 @@ export interface AssembledContext {
   // Goal-aware posting: the creative's strategic intent (taxonomy key), used
   // to shape image tone/energy, caption structure/CTA, and headline framing.
   intent?: string | null;
+  // The design style profile applied to this generation (or null). Injects its
+  // style direction + color treatment into the image prompt.
+  styleProfile?: StyleProfile | null;
+}
+
+// Resolve the style profile to use for a creative: the creative's explicitly
+// chosen profile if set, otherwise the brand's default profile, otherwise null
+// (existing behavior, no style applied).
+export async function resolveStyleProfile(
+  brandId: string,
+  styleProfileId?: string | null,
+): Promise<StyleProfile | null> {
+  if (styleProfileId) {
+    const [profile] = await db.select().from(styleProfilesTable)
+      .where(and(eq(styleProfilesTable.id, styleProfileId), eq(styleProfilesTable.brandId, brandId)));
+    if (profile) return profile;
+  }
+  const [fallback] = await db.select().from(styleProfilesTable)
+    .where(and(eq(styleProfilesTable.brandId, brandId), eq(styleProfilesTable.isDefault, true)));
+  return fallback || null;
 }
 
 export async function assembleContext(params: {
@@ -31,6 +52,7 @@ export async function assembleContext(params: {
   referenceAnalysis?: Record<string, unknown> | null;
   generationPacket?: GenerationPacket | null;
   intent?: string | null;
+  styleProfile?: StyleProfile | null;
 }): Promise<AssembledContext> {
   const [brand] = await db.select().from(brandsTable).where(eq(brandsTable.id, params.brandId));
   if (!brand) throw new Error(`Brand not found: ${params.brandId}`);
@@ -117,5 +139,6 @@ export async function assembleContext(params: {
     referenceAnalysis: params.referenceAnalysis || null,
     generationPacket: params.generationPacket || null,
     intent: params.intent || null,
+    styleProfile: params.styleProfile || null,
   };
 }

@@ -19,6 +19,7 @@ export interface Creative {
   selectedHashtagSets?: string[] | null;
   sourceCreativeId?: string | null;
   intent?: string | null;
+  styleProfileId?: string | null;
   createdBy: string;
   reviewedBy?: string | null;
   reviewComment?: string | null;

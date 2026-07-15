@@ -21,3 +21,7 @@ OpenAPI spec (mirror the `res.json({ data, total, limit, offset })` shape in the
 api-server route), then regenerate with `pnpm --filter @workspace/api-spec run codegen`.
 Never hand-edit files under `lib/*/src/generated`. Do not delete `.data` access in
 consumers to satisfy the type checker — fix the spec instead.
+
+**Related quirk:** generated `useGetXxx` hooks' `options.query` type requires
+`queryKey`, so passing just `{ enabled: ... }` fails typecheck; cast the options
+(see `useGetStyleProfiles` usage in `StudioNext.tsx`) or include a queryKey.

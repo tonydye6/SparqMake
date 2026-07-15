@@ -3,6 +3,7 @@ import { sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { brandsTable } from "./brands";
+import { styleProfilesTable } from "./style-profiles";
 import { templatesTable } from "./templates";
 import { socialAccountsTable } from "./social-accounts";
 import { usersTable } from "./users";
@@ -34,6 +35,10 @@ export const creativesTable = pgTable("creatives", {
   // { intent, confidence, alternates: [{intent, confidence}], reasoning }.
   // Kept for audit/analysis; NULL when intent was set manually or via concept.
   intentInference: json("intent_inference"),
+  // The design style profile chosen for this creative's generations (nullable;
+  // falls back to the brand's default style, or no style at all). Persisted so
+  // regenerate/vary/takes reuse the same style.
+  styleProfileId: text("style_profile_id").references(() => styleProfilesTable.id, { onDelete: "set null" }),
   estimatedCost: real("estimated_cost"),
   createdBy: text("created_by").notNull().references(() => usersTable.id, { onDelete: "restrict" }),
   reviewedBy: text("reviewed_by").references(() => usersTable.id, { onDelete: "set null" }),
