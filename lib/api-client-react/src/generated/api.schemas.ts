@@ -125,6 +125,7 @@ export interface Creative {
   sourceCreativeId?: string | null;
   intent?: string | null;
   styleProfileId?: string | null;
+  selectedLogoAssetId?: string | null;
   createdBy: string;
   reviewedBy?: string | null;
   reviewComment?: string | null;
@@ -524,6 +525,7 @@ export interface CreateCreativeInput {
   selectedHashtagSets?: string[] | null;
   intent?: string | null;
   styleProfileId?: string | null;
+  selectedLogoAssetId?: string | null;
   createdBy: string;
 }
 
@@ -539,6 +541,7 @@ export interface UpdateCreativeInput {
   selectedHashtagSets?: string[] | null;
   intent?: string | null;
   styleProfileId?: string | null;
+  selectedLogoAssetId?: string | null;
   reviewedBy?: string | null;
   reviewComment?: string | null;
 }

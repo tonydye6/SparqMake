@@ -1,3 +1,4 @@
+import { sanitizeLogoInstructions } from "./logo-intent.js";
 import { db, brandsTable, templatesTable, assetsTable, hashtagSetsTable, styleProfilesTable } from "@workspace/db";
 import { eq, and, inArray, sql } from "drizzle-orm";
 import type { GenerationPacket } from "./packet-assembly.js";
@@ -111,7 +112,10 @@ export async function assembleContext(params: {
   }
 
   if (params.briefText) {
-    briefTexts.push(params.briefText);
+    // Logo instructions never reach the prompt: logos are composited onto the
+    // finished image (see logo-intent service), so the mention is stripped and
+    // replaced with an explicit "no logos" guard.
+    briefTexts.push(sanitizeLogoInstructions(params.briefText));
   }
 
   let hashtagSets: (typeof hashtagSetsTable.$inferSelect)[] = [];

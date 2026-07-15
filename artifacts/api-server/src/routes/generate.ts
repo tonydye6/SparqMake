@@ -10,6 +10,7 @@ import { AI_MODELS, estimateClaudeCost, estimateGeminiTextCost, estimateImagenCo
 import { compositeImage, reframeImage, imageDimensions, type LayoutSpec, type BrandColorGuidance } from "../services/compositing.js";
 import { renderHeadlineIntoImage, HeadlineRenderError, MAX_HEADLINE_RENDER_ATTEMPTS } from "../services/headline-render.js";
 import { detectSubject, predictClip, type SubjectBox } from "../services/focal-point.js";
+import { detectLogoIntent, type LogoPlacementPosition } from "../services/logo-intent.js";
 import { checkBrandReadiness } from "../lib/brand-readiness.js";
 import { buildGenerationPacket } from "../services/packet-assembly.js";
 import { recordAssetUsage, packetAssetIds } from "../services/asset-usage.js";
@@ -76,38 +77,102 @@ async function deleteGenerated(filename: string): Promise<void> {
   await deleteObject({ namespace: "generated", filename });
 }
 
-async function fetchLogoBuffer(brandId: string): Promise<Buffer | null> {
+interface ResolvedLogo {
+  buffer: Buffer | null;
+  /** Corner override extracted from a logo instruction in the brief. */
+  placement: LogoPlacementPosition | null;
+}
+
+/**
+ * Resolve which logo (if any) to composite onto this creative's images.
+ * Priority: the creative's explicit pick ("none" opts out entirely) →
+ * a logo mentioned by name in the brief → the style profile's default logo →
+ * the brand's default logo. The choice is persisted on the creative, so
+ * regenerate/vary/takes/fan-out all reuse the same logo.
+ */
+async function resolveLogoForCreative(campaign: typeof creativesTable.$inferSelect): Promise<ResolvedLogo> {
+  const brandId = campaign.brandId;
   try {
-    const logoAssets = await db.select().from(assetsTable)
+    const compositingAssets = await db.select().from(assetsTable)
       .where(and(
         eq(assetsTable.brandId, brandId),
         eq(assetsTable.assetClass, "compositing"),
         eq(assetsTable.type, "image"),
       ));
+    const logoAssets = compositingAssets
+      .filter(a => a.generationRole === "compositing_logo" || (a.subType && a.subType.includes("logo")));
 
-    const [logoAsset] = logoAssets
-      .filter(a => a.generationRole === "compositing_logo" || (a.subType && a.subType.includes("logo")))
-      .sort((a, b) => {
-        if (a.subType?.includes("primary")) return -1;
-        if (b.subType?.includes("primary")) return 1;
-        return 0;
-      });
+    // Brief routing: logo instructions never reach the image model — they are
+    // detected here and honored at compositing time instead.
+    const intent = detectLogoIntent(campaign.briefText, logoAssets);
 
-    if (logoAsset?.fileUrl) {
-      const buf = await readFileByUrl(logoAsset.fileUrl);
-      if (buf) return buf;
+    const choice = campaign.selectedLogoAssetId;
+    if (choice === "none") {
+      return { buffer: null, placement: null };
     }
 
-    const [brand] = await db.select().from(brandsTable)
-      .where(eq(brandsTable.id, brandId));
+    const bufferFor = async (asset: { fileUrl: string | null } | undefined): Promise<Buffer | null> =>
+      asset?.fileUrl ? readFileByUrl(asset.fileUrl) : null;
+
+    // 1. Explicit per-creative pick.
+    if (choice) {
+      const buf = await bufferFor(compositingAssets.find(a => a.id === choice));
+      if (buf) return { buffer: buf, placement: intent.placement };
+      logger.warn({ brandId, creativeId: campaign.id, selectedLogoAssetId: choice }, "Selected logo asset missing or unreadable; falling back to defaults");
+    }
+
+    // 2. A logo named in the brief ("put the Nitro logo top right").
+    if (intent.matchedAssetId) {
+      const buf = await bufferFor(logoAssets.find(a => a.id === intent.matchedAssetId));
+      if (buf) return { buffer: buf, placement: intent.placement };
+    }
+
+    // 3. The style profile's default logo.
+    const styleProfile = await resolveStyleProfile(brandId, campaign.styleProfileId);
+    const profileLogoId = (styleProfile as { defaultLogoAssetId?: string | null } | null)?.defaultLogoAssetId;
+    if (profileLogoId) {
+      const buf = await bufferFor(compositingAssets.find(a => a.id === profileLogoId));
+      if (buf) return { buffer: buf, placement: intent.placement };
+    }
+
+    // 4. The brand's default logo (configured primary → primary-flagged asset
+    //    → brand.logoFileUrl).
+    const [brand] = await db.select().from(brandsTable).where(eq(brandsTable.id, brandId));
+    const config = (brand?.brandAssetConfig || {}) as Record<string, unknown>;
+    const primaryId = typeof config.primaryLogoAssetId === "string" ? config.primaryLogoAssetId : null;
+    if (primaryId) {
+      const buf = await bufferFor(compositingAssets.find(a => a.id === primaryId));
+      if (buf) return { buffer: buf, placement: intent.placement };
+    }
+
+    const [logoAsset] = [...logoAssets].sort((a, b) => {
+      if (a.subType?.includes("primary")) return -1;
+      if (b.subType?.includes("primary")) return 1;
+      return 0;
+    });
+    {
+      const buf = await bufferFor(logoAsset);
+      if (buf) return { buffer: buf, placement: intent.placement };
+    }
+
     if (brand?.logoFileUrl) {
       const buf = await readFileByUrl(brand.logoFileUrl);
-      if (buf) return buf;
+      if (buf) return { buffer: buf, placement: intent.placement };
     }
+    return { buffer: null, placement: intent.placement };
   } catch (err) {
-    logger.error({ err, brandId }, "Failed to fetch logo buffer");
+    logger.error({ err, brandId }, "Failed to resolve logo for creative");
   }
-  return null;
+  return { buffer: null, placement: null };
+}
+
+/** Merge a brief-derived logo corner into the template's layout spec. */
+function applyLogoPlacement(layoutSpec: LayoutSpec | null, placement: LogoPlacementPosition | null): LayoutSpec | null {
+  if (!placement) return layoutSpec;
+  return {
+    ...(layoutSpec || {}),
+    logo_placement: { ...(layoutSpec?.logo_placement || {}), position: placement },
+  };
 }
 
 // Brand design guidance for typography work: font family, palette, name.
@@ -376,10 +441,11 @@ router.post("/creatives/:id/generate", generationLimiter, async (req: Request, r
     sendEvent("progress", { step: "compositing", message: "Compositing images with overlays..." });
     const layoutSpec = ctx.template.layoutSpec as Record<string, unknown> | null;
 
-    const [logoBuffer, brandFontFamily] = await Promise.all([
-      fetchLogoBuffer(campaign.brandId),
+    const [resolvedLogo, brandFontFamily] = await Promise.all([
+      resolveLogoForCreative(campaign),
       fetchBrandFontFamily(campaign.brandId),
     ]);
+    const logoBuffer = resolvedLogo.buffer;
     if (logoBuffer) {
       sendEvent("progress", { step: "compositing", message: "Brand logo loaded for compositing" });
     }
@@ -404,7 +470,7 @@ router.post("/creatives/:id/generate", generationLimiter, async (req: Request, r
       try {
         const result = await compositeImage({
           rawImageBuffer: img.imageBuffer,
-          layoutSpec: layoutSpec as LayoutSpec | null,
+          layoutSpec: applyLogoPlacement(layoutSpec as LayoutSpec | null, resolvedLogo.placement),
           headlineText: captionData.headline || null,
           logoBuffer,
           width: config.width,
@@ -699,10 +765,11 @@ router.put("/creatives/:id/variants/:variantId/headline", validateRequest({ para
           selectedAssets: [],
         });
 
-        const [logoBuffer, design] = await Promise.all([
-          fetchLogoBuffer(campaign.brandId),
+        const [resolvedLogo, design] = await Promise.all([
+          resolveLogoForCreative(campaign),
           fetchBrandDesign(campaign.brandId),
         ]);
+        const logoBuffer = resolvedLogo.buffer;
 
         let baseBuffer = rawBuffer;
         let overlayHeadline: string | null = headline;
@@ -734,7 +801,7 @@ router.put("/creatives/:id/variants/:variantId/headline", validateRequest({ para
 
         const newResult = await compositeImage({
           rawImageBuffer: baseBuffer,
-          layoutSpec: ctx.template.layoutSpec as LayoutSpec | null,
+          layoutSpec: applyLogoPlacement(ctx.template.layoutSpec as LayoutSpec | null, resolvedLogo.placement),
           headlineText: overlayHeadline,
           logoBuffer,
           width: config.width,
@@ -1023,17 +1090,18 @@ async function generateVariantImage(
     fs.writeFileSync(path.join(tmpDir, rawFilename), imgResult.imageBuffer);
 
     const layoutSpec = ctx.template.layoutSpec as Record<string, unknown> | null;
-    const [logoBuffer, brandFontFamily] = await Promise.all([
-      fetchLogoBuffer(campaign.brandId),
+    const [resolvedLogo, brandFontFamily] = await Promise.all([
+      resolveLogoForCreative(campaign),
       fetchBrandFontFamily(campaign.brandId),
     ]);
+    const logoBuffer = resolvedLogo.buffer;
 
     let compositedBuffer: Buffer;
     let compositingFailed = false;
     try {
       const result = await compositeImage({
         rawImageBuffer: imgResult.imageBuffer,
-        layoutSpec: layoutSpec as LayoutSpec | null,
+        layoutSpec: applyLogoPlacement(layoutSpec as LayoutSpec | null, resolvedLogo.placement),
         headlineText: opts.headlineText ?? null,
         logoBuffer,
         width: config.width,
@@ -1160,17 +1228,18 @@ async function runVariantImageGeneration(
     fs.writeFileSync(rawTmpPath, imgResult.imageBuffer);
 
     const layoutSpec = ctx.template.layoutSpec as Record<string, unknown> | null;
-    const [logoBuffer, brandFontFamily] = await Promise.all([
-      fetchLogoBuffer(campaign.brandId),
+    const [resolvedLogo, brandFontFamily] = await Promise.all([
+      resolveLogoForCreative(campaign),
       fetchBrandFontFamily(campaign.brandId),
     ]);
+    const logoBuffer = resolvedLogo.buffer;
 
     let compositedBuffer: Buffer;
     let compositingFailed = false;
     try {
       const result = await compositeImage({
         rawImageBuffer: imgResult.imageBuffer,
-        layoutSpec: layoutSpec as LayoutSpec | null,
+        layoutSpec: applyLogoPlacement(layoutSpec as LayoutSpec | null, resolvedLogo.placement),
         headlineText: variant.headlineText || null,
         logoBuffer,
         width: config.width,
@@ -1542,10 +1611,11 @@ router.post("/creatives/:id/variants/:variantId/fan-out", generationLimiter, val
     const captions = await generateCaptions(ctx);
     const captionsByPlatform = captions as unknown as Record<string, { caption?: string; headline?: string }>;
 
-    const [logoBuffer, design] = await Promise.all([
-      fetchLogoBuffer(campaign.brandId),
+    const [resolvedLogo, design] = await Promise.all([
+      resolveLogoForCreative(campaign),
       fetchBrandDesign(campaign.brandId),
     ]);
+    const logoBuffer = resolvedLogo.buffer;
 
     const ts = Date.now();
     let outpaintsUsed = 0;
@@ -1616,7 +1686,7 @@ router.post("/creatives/:id/variants/:variantId/fan-out", generationLimiter, val
 
       const composited = await compositeImage({
         rawImageBuffer: baseBuffer,
-        layoutSpec: ctx.template.layoutSpec as LayoutSpec | null,
+        layoutSpec: applyLogoPlacement(ctx.template.layoutSpec as LayoutSpec | null, resolvedLogo.placement),
         headlineText: overlayHeadline,
         logoBuffer,
         width: config.width,
@@ -1829,16 +1899,17 @@ router.put("/creatives/:id/variants/:variantId/refocus", validateRequest({ param
     const focal = { x: focalX, y: focalY };
 
     const ctx = await assembleContext({ brandId: campaign.brandId, templateId: campaign.templateId, selectedAssets: [] });
-    const [logoBuffer, design] = await Promise.all([
-      fetchLogoBuffer(campaign.brandId),
+    const [resolvedLogo, design] = await Promise.all([
+      resolveLogoForCreative(campaign),
       fetchBrandDesign(campaign.brandId),
     ]);
+    const logoBuffer = resolvedLogo.buffer;
 
     const subjectBox = (winner.subjectBox as SubjectBox | null) ?? null;
     const reframedRaw = await reframeImage(rawBuffer, config.width, config.height, focal, subjectBox);
     const composited = await compositeImage({
       rawImageBuffer: reframedRaw,
-      layoutSpec: ctx.template.layoutSpec as LayoutSpec | null,
+      layoutSpec: applyLogoPlacement(ctx.template.layoutSpec as LayoutSpec | null, resolvedLogo.placement),
       headlineText: variant.headlineText,
       logoBuffer,
       width: config.width,
@@ -1922,17 +1993,18 @@ router.post("/creatives/:id/variants/:variantId/outpaint", generationLimiter, va
     const extended = await outpaintImage(rawBuffer, "image/png", config.aspectRatio, campaign.briefText || undefined);
 
     const ctx = await assembleContext({ brandId: campaign.brandId, templateId: campaign.templateId, selectedAssets: [] });
-    const [logoBuffer, design] = await Promise.all([
-      fetchLogoBuffer(campaign.brandId),
+    const [resolvedLogo, design] = await Promise.all([
+      resolveLogoForCreative(campaign),
       fetchBrandDesign(campaign.brandId),
     ]);
+    const logoBuffer = resolvedLogo.buffer;
 
     // The outpaint targets the platform aspect with the subject kept centered;
     // reframe centered to the exact pixel size, then overlay.
     const reframedRaw = await reframeImage(extended, config.width, config.height, null);
     const composited = await compositeImage({
       rawImageBuffer: reframedRaw,
-      layoutSpec: ctx.template.layoutSpec as LayoutSpec | null,
+      layoutSpec: applyLogoPlacement(ctx.template.layoutSpec as LayoutSpec | null, resolvedLogo.placement),
       headlineText: variant.headlineText,
       logoBuffer,
       width: config.width,

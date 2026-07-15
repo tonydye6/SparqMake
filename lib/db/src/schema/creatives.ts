@@ -39,6 +39,12 @@ export const creativesTable = pgTable("creatives", {
   // falls back to the brand's default style, or no style at all). Persisted so
   // regenerate/vary/takes reuse the same style.
   styleProfileId: text("style_profile_id").references(() => styleProfilesTable.id, { onDelete: "set null" }),
+  // The compositing logo chosen for this creative's generations. Values:
+  //   NULL   — auto (style profile's default logo → brand default logo)
+  //   "none" — explicitly no logo overlay
+  //   <id>   — a specific compositing logo asset (no FK so the "none" sentinel
+  //            and deleted-asset fallback stay representable).
+  selectedLogoAssetId: text("selected_logo_asset_id"),
   estimatedCost: real("estimated_cost"),
   createdBy: text("created_by").notNull().references(() => usersTable.id, { onDelete: "restrict" }),
   reviewedBy: text("reviewed_by").references(() => usersTable.id, { onDelete: "set null" }),

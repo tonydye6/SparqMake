@@ -34,3 +34,6 @@ time (diff dev→prod), so baseline/verify the prod state when first deploying.
 Note: a task agent's direct `psql`/migrate against ITS isolated env does NOT
 affect the main dev DB — verify the main dev DB's real state, don't assume a
 merged task already applied its migration here.
+
+## Parallel-task migration collisions
+When two tasks both generate migration N in parallel, resolve the rebase by keeping main's N (and snapshots/journal), deleting your migration file, and regenerating yours as the next index with `pnpm --filter @workspace/db run generate`. If the dev DB already applied your old migration, drop the affected column/table and delete its `drizzle.__drizzle_migrations` row before `migrate`, or it fails with a name-collision error.

@@ -137,7 +137,63 @@ router.get("/brands/:id/logos", async (req, res): Promise<void> => {
       eq(assetsTable.type, "image"),
     ));
 
-  res.json(logos);
+  // Mark the brand's default logo so pickers can label it without a second call.
+  const [brand] = await db.select().from(brandsTable).where(eq(brandsTable.id, brandId));
+  const config = (brand?.brandAssetConfig || {}) as Record<string, unknown>;
+  const defaultId = typeof config.primaryLogoAssetId === "string" ? config.primaryLogoAssetId : null;
+
+  res.json(logos.map(l => ({ ...l, isDefault: l.id === defaultId })));
+});
+
+// Rename a logo or make it the brand's default (the logo used when neither the
+// creative nor the style profile picks one).
+router.put("/brands/:id/logos/:assetId", async (req, res): Promise<void> => {
+  const brandId = str(req.params.id), assetId = str(req.params.assetId);
+  const { name, isDefault } = req.body as { name?: unknown; isDefault?: unknown };
+
+  const [asset] = await db.select().from(assetsTable)
+    .where(and(
+      eq(assetsTable.id, assetId),
+      eq(assetsTable.brandId, brandId),
+      eq(assetsTable.assetClass, "compositing"),
+      eq(assetsTable.type, "image"),
+    ));
+  if (!asset) {
+    res.status(404).json({ error: "Logo asset not found" });
+    return;
+  }
+
+  let updated = asset;
+  if (typeof name === "string" && name.trim()) {
+    const [row] = await db.update(assetsTable)
+      .set({ name: name.trim(), updatedAt: new Date() })
+      .where(eq(assetsTable.id, assetId))
+      .returning();
+    updated = row;
+  }
+
+  if (isDefault === true) {
+    const [brand] = await db.select().from(brandsTable).where(eq(brandsTable.id, brandId));
+    if (!brand) {
+      res.status(404).json({ error: "Brand not found" });
+      return;
+    }
+    const config = { ...((brand.brandAssetConfig || {}) as Record<string, unknown>), primaryLogoAssetId: assetId };
+    await db.update(brandsTable)
+      .set({ brandAssetConfig: config, logoFileUrl: updated.fileUrl, updatedAt: new Date() })
+      .where(eq(brandsTable.id, brandId));
+  }
+
+  await recordAudit({
+    actor: actorFromRequest(req),
+    action: "brand.logo_update",
+    entityType: "asset",
+    entityIds: [assetId],
+    brandId,
+    metadata: { name: typeof name === "string" ? name : undefined, isDefault: isDefault === true || undefined },
+  });
+
+  res.json({ ...updated, isDefault: isDefault === true ? true : undefined });
 });
 
 router.post("/brands/:id/logos", upload.single("file"), async (req, res): Promise<void> => {

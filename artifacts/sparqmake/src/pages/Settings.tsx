@@ -145,6 +145,7 @@ const SETTINGS_SECTIONS = [
   { id: "section-design-styles", label: "Design Styles" },
   { id: "section-platform-rules", label: "Platform Rules" },
   { id: "section-templates", label: "Templates" },
+  { id: "section-logos", label: "Logo Management" },
   { id: "section-fonts", label: "Font Management" },
   { id: "section-accounts", label: "Connected Accounts" },
 ];
@@ -1460,6 +1461,11 @@ function BrandEditor({ brand }: { brand: Brand }) {
             />
           </section>
 
+          {/* Logo Management */}
+          <div id="section-logos">
+            <BrandLogoManagement brandId={brand.id} />
+          </div>
+
           {/* Font Management */}
           <div id="section-fonts">
             <BrandFontManagement brandId={brand.id} />
@@ -1658,6 +1664,226 @@ function BrandAssetGroups({ brandId }: { brandId: string }) {
             </div>
           );
         })}
+      </div>
+    </section>
+  );
+}
+
+interface BrandLogoItem {
+  id: string;
+  name: string | null;
+  fileUrl: string | null;
+  thumbnailUrl: string | null;
+  isDefault?: boolean;
+}
+
+// Dedicated logo management: named logos with upload, rename, set-default and
+// delete. The default logo is the one composited when a creative doesn't pick
+// a specific logo (and the style profile has no default of its own).
+function BrandLogoManagement({ brandId }: { brandId: string }) {
+  const apiBase = import.meta.env.VITE_API_URL || "";
+  const { toast } = useToast();
+
+  const [logos, setLogos] = useState<BrandLogoItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const [uploadName, setUploadName] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [nameEdit, setNameEdit] = useState("");
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const loadLogos = useCallback(async () => {
+    try {
+      const res = await apiFetch(`${apiBase}/api/brands/${brandId}/logos`);
+      if (res.ok) {
+        const data = await res.json();
+        setLogos(Array.isArray(data) ? data : []);
+      }
+    } catch {
+      // Leave the list as-is; the section simply shows what it last loaded.
+    } finally {
+      setLoading(false);
+    }
+  }, [apiBase, brandId]);
+
+  useEffect(() => {
+    setLoading(true);
+    void loadLogos();
+  }, [loadLogos]);
+
+  const handleUpload = async (file: File) => {
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("role", logos.length === 0 ? "primary" : "secondary");
+      if (uploadName.trim()) formData.append("name", uploadName.trim());
+      const res = await apiFetch(`${apiBase}/api/brands/${brandId}/logos`, {
+        method: "POST",
+        body: formData,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err?.error || `Upload failed (${res.status})`);
+      }
+      setUploadName("");
+      toast({ title: "Logo uploaded" });
+      await loadLogos();
+    } catch (err) {
+      toast({ variant: "destructive", title: "Upload failed", description: err instanceof Error ? err.message : undefined });
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const saveRename = async (logoId: string) => {
+    if (!nameEdit.trim()) { setEditingId(null); return; }
+    setBusyId(logoId);
+    try {
+      const res = await apiFetch(`${apiBase}/api/brands/${brandId}/logos/${logoId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: nameEdit.trim() }),
+      });
+      if (!res.ok) throw new Error(`Rename failed (${res.status})`);
+      toast({ title: "Logo renamed" });
+      setEditingId(null);
+      await loadLogos();
+    } catch (err) {
+      toast({ variant: "destructive", title: "Rename failed", description: err instanceof Error ? err.message : undefined });
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const setDefault = async (logoId: string) => {
+    setBusyId(logoId);
+    try {
+      const res = await apiFetch(`${apiBase}/api/brands/${brandId}/logos/${logoId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isDefault: true }),
+      });
+      if (!res.ok) throw new Error(`Update failed (${res.status})`);
+      toast({ title: "Default logo updated" });
+      await loadLogos();
+    } catch (err) {
+      toast({ variant: "destructive", title: "Failed to set default", description: err instanceof Error ? err.message : undefined });
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const deleteLogo = async (logoId: string) => {
+    setBusyId(logoId);
+    try {
+      const res = await apiFetch(`${apiBase}/api/brands/${brandId}/logos/${logoId}`, { method: "DELETE" });
+      if (!res.ok && res.status !== 204) throw new Error(`Delete failed (${res.status})`);
+      toast({ title: "Logo deleted" });
+      await loadLogos();
+    } catch (err) {
+      toast({ variant: "destructive", title: "Delete failed", description: err instanceof Error ? err.message : undefined });
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <section className="bg-card border border-border rounded-xl p-6 shadow-sm">
+      <div className="flex items-center gap-2 mb-2 border-b border-border pb-4">
+        <ImageIcon className="text-primary" size={20} />
+        <h2 className="text-xl font-bold">Logo Management</h2>
+      </div>
+      <p className="text-xs text-muted-foreground mb-4">
+        Name each logo so you can reference it in briefs (e.g. "use the Nitro logo top right"). The default logo is used when a post doesn't pick one.
+      </p>
+
+      {loading ? (
+        <Skeleton className="h-24 w-full" />
+      ) : logos.length === 0 ? (
+        <p className="text-sm text-muted-foreground italic mb-4" data-testid="logo-list-empty">No logos uploaded yet.</p>
+      ) : (
+        <div className="space-y-2 mb-4">
+          {logos.map((logo) => (
+            <div key={logo.id} className="flex items-center gap-3 border border-border rounded-lg p-3 bg-background" data-testid={`logo-row-${logo.id}`}>
+              <div className="w-12 h-12 rounded-md overflow-hidden border border-border bg-muted/30 flex items-center justify-center shrink-0">
+                {logo.thumbnailUrl || logo.fileUrl ? (
+                  <img src={`${apiBase}${logo.thumbnailUrl || logo.fileUrl}`} alt={logo.name || "Logo"} className="w-full h-full object-contain" />
+                ) : (
+                  <ImageIcon size={16} className="text-muted-foreground" />
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                {editingId === logo.id ? (
+                  <div className="flex items-center gap-2">
+                    <Input
+                      value={nameEdit}
+                      onChange={(e) => setNameEdit(e.target.value)}
+                      className="h-8 text-sm"
+                      autoFocus
+                      onKeyDown={(e) => { if (e.key === "Enter") void saveRename(logo.id); if (e.key === "Escape") setEditingId(null); }}
+                      data-testid={`logo-rename-input-${logo.id}`}
+                    />
+                    <Button size="sm" variant="outline" onClick={() => void saveRename(logo.id)} disabled={busyId === logo.id}>
+                      {busyId === logo.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => setEditingId(null)}><XIcon className="w-3.5 h-3.5" /></Button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium truncate">{logo.name || "Untitled logo"}</span>
+                    {logo.isDefault && <Badge className="text-[10px]">Default</Badge>}
+                  </div>
+                )}
+              </div>
+              {editingId !== logo.id && (
+                <div className="flex items-center gap-1 shrink-0">
+                  {!logo.isDefault && (
+                    <Button size="sm" variant="outline" onClick={() => void setDefault(logo.id)} disabled={busyId === logo.id} data-testid={`logo-set-default-${logo.id}`}>
+                      Set default
+                    </Button>
+                  )}
+                  <Button size="sm" variant="ghost" onClick={() => { setEditingId(logo.id); setNameEdit(logo.name || ""); }} data-testid={`logo-rename-${logo.id}`}>
+                    <Edit2 className="w-3.5 h-3.5" />
+                  </Button>
+                  <Button size="sm" variant="ghost" className="text-destructive" onClick={() => void deleteLogo(logo.id)} disabled={busyId === logo.id} data-testid={`logo-delete-${logo.id}`}>
+                    {busyId === logo.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                  </Button>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="flex items-center gap-2">
+        <Input
+          placeholder="Logo name (e.g. Nitro wordmark)"
+          value={uploadName}
+          onChange={(e) => setUploadName(e.target.value)}
+          className="max-w-xs h-9 text-sm"
+          data-testid="logo-upload-name"
+        />
+        <label className="inline-flex">
+          <input
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/gif"
+            className="hidden"
+            disabled={uploading}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void handleUpload(f);
+              e.target.value = "";
+            }}
+            data-testid="logo-upload-input"
+          />
+          <Button size="sm" variant="outline" disabled={uploading} asChild>
+            <span className="cursor-pointer">
+              {uploading ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Upload className="w-3.5 h-3.5 mr-1" />}
+              Upload logo
+            </span>
+          </Button>
+        </label>
       </div>
     </section>
   );

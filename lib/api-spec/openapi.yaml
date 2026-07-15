@@ -2552,6 +2552,9 @@ components:
         styleProfileId:
           type: string
           nullable: true
+        selectedLogoAssetId:
+          type: string
+          nullable: true
         createdBy:
           type: string
         reviewedBy:
@@ -2608,6 +2611,9 @@ components:
         styleProfileId:
           type: string
           nullable: true
+        selectedLogoAssetId:
+          type: string
+          nullable: true
         createdBy:
           type: string
       required:
@@ -2646,6 +2652,9 @@ components:
           type: string
           nullable: true
         styleProfileId:
+          type: string
+          nullable: true
+        selectedLogoAssetId:
           type: string
           nullable: true
         reviewedBy:

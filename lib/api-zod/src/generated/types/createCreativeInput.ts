@@ -17,5 +17,6 @@ export interface CreateCreativeInput {
   selectedHashtagSets?: string[] | null;
   intent?: string | null;
   styleProfileId?: string | null;
+  selectedLogoAssetId?: string | null;
   createdBy: string;
 }

@@ -119,7 +119,7 @@ function buildImagePrompt(ctx: AssembledContext, referenceImages?: ReferenceImag
     parts.push(refText);
   }
 
-  parts.push("Do not include any text, words, or letters in the image. No watermarks.");
+  parts.push("Do not include any text, words, or letters in the image. Do not render any logos, brand marks, wordmarks, or watermarks — logos are overlaid on the image afterwards.");
 
   return parts.join("\n\n");
 }

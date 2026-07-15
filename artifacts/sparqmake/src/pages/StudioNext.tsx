@@ -99,6 +99,49 @@ interface SelectedAssetPick {
   role: "primary" | "supporting";
 }
 
+// A brand logo available as a compositing overlay (from GET /brands/:id/logos).
+interface BrandLogo {
+  id: string;
+  name: string | null;
+  fileUrl: string | null;
+  thumbnailUrl: string | null;
+  isDefault?: boolean;
+}
+
+// The dedicated logo-overlay selector. Logos never act as generation
+// references — they are composited onto the finished image — so they get their
+// own picker instead of riding along with the reference checkboxes.
+function LogoPicker({
+  logos,
+  value,
+  onChange,
+  testId = "studio-next-logo",
+}: {
+  logos: BrandLogo[];
+  value: string | null;
+  onChange: (v: string | null) => void;
+  testId?: string;
+}) {
+  if (logos.length === 0) return null;
+  return (
+    <Select value={value ?? "auto"} onValueChange={(v) => onChange(v === "auto" ? null : v)}>
+      <SelectTrigger className="w-[220px]" data-testid={testId}>
+        <SelectValue placeholder="Auto logo" />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="auto">Auto (style/brand default)</SelectItem>
+        <SelectItem value="none">No logo</SelectItem>
+        {logos.map((l) => (
+          <SelectItem key={l.id} value={l.id}>
+            {l.name || "Untitled logo"}
+            {l.isDefault ? " (brand default)" : ""}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
 interface StudioState {
   beat: Beat;
   // The creative is created on entering Board; takes/variants hang off it.
@@ -114,6 +157,10 @@ interface StudioState {
   // Design style profile applied to image generation. null = brand default /
   // no style (server falls back to the brand's default profile if one exists).
   styleProfileId: string | null;
+  // Logo overlaid on the finished images. null = auto (style profile's default
+  // logo, then the brand default); "none" = explicitly no logo; otherwise a
+  // logo asset id. Persisted onto the creative so regens reuse it.
+  logoAssetId: string | null;
   // The take chosen on the Board, carried into Finish.
   selectedVariantId: string | null;
   // Fan-out approve-selection (variant ids checked but not yet approved). Held in
@@ -130,6 +177,7 @@ type StudioAction =
   | { type: "setIntent"; intent: IntentInfo | null }
   | { type: "setSelectedAssets"; assets: SelectedAssetPick[] }
   | { type: "setStyleProfile"; styleProfileId: string | null }
+  | { type: "setLogo"; logoAssetId: string | null }
   | { type: "setCreative"; creativeId: string }
   | { type: "selectVariant"; variantId: string }
   | { type: "toggleFanoutApprove"; id: string }
@@ -144,6 +192,7 @@ const initialState: StudioState = {
   intent: null,
   selectedAssets: [],
   styleProfileId: null,
+  logoAssetId: null,
   selectedVariantId: null,
   fanoutApproved: [],
 };
@@ -161,6 +210,7 @@ function reducer(state: StudioState, action: StudioAction): StudioState {
         intent: null,
         selectedAssets: [],
         styleProfileId: null,
+        logoAssetId: null,
         creativeId: null,
         selectedVariantId: null,
         fanoutApproved: [],
@@ -183,6 +233,8 @@ function reducer(state: StudioState, action: StudioAction): StudioState {
       return { ...state, selectedAssets: action.assets };
     case "setStyleProfile":
       return { ...state, styleProfileId: action.styleProfileId };
+    case "setLogo":
+      return { ...state, logoAssetId: action.logoAssetId };
     case "setCreative":
       return { ...state, creativeId: action.creativeId };
     case "selectVariant":
@@ -309,8 +361,39 @@ function BeatHome({
   const [matchLoading, setMatchLoading] = useState(false);
   const [suggestions, setSuggestions] = useState<AssetSuggestion[] | null>(null);
   const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [logos, setLogos] = useState<BrandLogo[]>([]);
+  // Ref mirror so the async matcher can exclude logos without re-memoizing.
+  const logoIdsRef = useRef<Set<string>>(new Set());
 
   const brandId = state.brandId;
+
+  // Brand logos for the dedicated overlay picker (and to keep logos out of the
+  // generation-reference suggestions).
+  useEffect(() => {
+    if (!brandId) {
+      setLogos([]);
+      logoIdsRef.current = new Set();
+      return;
+    }
+    let cancelled = false;
+    void apiFetch(`${API_BASE}/api/brands/${brandId}/logos`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data) => {
+        if (cancelled) return;
+        const list = Array.isArray(data) ? (data as BrandLogo[]) : [];
+        setLogos(list);
+        logoIdsRef.current = new Set(list.map((l) => l.id));
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setLogos([]);
+          logoIdsRef.current = new Set();
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [brandId]);
 
   // Default to the first brand once the list loads.
   useEffect(() => {
@@ -387,6 +470,9 @@ function BeatHome({
           for (const m of list) {
             const a = m.asset || {};
             if (!a.id || seen.has(a.id) || a.status !== "approved") continue;
+            // Logos are never generation references — they get the dedicated
+            // logo overlay selector instead of a reference checkbox.
+            if (logoIdsRef.current.has(a.id) || a.generationRole === "compositing_logo") continue;
             seen.add(a.id);
             flat.push({
               id: a.id,
@@ -525,6 +611,20 @@ function BeatHome({
             );
           })}
         </div>
+        {logos.length > 0 && (
+          <div className="flex items-center gap-3 border-t border-border pt-4">
+            <span className="text-sm font-medium text-foreground">Logo overlay</span>
+            <LogoPicker
+              logos={logos}
+              value={state.logoAssetId}
+              onChange={(v) => dispatch({ type: "setLogo", logoAssetId: v })}
+              testId="asset-picks-logo"
+            />
+            <span className="text-xs text-muted-foreground">
+              Added on top of the finished image — not sent to the AI model.
+            </span>
+          </div>
+        )}
         <div className="flex items-center justify-between">
           <Button
             variant="ghost"
@@ -589,6 +689,16 @@ function BeatHome({
                 ))}
               </SelectContent>
             </Select>
+          </>
+        )}
+        {logos.length > 0 && (
+          <>
+            <span className="text-sm text-muted-foreground">logo</span>
+            <LogoPicker
+              logos={logos}
+              value={state.logoAssetId}
+              onChange={(v) => dispatch({ type: "setLogo", logoAssetId: v })}
+            />
           </>
         )}
       </div>
@@ -866,6 +976,8 @@ function BeatBoard({
           // Goal-aware posting: persist the concept-selected or inferred intent.
           intent: state.intent?.intent || undefined,
           styleProfileId: state.styleProfileId || undefined,
+          // "none" is a real choice (no logo); null/auto is simply omitted.
+          selectedLogoAssetId: state.logoAssetId || undefined,
           createdBy: "self", // server overrides this with the authenticated user
         });
         dispatch({ type: "setCreative", creativeId: creative.id });

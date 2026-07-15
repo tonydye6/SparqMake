@@ -59,7 +59,8 @@ export default function StepUploadLogo({
       setUploading(true);
       try {
         const formData = new FormData();
-        formData.append("logo", file);
+        // API's multer field name is "file" — "logo" gets silently dropped.
+        formData.append("file", file);
 
         const res = await apiFetch(`/api/brands/${brandId}/logos`, {
           method: "POST",

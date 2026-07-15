@@ -1,0 +1,1 @@
+ALTER TABLE "creatives" ADD COLUMN "selected_logo_asset_id" text;

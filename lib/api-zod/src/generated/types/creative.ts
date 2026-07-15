@@ -20,6 +20,7 @@ export interface Creative {
   sourceCreativeId?: string | null;
   intent?: string | null;
   styleProfileId?: string | null;
+  selectedLogoAssetId?: string | null;
   createdBy: string;
   reviewedBy?: string | null;
   reviewComment?: string | null;

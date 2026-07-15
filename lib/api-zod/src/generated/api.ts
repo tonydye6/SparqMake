@@ -679,6 +679,7 @@ export const GetCreativesResponse = zod.object({
       sourceCreativeId: zod.string().nullish(),
       intent: zod.string().nullish(),
       styleProfileId: zod.string().nullish(),
+      selectedLogoAssetId: zod.string().nullish(),
       createdBy: zod.string(),
       reviewedBy: zod.string().nullish(),
       reviewComment: zod.string().nullish(),
@@ -704,6 +705,7 @@ export const CreateCreativeBody = zod.object({
   selectedHashtagSets: zod.array(zod.string()).nullish(),
   intent: zod.string().nullish(),
   styleProfileId: zod.string().nullish(),
+  selectedLogoAssetId: zod.string().nullish(),
   createdBy: zod.string(),
 });
 
@@ -727,6 +729,7 @@ export const GetCreativeResponse = zod.object({
   sourceCreativeId: zod.string().nullish(),
   intent: zod.string().nullish(),
   styleProfileId: zod.string().nullish(),
+  selectedLogoAssetId: zod.string().nullish(),
   createdBy: zod.string(),
   reviewedBy: zod.string().nullish(),
   reviewComment: zod.string().nullish(),
@@ -751,6 +754,7 @@ export const UpdateCreativeBody = zod.object({
   selectedHashtagSets: zod.array(zod.string()).nullish(),
   intent: zod.string().nullish(),
   styleProfileId: zod.string().nullish(),
+  selectedLogoAssetId: zod.string().nullish(),
   reviewedBy: zod.string().nullish(),
   reviewComment: zod.string().nullish(),
 });
@@ -768,6 +772,7 @@ export const UpdateCreativeResponse = zod.object({
   sourceCreativeId: zod.string().nullish(),
   intent: zod.string().nullish(),
   styleProfileId: zod.string().nullish(),
+  selectedLogoAssetId: zod.string().nullish(),
   createdBy: zod.string(),
   reviewedBy: zod.string().nullish(),
   reviewComment: zod.string().nullish(),

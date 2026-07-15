@@ -17,6 +17,7 @@ export interface UpdateCreativeInput {
   selectedHashtagSets?: string[] | null;
   intent?: string | null;
   styleProfileId?: string | null;
+  selectedLogoAssetId?: string | null;
   reviewedBy?: string | null;
   reviewComment?: string | null;
 }
