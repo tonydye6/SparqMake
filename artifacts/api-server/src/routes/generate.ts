@@ -7,7 +7,8 @@ import { assembleContext, type SelectedAssetRef } from "../services/context-asse
 import { generateCaptions } from "../services/claude.js";
 import { generateAllImages, generateImage, outpaintImage, PLATFORM_CONFIGS, type ReferenceImage, type VaryMode } from "../services/imagen.js";
 import { AI_MODELS, estimateClaudeCost, estimateGeminiTextCost, estimateImagenCost } from "../lib/ai-config.js";
-import { compositeImage, reframeImage, imageDimensions, type LayoutSpec } from "../services/compositing.js";
+import { compositeImage, reframeImage, imageDimensions, type LayoutSpec, type BrandColorGuidance } from "../services/compositing.js";
+import { renderHeadlineIntoImage, HeadlineRenderError, MAX_HEADLINE_RENDER_ATTEMPTS } from "../services/headline-render.js";
 import { detectSubject, predictClip, type SubjectBox } from "../services/focal-point.js";
 import { checkBrandReadiness } from "../lib/brand-readiness.js";
 import { buildGenerationPacket } from "../services/packet-assembly.js";
@@ -41,6 +42,11 @@ const UpdateCaptionBody = z.object({
 
 const UpdateHeadlineBody = z.object({
   headline: z.string().min(1),
+  // "instant" — free design-aware SVG overlay recomposite (default).
+  // "render"  — the image model paints the headline into the scene as
+  //             art-directed typography (verified by OCR, retried, falls back
+  //             to the overlay when every attempt fails).
+  mode: z.enum(["instant", "render"]).default("instant"),
 });
 
 const RefocusBody = z.object({
@@ -101,6 +107,31 @@ async function fetchLogoBuffer(brandId: string): Promise<Buffer | null> {
     logger.error({ err, brandId }, "Failed to fetch logo buffer");
   }
   return null;
+}
+
+// Brand design guidance for typography work: font family, palette, name.
+// Best-effort — a missing brand just yields undefined fields.
+async function fetchBrandDesign(brandId: string): Promise<{
+  fontFamily?: string;
+  colors: BrandColorGuidance;
+  brandName?: string;
+}> {
+  try {
+    const [brand] = await db.select().from(brandsTable).where(eq(brandsTable.id, brandId));
+    const fonts = (brand?.brandFonts || []) as Array<{ name?: string }>;
+    return {
+      fontFamily: fonts.length > 0 && fonts[0].name ? fonts[0].name : undefined,
+      colors: {
+        primary: brand?.colorPrimary ?? null,
+        secondary: brand?.colorSecondary ?? null,
+        accent: brand?.colorAccent ?? null,
+      },
+      brandName: brand?.name,
+    };
+  } catch (err) {
+    logger.error({ err, brandId }, "Failed to fetch brand design guidance");
+    return { colors: {} };
+  }
 }
 
 async function fetchBrandFontFamily(brandId: string): Promise<string | undefined> {
@@ -618,7 +649,25 @@ router.put("/creatives/:id/variants/:variantId/headline", validateRequest({ para
     return;
   }
 
+  const mode = (req.body.mode as "instant" | "render" | undefined) ?? "instant";
+
+  // Render mode is a billable path (image call + OCR verify per attempt):
+  // reserve worst-case headroom up front, settle the real spend after.
+  let reservationId: string | null = null;
+  if (mode === "render" && variant.rawImageUrl) {
+    const worstCase = estimateImagenCost(MAX_HEADLINE_RENDER_ATTEMPTS) + estimateGeminiTextCost() * MAX_HEADLINE_RENDER_ATTEMPTS;
+    const budget = await reserveBudget(creativeId, worstCase);
+    if (!budget.ok) {
+      res.status(429).json(budgetExceededBody(budget.todaySpend, budget.threshold));
+      return;
+    }
+    reservationId = budget.reservationId;
+  }
+
   let compositedUrl = variant.compositedImageUrl;
+  let headlineRenderMode = variant.headlineRenderMode;
+  let renderFallback: string | null = null;
+  let renderAttempts = 0;
   if (variant.rawImageUrl) {
     try {
       const rawBuffer = await readFileByUrl(variant.rawImageUrl);
@@ -629,32 +678,92 @@ router.put("/creatives/:id/variants/:variantId/headline", validateRequest({ para
           selectedAssets: [],
         });
 
-        const [logoBuffer, fontFamily] = await Promise.all([
+        const [logoBuffer, design] = await Promise.all([
           fetchLogoBuffer(campaign.brandId),
-          fetchBrandFontFamily(campaign.brandId),
+          fetchBrandDesign(campaign.brandId),
         ]);
 
+        let baseBuffer = rawBuffer;
+        let overlayHeadline: string | null = headline;
+        if (mode === "render") {
+          try {
+            const rendered = await renderHeadlineIntoImage(
+              rawBuffer,
+              "image/png",
+              headline,
+              { ...design.colors, fontFamily: design.fontFamily, brandName: design.brandName,
+                colorPrimary: design.colors.primary, colorSecondary: design.colors.secondary, colorAccent: design.colors.accent },
+              variant.aspectRatio || config.aspectRatio,
+              (attempt) => { renderAttempts = attempt; },
+            );
+            baseBuffer = rendered.buffer;
+            overlayHeadline = null; // typography lives in the image now
+            headlineRenderMode = "rendered";
+          } catch (renderErr) {
+            if (renderErr instanceof HeadlineRenderError) {
+              renderFallback = renderErr.message + " Applied the design-aware overlay instead.";
+              headlineRenderMode = "overlay";
+            } else {
+              throw renderErr;
+            }
+          }
+        } else {
+          headlineRenderMode = "overlay";
+        }
+
         const newResult = await compositeImage({
-          rawImageBuffer: rawBuffer,
+          rawImageBuffer: baseBuffer,
           layoutSpec: ctx.template.layoutSpec as LayoutSpec | null,
-          headlineText: headline,
+          headlineText: overlayHeadline,
           logoBuffer,
           width: config.width,
           height: config.height,
-          fontFamily,
+          fontFamily: design.fontFamily,
+          brandColors: design.colors,
+          aspectRatio: variant.aspectRatio || config.aspectRatio,
         });
 
-        const compFilename = `${creativeId}_${variant.platform}_composited.png`;
+        // Token-named file so clients never see a stale cached composite.
+        const compFilename = `${creativeId}_${variant.platform}_${Date.now()}_${crypto.randomUUID().slice(0, 8)}_composited.png`;
         await writeBuffer("generated", compFilename, newResult.buffer);
         compositedUrl = `/api/files/generated/${compFilename}`;
       }
     } catch (err) {
+      if (reservationId) {
+        try { await db.delete(costLogsTable).where(eq(costLogsTable.id, reservationId)); } catch {}
+        reservationId = null;
+      }
+      if (mode === "render") {
+        const message = err instanceof Error ? err.message : String(err);
+        res.status(502).json({ error: `Headline render failed: ${message}` });
+        return;
+      }
       console.error("Failed to recomposite for headline update:", err instanceof Error ? err.message : err);
     }
   }
 
+  // Settle the reservation against the real spend (attempts actually made).
+  if (reservationId) {
+    try {
+      await db.transaction(async (tx) => {
+        await tx.delete(costLogsTable).where(eq(costLogsTable.id, reservationId!));
+        if (renderAttempts > 0) {
+          await tx.insert(costLogsTable).values({
+            creativeId,
+            service: "gemini",
+            operation: "headline_render",
+            model: AI_MODELS.GEMINI_FLASH_IMAGE,
+            costUsd: estimateImagenCost(renderAttempts) + estimateGeminiTextCost() * renderAttempts,
+          });
+        }
+      });
+    } catch (costErr) {
+      logger.error({ err: costErr, creativeId }, "Failed to settle headline render cost");
+    }
+  }
+
   const [updated] = await db.update(creativeVariantsTable)
-    .set({ headlineText: headline, compositedImageUrl: compositedUrl, updatedAt: new Date() })
+    .set({ headlineText: headline, compositedImageUrl: compositedUrl, headlineRenderMode, updatedAt: new Date() })
     .where(eq(creativeVariantsTable.id, variantId))
     .returning();
 
@@ -671,7 +780,7 @@ router.put("/creatives/:id/variants/:variantId/headline", validateRequest({ para
     });
   }
 
-  res.json(updated);
+  res.json(renderFallback ? { ...updated, renderFallback } : updated);
 });
 
 router.post("/creatives/:id/variants/:variantId/regenerate", generationLimiter, async (req: Request, res: Response): Promise<void> => {
@@ -1284,9 +1393,12 @@ router.post("/creatives/:id/variants/:variantId/fan-out", generationLimiter, val
     return;
   }
 
-  // Two billable AI calls on the cold path: a Gemini vision subject-detection
+  // Base billable AI calls on the cold path: a Gemini vision subject-detection
   // call (only when the take has no cached focal/box) and a Claude captions
-  // call. Reserve the sum of their real estimates.
+  // call. Reserve the sum of their real estimates. Generative extras (auto
+  // background extension for clipped crops, per-aspect headline re-render when
+  // the winner's typography is AI-integrated) are reserved incrementally after
+  // detection, when we know how many are needed.
   const needsSubjectDetection = !(winner.focalX != null && winner.focalY != null && winner.subjectBox);
   const estimatedSubjectCost = needsSubjectDetection ? estimateGeminiTextCost() : 0;
   const estimatedCaptionsCost = estimateClaudeCost();
@@ -1297,6 +1409,7 @@ router.post("/creatives/:id/variants/:variantId/fan-out", generationLimiter, val
     return;
   }
   const reservationId = budget.reservationId;
+  let extraReservationId: string | null = null;
 
   const writtenFiles: string[] = [];
   try {
@@ -1320,6 +1433,36 @@ router.post("/creatives/:id/variants/:variantId/fan-out", generationLimiter, val
         .where(eq(creativeVariantsTable.id, variantId));
     }
 
+    // Plan the generative extras now that focal + box are known:
+    //  - platforms whose safe crop would clip the subject → auto background
+    //    extension (1 outpaint image call each; falls back to crop + warning);
+    //  - AI-integrated headline typography on the winner → re-render the
+    //    headline per aspect (image + OCR verify each; falls back to overlay).
+    const validPlatforms = platforms.filter(p => PLATFORM_CONFIGS[p]);
+    const clippedPlatforms = new Set(
+      validPlatforms.filter(p => {
+        const cfg = PLATFORM_CONFIGS[p];
+        return predictClip(box, focal, sourceAspect, cfg.width / cfg.height);
+      }),
+    );
+    const rerenderHeadlines = winner.headlineRenderMode === "rendered";
+    const estimatedExtraCost =
+      estimateImagenCost(clippedPlatforms.size) +
+      (rerenderHeadlines
+        ? validPlatforms.length * MAX_HEADLINE_RENDER_ATTEMPTS * (estimateImagenCost(1) + estimateGeminiTextCost())
+        : 0);
+    if (estimatedExtraCost > 0) {
+      const extraBudget = await reserveBudget(creativeId, estimatedExtraCost);
+      if (!extraBudget.ok) {
+        if (reservationId) {
+          try { await db.delete(costLogsTable).where(eq(costLogsTable.id, reservationId)); } catch {}
+        }
+        res.status(429).json(budgetExceededBody(extraBudget.todaySpend, extraBudget.threshold));
+        return;
+      }
+      extraReservationId = extraBudget.reservationId;
+    }
+
     // Per-platform captions (one Claude call covering all platforms).
     const selectedAssets = (campaign.selectedAssets || []) as import("../services/context-assembly.js").SelectedAssetRef[];
     const ctx = await assembleContext({
@@ -1333,37 +1476,90 @@ router.post("/creatives/:id/variants/:variantId/fan-out", generationLimiter, val
     const captions = await generateCaptions(ctx);
     const captionsByPlatform = captions as unknown as Record<string, { caption?: string; headline?: string }>;
 
-    const [logoBuffer, fontFamily] = await Promise.all([
+    const [logoBuffer, design] = await Promise.all([
       fetchLogoBuffer(campaign.brandId),
-      fetchBrandFontFamily(campaign.brandId),
+      fetchBrandDesign(campaign.brandId),
     ]);
 
     const ts = Date.now();
+    let outpaintsUsed = 0;
+    let headlineRenderAttempts = 0;
     const produced: {
       platform: string; aspectRatio: string; rawFn: string; compFn: string;
       caption: string; headline: string; warn: string | null; clip: boolean;
+      renderMode: string | null;
     }[] = [];
 
-    for (const platform of platforms) {
+    for (const platform of validPlatforms) {
       const config = PLATFORM_CONFIGS[platform];
-      if (!config) continue;
       const cap = captionsByPlatform[platform] || {};
       const caption = cap.caption || "";
       const headline = cap.headline || "";
+      const warns: string[] = [];
 
-      // Reframe the winner's raw image to this platform's aspect around the focal
-      // point (zero regeneration), then overlay headline/logo/gradient.
-      const reframedRaw = await reframeImage(rawBuffer, config.width, config.height, focal);
+      // Reframe the winner's raw to this platform's aspect: crop around the
+      // focal point, shifted so the whole subject box stays in frame when it
+      // fits. When even the best crop would clip the subject, auto-extend the
+      // background (outpaint) instead — falling back to the crop + warning if
+      // the extension fails.
+      let reframedRaw: Buffer;
+      let clip = clippedPlatforms.has(platform);
+      if (clip) {
+        try {
+          const extended = await outpaintImage(rawBuffer, "image/png", config.aspectRatio, campaign.briefText || undefined);
+          outpaintsUsed++;
+          reframedRaw = await reframeImage(extended, config.width, config.height, null);
+          clip = false;
+        } catch (outErr) {
+          warns.push(`Auto background extension failed, used best-effort crop: ${outErr instanceof Error ? outErr.message : outErr}`);
+          reframedRaw = await reframeImage(rawBuffer, config.width, config.height, focal, box);
+        }
+      } else {
+        reframedRaw = await reframeImage(rawBuffer, config.width, config.height, focal, box);
+      }
+
+      // AI-integrated typography survives reframing by re-rendering per aspect;
+      // verification failures fall back to the design-aware overlay.
+      let baseBuffer = reframedRaw;
+      let overlayHeadline: string | null = headline || null;
+      let renderMode: string | null = headline ? "overlay" : null;
+      if (rerenderHeadlines && headline) {
+        try {
+          const rendered = await renderHeadlineIntoImage(
+            baseBuffer,
+            "image/png",
+            headline,
+            {
+              fontFamily: design.fontFamily,
+              brandName: design.brandName,
+              colorPrimary: design.colors.primary,
+              colorSecondary: design.colors.secondary,
+              colorAccent: design.colors.accent,
+            },
+            config.aspectRatio,
+            () => { headlineRenderAttempts++; },
+          );
+          baseBuffer = rendered.buffer;
+          overlayHeadline = null;
+          renderMode = "rendered";
+        } catch (renderErr) {
+          if (!(renderErr instanceof HeadlineRenderError)) throw renderErr;
+          warns.push("Headline re-render failed verification; applied the design-aware overlay.");
+        }
+      }
+
       const composited = await compositeImage({
-        rawImageBuffer: reframedRaw,
+        rawImageBuffer: baseBuffer,
         layoutSpec: ctx.template.layoutSpec as LayoutSpec | null,
-        headlineText: headline || null,
+        headlineText: overlayHeadline,
         logoBuffer,
         width: config.width,
         height: config.height,
-        fontFamily,
+        fontFamily: design.fontFamily,
+        brandColors: design.colors,
         aspectRatio: config.aspectRatio,
       });
+      warns.push(...composited.warnings);
 
       const token = `${ts}_${crypto.randomUUID().slice(0, 8)}`;
       const rawFn = `${creativeId}_${platform}_${token}_fanout_raw.png`;
@@ -1379,14 +1575,18 @@ router.post("/creatives/:id/variants/:variantId/fan-out", generationLimiter, val
         compFn,
         caption,
         headline,
-        warn: composited.warnings.length ? composited.warnings.join("; ") : null,
-        clip: predictClip(box, focal, sourceAspect, config.width / config.height),
+        warn: warns.length ? warns.join("; ") : null,
+        clip,
+        renderMode,
       });
     }
 
     if (produced.length === 0) {
       if (reservationId) {
         try { await db.delete(costLogsTable).where(eq(costLogsTable.id, reservationId)); } catch {}
+      }
+      if (extraReservationId) {
+        try { await db.delete(costLogsTable).where(eq(costLogsTable.id, extraReservationId)); } catch {}
       }
       res.status(400).json({ error: "No valid platforms selected" });
       return;
@@ -1414,11 +1614,33 @@ router.post("/creatives/:id/variants/:variantId/fan-out", generationLimiter, val
             focalY: focalPoint.y,
             clipWarning: p.clip,
             compositingFailed: p.warn,
+            headlineRenderMode: p.renderMode,
           }).returning();
           rows.push(row);
         }
         if (reservationId) {
           await tx.delete(costLogsTable).where(eq(costLogsTable.id, reservationId));
+        }
+        if (extraReservationId) {
+          await tx.delete(costLogsTable).where(eq(costLogsTable.id, extraReservationId));
+        }
+        if (outpaintsUsed > 0) {
+          await tx.insert(costLogsTable).values({
+            creativeId,
+            service: "gemini",
+            operation: "fan_out_auto_outpaint",
+            model: AI_MODELS.GEMINI_FLASH_IMAGE,
+            costUsd: estimateImagenCost(outpaintsUsed),
+          });
+        }
+        if (headlineRenderAttempts > 0) {
+          await tx.insert(costLogsTable).values({
+            creativeId,
+            service: "gemini",
+            operation: "fan_out_headline_render",
+            model: AI_MODELS.GEMINI_FLASH_IMAGE,
+            costUsd: estimateImagenCost(headlineRenderAttempts) + estimateGeminiTextCost() * headlineRenderAttempts,
+          });
         }
         if (needsSubjectDetection) {
           await tx.insert(costLogsTable).values({
@@ -1452,6 +1674,9 @@ router.post("/creatives/:id/variants/:variantId/fan-out", generationLimiter, val
     }
     if (reservationId) {
       try { await db.delete(costLogsTable).where(eq(costLogsTable.id, reservationId)); } catch {}
+    }
+    if (extraReservationId) {
+      try { await db.delete(costLogsTable).where(eq(costLogsTable.id, extraReservationId)); } catch {}
     }
     const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: `Fan-out failed: ${message}` });
@@ -1500,12 +1725,13 @@ router.put("/creatives/:id/variants/:variantId/refocus", validateRequest({ param
     const focal = { x: focalX, y: focalY };
 
     const ctx = await assembleContext({ brandId: campaign.brandId, templateId: campaign.templateId, selectedAssets: [] });
-    const [logoBuffer, fontFamily] = await Promise.all([
+    const [logoBuffer, design] = await Promise.all([
       fetchLogoBuffer(campaign.brandId),
-      fetchBrandFontFamily(campaign.brandId),
+      fetchBrandDesign(campaign.brandId),
     ]);
 
-    const reframedRaw = await reframeImage(rawBuffer, config.width, config.height, focal);
+    const subjectBox = (winner.subjectBox as SubjectBox | null) ?? null;
+    const reframedRaw = await reframeImage(rawBuffer, config.width, config.height, focal, subjectBox);
     const composited = await compositeImage({
       rawImageBuffer: reframedRaw,
       layoutSpec: ctx.template.layoutSpec as LayoutSpec | null,
@@ -1513,7 +1739,8 @@ router.put("/creatives/:id/variants/:variantId/refocus", validateRequest({ param
       logoBuffer,
       width: config.width,
       height: config.height,
-      fontFamily,
+      fontFamily: design.fontFamily,
+      brandColors: design.colors,
       aspectRatio: config.aspectRatio,
     });
 
@@ -1523,8 +1750,7 @@ router.put("/creatives/:id/variants/:variantId/refocus", validateRequest({ param
     await writeBuffer("generated", rawFn, reframedRaw);
     await writeBuffer("generated", compFn, composited.buffer);
 
-    const box = (winner.subjectBox as SubjectBox | null) ?? null;
-    const clip = box ? predictClip(box, focal, sourceAspect, config.width / config.height) : false;
+    const clip = subjectBox ? predictClip(subjectBox, focal, sourceAspect, config.width / config.height) : false;
 
     const [updated] = await db.update(creativeVariantsTable)
       .set({
@@ -1592,9 +1818,9 @@ router.post("/creatives/:id/variants/:variantId/outpaint", generationLimiter, va
     const extended = await outpaintImage(rawBuffer, "image/png", config.aspectRatio, campaign.briefText || undefined);
 
     const ctx = await assembleContext({ brandId: campaign.brandId, templateId: campaign.templateId, selectedAssets: [] });
-    const [logoBuffer, fontFamily] = await Promise.all([
+    const [logoBuffer, design] = await Promise.all([
       fetchLogoBuffer(campaign.brandId),
-      fetchBrandFontFamily(campaign.brandId),
+      fetchBrandDesign(campaign.brandId),
     ]);
 
     // The outpaint targets the platform aspect with the subject kept centered;
@@ -1607,7 +1833,8 @@ router.post("/creatives/:id/variants/:variantId/outpaint", generationLimiter, va
       logoBuffer,
       width: config.width,
       height: config.height,
-      fontFamily,
+      fontFamily: design.fontFamily,
+      brandColors: design.colors,
       aspectRatio: config.aspectRatio,
     });
 

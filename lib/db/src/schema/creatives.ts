@@ -89,6 +89,11 @@ export const creativeVariantsTable = pgTable("creative_variants", {
   // Set on a platform variant when the reframe was predicted to clip the subject
   // (drives the ⚠ + escalation choice in the fan-out grid). NULL = not evaluated.
   clipWarning: boolean("clip_warning"),
+  // How the headline typography got onto the composited image:
+  //   "rendered" — the image model painted the headline into the scene (art-
+  //   directed typography, verified by OCR); fan-out re-renders per aspect.
+  //   "overlay" (or NULL) — the design-aware SVG overlay path composited it.
+  headlineRenderMode: text("headline_render_mode"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (table) => [

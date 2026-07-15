@@ -973,6 +973,7 @@ function BeatFinish({ state, onAdvance }: { state: StudioState; onAdvance: () =>
   const [headline, setHeadline] = useState("");
   const [caption, setCaption] = useState("");
   const [savingHeadline, setSavingHeadline] = useState(false);
+  const [renderingHeadline, setRenderingHeadline] = useState(false);
   const [savingCaption, setSavingCaption] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
   const [imgV, setImgV] = useState(0);
@@ -1010,19 +1011,29 @@ function BeatFinish({ state, onAdvance }: { state: StudioState; onAdvance: () =>
     })();
   }, [state.creativeId, state.selectedVariantId]);
 
-  async function applyHeadline() {
+  // mode "instant" — free design-aware overlay recomposite.
+  // mode "render"  — the image model paints the headline into the scene
+  //                  (verified for spelling/legibility, falls back to overlay).
+  async function applyHeadline(mode: "instant" | "render") {
     if (!variant || !state.creativeId || !headline.trim()) return;
-    setSavingHeadline(true);
+    if (mode === "render") setRenderingHeadline(true);
+    else setSavingHeadline(true);
     try {
-      const updated = await putJson(`${API_BASE}/api/creatives/${state.creativeId}/variants/${variant.id}/headline`, { headline: headline.trim() });
+      const updated = await putJson(`${API_BASE}/api/creatives/${state.creativeId}/variants/${variant.id}/headline`, { headline: headline.trim(), mode });
       setVariant(updated as BoardVariant);
-      // Headline recomposite reuses the same image path — bump to bust the cache.
+      // Headline recomposite may reuse the same image path — bump to bust the cache.
       setImgV((v) => v + 1);
-      toast({ title: "Headline updated" });
+      const fallback = (updated as { renderFallback?: string | null }).renderFallback;
+      if (fallback) {
+        toast({ title: "Headline applied as overlay", description: fallback });
+      } else {
+        toast({ title: mode === "render" ? "Headline rendered into the image" : "Headline updated" });
+      }
     } catch (err) {
       toast({ variant: "destructive", title: "Update failed", description: err instanceof Error ? err.message : "Please try again." });
     } finally {
-      setSavingHeadline(false);
+      if (mode === "render") setRenderingHeadline(false);
+      else setSavingHeadline(false);
     }
   }
 
@@ -1109,10 +1120,19 @@ function BeatFinish({ state, onAdvance }: { state: StudioState; onAdvance: () =>
             className="min-h-16 resize-none"
             data-testid="finish-headline"
           />
-          <Button size="sm" onClick={applyHeadline} disabled={savingHeadline || !headline.trim()}>
-            {savingHeadline && <Loader2 size={14} className="mr-1.5 animate-spin" />}
-            Apply headline
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" onClick={() => applyHeadline("instant")} disabled={savingHeadline || renderingHeadline || !headline.trim()}>
+              {savingHeadline && <Loader2 size={14} className="mr-1.5 animate-spin" />}
+              Instant edit
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => applyHeadline("render")} disabled={savingHeadline || renderingHeadline || !headline.trim()} data-testid="finish-headline-render">
+              {renderingHeadline && <Loader2 size={14} className="mr-1.5 animate-spin" />}
+              Render into image
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Instant edit overlays the text for free. Render into image asks the model to paint the headline into the scene (spell-checked, a moment slower).
+          </p>
         </div>
 
         <div className="space-y-2">

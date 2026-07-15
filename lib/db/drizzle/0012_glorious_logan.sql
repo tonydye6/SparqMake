@@ -1,0 +1,1 @@
+ALTER TABLE "creative_variants" ADD COLUMN "headline_render_mode" text;

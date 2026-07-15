@@ -29,6 +29,22 @@ export interface LayoutSpec {
   aspect_ratio_overrides?: Record<string, Partial<LayoutSpec>>;
 }
 
+// Normalized subject bounding box (mirrors focal-point.ts SubjectBox) — kept
+// structural here to avoid a service-to-service type dependency.
+export interface NormalizedBox {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+// Brand palette guidance for the design-aware overlay treatment.
+export interface BrandColorGuidance {
+  primary?: string | null;
+  secondary?: string | null;
+  accent?: string | null;
+}
+
 interface CompositingInput {
   rawImageBuffer: Buffer;
   layoutSpec: LayoutSpec | null;
@@ -37,10 +53,17 @@ interface CompositingInput {
   width: number;
   height: number;
   fontFamily?: string;
+  // Brand palette: drives the overlay's glow/accent so the fallback still
+  // reads on-brand instead of default-looking.
+  brandColors?: BrandColorGuidance | null;
   // N1 fan-out: normalized (0..1) subject focal point. When set, the source is
   // reframed by cropping around this point (keeping the subject in frame) before
   // resizing; when null, falls back to the legacy centered cover-crop.
   focalPoint?: { x: number; y: number } | null;
+  // Normalized subject bounding box. When present, the reframe crop window is
+  // shifted (minimally, away from the focal-centered position) so the whole
+  // subject stays in frame whenever the window is big enough to contain it.
+  subjectBox?: NormalizedBox | null;
   // Aspect-ratio key (e.g. "9:16") used to look up layout_spec.aspect_ratio_overrides.
   // Defaults to `${width}:${height}` when omitted.
   aspectRatio?: string;
@@ -107,41 +130,147 @@ function createGradientSvg(width: number, height: number, gradient: LayoutSpec["
   return Buffer.from(svg);
 }
 
+// --- Design-aware text fitting -------------------------------------------
+// The overlay must never truncate: text is wrapped, then the font size is
+// shrunk until every line fits the zone's max width AND the block fits the
+// zone's vertical budget. Widths are estimated with a per-character factor
+// (bold display type averages ~0.56em per char), with a safety margin.
+
+const CHAR_WIDTH_EM = 0.56;
+
+function estimateLineWidth(line: string, fontSize: number): number {
+  return line.length * fontSize * CHAR_WIDTH_EM;
+}
+
+function wrapText(text: string, fontSize: number, maxWidth: number): string[] {
+  const words = text.split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  let current = "";
+  for (const word of words) {
+    const candidate = current ? `${current} ${word}` : word;
+    if (current && estimateLineWidth(candidate, fontSize) > maxWidth) {
+      lines.push(current);
+      current = word;
+    } else {
+      current = candidate;
+    }
+  }
+  if (current) lines.push(current);
+  return lines;
+}
+
+// Pure: pick the largest font size (<= base, >= floor) at which the wrapped
+// text fits maxWidth per line, uses at most maxLines when possible, and the
+// block fits maxBlockHeight. Never drops words — if even the floor overflows
+// maxLines, extra lines are kept and the size shrinks until the block fits
+// vertically. Exported for tests.
+export function fitHeadline(
+  text: string,
+  baseFontSize: number,
+  maxWidth: number,
+  maxLines: number,
+  maxBlockHeight: number,
+): { fontSize: number; lines: string[] } {
+  const floor = Math.max(16, Math.round(baseFontSize * 0.4));
+  let best: { fontSize: number; lines: string[] } | null = null;
+
+  for (let size = baseFontSize; size >= floor; size = Math.max(floor, size - Math.max(2, Math.round(size * 0.08)))) {
+    const lines = wrapText(text, size, maxWidth);
+    const widest = Math.max(...lines.map(l => estimateLineWidth(l, size)), 0);
+    const blockH = lines.length * size * 1.15;
+    const fits = widest <= maxWidth && blockH <= maxBlockHeight;
+    if (fits && lines.length <= maxLines) {
+      return { fontSize: size, lines };
+    }
+    if (fits && !best) best = { fontSize: size, lines };
+    if (size === floor) break;
+  }
+  if (best) return best;
+  // Floor still overflows: return the floor wrap anyway (never truncate).
+  return { fontSize: floor, lines: wrapText(text, floor, maxWidth) };
+}
+
+// Mean luminance (0..1) of a horizontal band of the image, used to decide the
+// text/scrim treatment. Best-effort — defaults to "dark" (light text) on error.
+async function bandLuminance(imageBuffer: Buffer, position: string | undefined): Promise<number> {
+  try {
+    const img = sharp(imageBuffer, SHARP_LIMITS);
+    const meta = await img.metadata();
+    const w = meta.width ?? 0;
+    const h = meta.height ?? 0;
+    if (!w || !h) return 0.25;
+    const bandH = Math.max(1, Math.round(h / 3));
+    const top = position === "upper_third" ? 0 : position === "center" ? Math.round((h - bandH) / 2) : h - bandH;
+    const stats = await sharp(imageBuffer, SHARP_LIMITS)
+      .extract({ left: 0, top, width: w, height: bandH })
+      .stats();
+    const [r, g, b] = stats.channels;
+    if (!r || !g || !b) return 0.25;
+    return (0.2126 * r.mean + 0.7152 * g.mean + 0.0722 * b.mean) / 255;
+  } catch {
+    return 0.25;
+  }
+}
+
+interface TextTreatment {
+  color: string;
+  glowColor: string;
+  scrimColor: string;
+  scrimOpacity: number;
+}
+
+// Derive the overlay treatment from the scene + brand: light text with a dark
+// scrim over dark/midtone bands, dark text over very bright bands; the glow
+// picks up the brand accent so the fallback still reads intentional.
+function deriveTreatment(luminance: number, zoneColor: string | undefined, brandColors?: BrandColorGuidance | null): TextTreatment {
+  const accent = brandColors?.accent || brandColors?.primary || null;
+  if (luminance > 0.72) {
+    return {
+      color: "#111318",
+      glowColor: "#FFFFFF",
+      scrimColor: "#FFFFFF",
+      scrimOpacity: 0.35,
+    };
+  }
+  return {
+    color: zoneColor || "#FFFFFF",
+    glowColor: accent || "#000000",
+    scrimColor: "#000000",
+    scrimOpacity: luminance > 0.45 ? 0.45 : 0.25,
+  };
+}
+
+function escapeXml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
 function createTextSvg(
   text: string,
   width: number,
   height: number,
   zone: LayoutSpec["headline_zone"],
   fontFamily: string = "sans-serif",
+  treatment?: TextTreatment,
 ): Buffer {
   if (!zone || !text) return Buffer.from("");
 
-  const fontSize = zone.font_size_px || 48;
-  const color = zone.color || "#FFFFFF";
-  const padding = zone.padding_px || 24;
+  // Layout specs are authored against a ~1080px canvas; scale the base size to
+  // this variant's dimensions so small formats don't get oversized type.
+  const scale = Math.min(width, height) / 1080;
+  const baseFontSize = Math.max(18, Math.round((zone.font_size_px || 48) * Math.max(0.5, Math.min(scale, 1.6))));
+  const padding = Math.max(zone.padding_px || 24, Math.round(Math.min(width, height) * 0.05));
   const maxWidthPct = zone.max_width_percent || 80;
-  const maxWidth = Math.round(width * maxWidthPct / 100);
+  const maxWidth = Math.min(Math.round(width * maxWidthPct / 100), width - padding * 2);
   const alignment = zone.alignment || "left";
-
-  const charsPerLine = Math.floor(maxWidth / (fontSize * 0.55));
-  const words = text.split(" ");
-  const lines: string[] = [];
-  let currentLine = "";
-
-  for (const word of words) {
-    if (currentLine.length + word.length + 1 > charsPerLine) {
-      lines.push(currentLine.trim());
-      currentLine = word;
-    } else {
-      currentLine += (currentLine ? " " : "") + word;
-    }
-  }
-  if (currentLine) lines.push(currentLine.trim());
-
   const maxLines = zone.max_lines || 2;
-  const displayLines = lines.slice(0, maxLines);
 
-  const lineHeight = fontSize * 1.2;
+  // Vertical budget: the zone's third of the canvas, minus padding.
+  const maxBlockHeight = Math.max(baseFontSize, Math.round(height / 3) - padding);
+  const { fontSize, lines: displayLines } = fitHeadline(text, baseFontSize, maxWidth, maxLines, maxBlockHeight);
+
+  const t = treatment ?? deriveTreatment(0.25, zone.color);
+
+  const lineHeight = fontSize * 1.15;
   const totalTextHeight = displayLines.length * lineHeight;
 
   let yStart: number;
@@ -152,6 +281,8 @@ function createTextSvg(
   } else {
     yStart = height - padding - totalTextHeight + fontSize;
   }
+  // Clamp so the block can never bleed off the top/bottom edge.
+  yStart = Math.min(Math.max(yStart, padding + fontSize), height - padding - totalTextHeight + fontSize);
 
   let textAnchor = "start";
   let xPos = padding;
@@ -163,21 +294,36 @@ function createTextSvg(
     xPos = width - padding;
   }
 
-  const escapedLines = displayLines.map(l =>
-    l.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-  );
+  // Soft scrim panel behind the text block keeps legibility without the
+  // "default drop shadow on a photo" look.
+  const scrimPad = Math.round(fontSize * 0.6);
+  const widestLine = Math.max(...displayLines.map(l => estimateLineWidth(l, fontSize)), 0);
+  let scrimX = xPos - scrimPad;
+  if (alignment === "center") scrimX = xPos - widestLine / 2 - scrimPad;
+  else if (alignment === "right") scrimX = xPos - widestLine - scrimPad;
+  const scrimY = yStart - fontSize - scrimPad * 0.6;
+  const scrimW = widestLine + scrimPad * 2;
+  const scrimH = totalTextHeight + scrimPad * 1.2;
 
-  const textElements = escapedLines.map((line, i) => {
+  const textElements = displayLines.map((line, i) => {
     const y = yStart + i * lineHeight;
-    return `<text x="${xPos}" y="${y}" font-family="${fontFamily}" font-size="${fontSize}" font-weight="800" fill="${color}" text-anchor="${textAnchor}" filter="url(#shadow)">${line}</text>`;
+    const escaped = escapeXml(line);
+    return `<text x="${xPos}" y="${y}" font-family="${escapeXml(fontFamily)}" font-size="${fontSize}" font-weight="800" letter-spacing="${(fontSize * 0.01).toFixed(1)}" fill="${t.color}" text-anchor="${textAnchor}" filter="url(#glow)">${escaped}</text>`;
   }).join("\n    ");
 
   const svg = `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
     <defs>
-      <filter id="shadow" x="-5%" y="-5%" width="110%" height="110%">
-        <feDropShadow dx="2" dy="2" stdDeviation="3" flood-color="#000000" flood-opacity="0.7"/>
+      <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+        <feDropShadow dx="0" dy="${Math.max(1, Math.round(fontSize * 0.03))}" stdDeviation="${Math.max(2, Math.round(fontSize * 0.08))}" flood-color="${t.glowColor}" flood-opacity="0.55"/>
+        <feDropShadow dx="0" dy="1" stdDeviation="1.5" flood-color="#000000" flood-opacity="0.5"/>
       </filter>
+      <linearGradient id="scrimfade" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="${t.scrimColor}" stop-opacity="0"/>
+        <stop offset="35%" stop-color="${t.scrimColor}" stop-opacity="${t.scrimOpacity}"/>
+        <stop offset="100%" stop-color="${t.scrimColor}" stop-opacity="${t.scrimOpacity}"/>
+      </linearGradient>
     </defs>
+    <rect x="${Math.round(scrimX)}" y="${Math.round(scrimY)}" width="${Math.round(scrimW)}" height="${Math.round(scrimH)}" rx="${Math.round(fontSize * 0.25)}" fill="url(#scrimfade)"/>
     ${textElements}
   </svg>`;
 
@@ -189,9 +335,34 @@ export interface CompositingResult {
   warnings: string[];
 }
 
+// Pure: pick a crop-window origin (1D). Start centered on the focal point,
+// then shift the minimum needed so [boxLo, boxHi] is inside the window when
+// the window is big enough to contain it; when it isn't, center on the box.
+// All values in source pixels. Exported for tests.
+export function chooseCropOrigin(
+  focalCenter: number,
+  cropSize: number,
+  sourceSize: number,
+  boxLo: number | null,
+  boxHi: number | null,
+): number {
+  let origin = focalCenter - cropSize / 2;
+  if (boxLo != null && boxHi != null) {
+    const boxSize = boxHi - boxLo;
+    if (boxSize <= cropSize) {
+      if (boxLo < origin) origin = boxLo;
+      if (boxHi > origin + cropSize) origin = boxHi - cropSize;
+    } else {
+      origin = (boxLo + boxHi) / 2 - cropSize / 2;
+    }
+  }
+  return Math.min(Math.max(0, Math.round(origin)), Math.max(0, sourceSize - cropSize));
+}
+
 // Reframe the source to width×height. With a focal point, crop the largest
-// target-aspect window centered on that point (clamped to the image bounds) so
-// the subject stays in frame; without one, fall back to the legacy centered
+// target-aspect window centered on that point — shifted, when a subject box is
+// known, so the whole subject stays in frame whenever it fits — clamped to the
+// image bounds. Without a focal point, fall back to the legacy centered
 // cover-crop. Deterministic — no model call.
 async function reframe(
   rawImageBuffer: Buffer,
@@ -199,6 +370,7 @@ async function reframe(
   height: number,
   focalPoint: { x: number; y: number } | null,
   warnings: string[],
+  subjectBox?: NormalizedBox | null,
 ): Promise<sharp.Sharp> {
   if (!focalPoint) {
     return sharp(rawImageBuffer, SHARP_LIMITS).resize(width, height, { fit: "cover" });
@@ -224,10 +396,13 @@ async function reframe(
     cropW = Math.min(Math.max(1, cropW), rawW);
     cropH = Math.min(Math.max(1, cropH), rawH);
 
-    let left = Math.round(focalPoint.x * rawW - cropW / 2);
-    let top = Math.round(focalPoint.y * rawH - cropH / 2);
-    left = Math.min(Math.max(0, left), rawW - cropW);
-    top = Math.min(Math.max(0, top), rawH - cropH);
+    // Ignore degenerate/full-frame boxes — they carry no placement signal.
+    const box = subjectBox && (subjectBox.x1 - subjectBox.x0) > 0.01 && (subjectBox.y1 - subjectBox.y0) > 0.01 &&
+      !(subjectBox.x0 <= 0.001 && subjectBox.y0 <= 0.001 && subjectBox.x1 >= 0.999 && subjectBox.y1 >= 0.999)
+      ? subjectBox : null;
+
+    const left = chooseCropOrigin(focalPoint.x * rawW, cropW, rawW, box ? box.x0 * rawW : null, box ? box.x1 * rawW : null);
+    const top = chooseCropOrigin(focalPoint.y * rawH, cropH, rawH, box ? box.y0 * rawH : null, box ? box.y1 * rawH : null);
 
     return sharp(rawImageBuffer, SHARP_LIMITS)
       .extract({ left, top, width: cropW, height: cropH })
@@ -239,12 +414,12 @@ async function reframe(
 }
 
 export async function compositeImage(input: CompositingInput): Promise<CompositingResult> {
-  const { rawImageBuffer, layoutSpec, headlineText, logoBuffer, width, height, fontFamily, focalPoint, aspectRatio } = input;
+  const { rawImageBuffer, layoutSpec, headlineText, logoBuffer, width, height, fontFamily, brandColors, focalPoint, subjectBox, aspectRatio } = input;
   const warnings: string[] = [];
 
   const resolved = resolveLayout(layoutSpec, aspectRatio ?? `${width}:${height}`);
 
-  let image = await reframe(rawImageBuffer, width, height, focalPoint ?? null, warnings);
+  let image = await reframe(rawImageBuffer, width, height, focalPoint ?? null, warnings, subjectBox ?? null);
 
   const overlays: sharp.OverlayOptions[] = [];
 
@@ -256,7 +431,17 @@ export async function compositeImage(input: CompositingInput): Promise<Compositi
   }
 
   if (headlineText && resolved.headline_zone) {
-    const textSvg = createTextSvg(headlineText, width, height, resolved.headline_zone, fontFamily);
+    // Design-aware treatment: sample the zone band's luminance on the (already
+    // reframed) base so the text/scrim adapts to the scene, not a default.
+    let treatment: TextTreatment | undefined;
+    try {
+      const baseForSampling = await image.clone().png().toBuffer();
+      const lum = await bandLuminance(baseForSampling, resolved.headline_zone.position);
+      treatment = deriveTreatment(lum, resolved.headline_zone.color, brandColors);
+    } catch {
+      treatment = undefined;
+    }
+    const textSvg = createTextSvg(headlineText, width, height, resolved.headline_zone, fontFamily, treatment);
     if (textSvg.length > 0) {
       overlays.push({ input: textSvg, top: 0, left: 0 });
     }
@@ -330,8 +515,9 @@ export async function reframeImage(
   width: number,
   height: number,
   focalPoint: { x: number; y: number } | null,
+  subjectBox?: NormalizedBox | null,
 ): Promise<Buffer> {
   const warnings: string[] = [];
-  const img = await reframe(rawImageBuffer, width, height, focalPoint, warnings);
+  const img = await reframe(rawImageBuffer, width, height, focalPoint, warnings, subjectBox ?? null);
   return img.png().toBuffer();
 }
