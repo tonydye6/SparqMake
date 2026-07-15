@@ -11,6 +11,7 @@ const {
   requireStandardWrite,
   requireBulkMutation,
   requireDestructive,
+  requireBrandScopedBulkMutation,
   MUTATION_POLICY,
 } = await import("./auth.js");
 
@@ -24,8 +25,8 @@ const calendarEntriesRouter = (await import("../routes/calendar-entries.js")).de
 
 type Role = "viewer" | "editor" | "admin" | undefined;
 
-function reqWithRole(role: Role): Request {
-  return { user: role ? { role } : undefined, method: "POST" } as unknown as Request;
+function reqWithRole(role: Role, body?: Record<string, unknown>): Request {
+  return { user: role ? { role } : undefined, method: "POST", body } as unknown as Request;
 }
 
 function mockRes(): { res: Response; status: ReturnType<typeof vi.fn>; json: ReturnType<typeof vi.fn> } {
@@ -89,6 +90,41 @@ describe("mutation authorization policy", () => {
       expect(runGuard(getGuard(), "admin").allowed).toBe(true);
     });
   });
+
+  describe("requireBrandScopedBulkMutation (editor when brand-scoped, admin otherwise)", () => {
+    function runScoped(role: Role, body?: Record<string, unknown>) {
+      const next = vi.fn();
+      const { res, status } = mockRes();
+      requireBrandScopedBulkMutation(reqWithRole(role, body), res, next);
+      return { allowed: next.mock.calls.length > 0, status };
+    }
+
+    it("denies an editor without a brandId (library-wide) with 403", () => {
+      const { allowed, status } = runScoped("editor", {});
+      expect(allowed).toBe(false);
+      expect(status).toHaveBeenCalledWith(403);
+    });
+    it("denies an editor when brandId is blank", () => {
+      expect(runScoped("editor", { brandId: "  " }).allowed).toBe(false);
+    });
+    it("denies an editor when brandId is not a string", () => {
+      expect(runScoped("editor", { brandId: 42 }).allowed).toBe(false);
+    });
+    it("denies an editor when the body is missing", () => {
+      expect(runScoped("editor", undefined).allowed).toBe(false);
+    });
+    it("allows an editor with a brandId (brand-scoped)", () => {
+      expect(runScoped("editor", { brandId: "brand-1" }).allowed).toBe(true);
+    });
+    it("denies a viewer even with a brandId", () => {
+      const { allowed, status } = runScoped("viewer", { brandId: "brand-1" });
+      expect(allowed).toBe(false);
+      expect(status).toHaveBeenCalledWith(403);
+    });
+    it("allows an admin without a brandId (library-wide)", () => {
+      expect(runScoped("admin", {}).allowed).toBe(true);
+    });
+  });
 });
 
 interface RouteLayer {
@@ -115,6 +151,7 @@ function routeHasGuard(
 
 describe("destructive & bulk endpoints are wired to the policy guards", () => {
   it.each([
+    ["assets analyze-backfill", assetsRouter, "post", "/assets/analyze-backfill", requireBrandScopedBulkMutation],
     ["assets bulk-update", assetsRouter, "post", "/assets/bulk-update", requireBulkMutation],
     ["assets bulk-delete", assetsRouter, "post", "/assets/bulk-delete", requireBulkMutation],
     ["asset delete", assetsRouter, "delete", "/assets/:id", requireDestructive],

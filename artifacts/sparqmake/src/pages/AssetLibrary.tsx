@@ -32,7 +32,7 @@ import {
 import { useForm } from "react-hook-form";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn, apiFetch, isForbidden, PERMISSION_DENIED_MESSAGE } from "@/lib/utils";
-import { useCanWrite } from "@/hooks/useAuth";
+import { useCanWrite, useIsAdmin } from "@/hooks/useAuth";
 import { Switch } from "@/components/ui/switch";
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
@@ -77,6 +77,7 @@ export default function AssetLibrary() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const canWrite = useCanWrite();
+  const isAdmin = useIsAdmin();
 
   const [selectedBrand, setSelectedBrand] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
@@ -307,6 +308,14 @@ export default function AssetLibrary() {
   // Kicks off AI vision analysis for every unanalyzed image asset (optionally
   // scoped to the selected brand). Runs server-side; can take a while.
   const runAnalyzeBackfill = async () => {
+    if (!isAdmin && selectedBrand === "all") {
+      toast({
+        variant: "destructive",
+        title: "Admin only",
+        description: "Analyzing all brands at once requires an admin. Select a specific brand to analyze just that brand.",
+      });
+      return;
+    }
     setBackfillLoading(true);
     try {
       const res = await apiFetch(`${API_BASE}/api/assets/analyze-backfill`, {
@@ -396,12 +405,13 @@ export default function AssetLibrary() {
             <Button
               variant="outline"
               onClick={runAnalyzeBackfill}
-              disabled={backfillLoading}
+              disabled={backfillLoading || (!isAdmin && selectedBrand === "all")}
+              title={!isAdmin && selectedBrand === "all" ? "Analyzing all brands requires an admin. Select a brand to analyze just that brand." : undefined}
               className="border-border"
               data-testid="analyze-all-assets"
             >
               {backfillLoading ? <Loader2 size={16} className="mr-2 animate-spin" /> : <Zap size={16} className="mr-2" />}
-              {backfillLoading ? "Analyzing..." : "Analyze all"}
+              {backfillLoading ? "Analyzing..." : selectedBrand === "all" ? "Analyze all" : "Analyze brand"}
             </Button>
           )}
         </div>

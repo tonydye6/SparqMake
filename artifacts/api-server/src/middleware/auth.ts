@@ -216,3 +216,24 @@ export function requireMutation(mutationClass: MutationClass) {
 export const requireStandardWrite = requireMutation("standardWrite");
 export const requireBulkMutation = requireMutation("bulk");
 export const requireDestructive = requireMutation("destructive");
+
+/**
+ * Brand-scoped bulk mutation guard.
+ *
+ * Some bulk operations (e.g. asset analysis backfill) can be scoped to a
+ * single brand via a `brandId` in the request body. When scoped, the blast
+ * radius matches a routine write, so the `standardWrite` (editor) policy
+ * applies. Unscoped (library-wide) calls remain gated by the `bulk` (admin)
+ * policy. Part of the central mutation policy above — do not replicate this
+ * logic ad-hoc in routes.
+ */
+export function requireBrandScopedBulkMutation(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): void {
+  const brandId = (req.body as { brandId?: unknown } | undefined)?.brandId;
+  const scoped = typeof brandId === "string" && brandId.trim().length > 0;
+  const min = scoped ? MUTATION_POLICY.standardWrite : MUTATION_POLICY.bulk;
+  requireRole(min)(req, res, next);
+}

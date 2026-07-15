@@ -18,7 +18,7 @@ import { backfillAssetClassifications } from "../services/backfill-assets.js";
 import { analyzeAndStoreAsset, backfillAssetAnalysis, analyzeAssetInBackground, isAnalyzableAsset } from "../services/asset-analysis.js";
 import { matchAssetsToBrief } from "../services/asset-matching.js";
 import { validateRequest } from "../middleware/validate.js";
-import { requireBulkMutation, requireDestructive } from "../middleware/auth.js";
+import { requireBulkMutation, requireBrandScopedBulkMutation, requireDestructive } from "../middleware/auth.js";
 import { recordAudit, actorFromRequest } from "../lib/audit.js";
 import { softDeleteBackingObjects, MAX_BULK_DELETE } from "../services/deletion.js";
 
@@ -122,7 +122,7 @@ router.post("/assets/match", async (req, res): Promise<void> => {
   });
 });
 
-router.post("/assets/analyze-backfill", requireBulkMutation, async (req, res): Promise<void> => {
+router.post("/assets/analyze-backfill", requireBrandScopedBulkMutation, async (req, res): Promise<void> => {
   const { brandId, force, limit } = (req.body || {}) as { brandId?: string; force?: boolean; limit?: number };
   try {
     const result = await backfillAssetAnalysis({ brandId, force: !!force, limit });
