@@ -19,10 +19,54 @@ export interface PacketAsset {
 export const MAX_GENERATION_ASSETS = 6;
 export const MAX_IMAGE_REFERENCES = 3;
 
-export interface PacketReasoning {
-  selections: Array<{ assetId: string; assetName: string; role: string; reason: string }>;
-  exclusions: Array<{ assetId: string; assetName: string; reason: string }>;
-  strategy: string;
+// Weighted reference system: how the attached image-reference slots are split
+// between subject references and style references.
+export type ReferenceBalance = "subject" | "balanced" | "style";
+
+export interface ReferenceOverrides {
+  removedAssetIds?: string[];
+  pinnedAssetIds?: string[];
+}
+
+export function normalizeBalance(value: unknown): ReferenceBalance {
+  return value === "subject" || value === "style" ? value : "balanced";
+}
+
+// Attached-slot plan per balance: how many of the MAX_IMAGE_REFERENCES slots
+// are reserved for each role. Unfillable slots (not enough candidates of that
+// role) fall back to the other role, so slots are never wasted.
+const SLOT_PLANS: Record<ReferenceBalance, { subject: number; style: number }> = {
+  subject: { subject: 2, style: 1 },
+  balanced: { subject: 2, style: 1 },
+  style: { subject: 1, style: 2 },
+};
+
+// Content-aware scoring: boost assets whose depicted entities / tags / name
+// appear in the brief text, so the packet favors what the brief is about.
+const BRIEF_ENTITY_MATCH_BOOST = 6;
+const BRIEF_TAG_MATCH_BOOST = 3;
+
+function briefMatchBoost(asset: Asset, briefLower: string | null): { boost: number; matches: string[] } {
+  if (!briefLower) return { boost: 0, matches: [] };
+  let boost = 0;
+  const matches: string[] = [];
+  for (const entity of asset.depictedEntities || []) {
+    if (entity && entity.length >= 3 && briefLower.includes(entity.toLowerCase())) {
+      boost += BRIEF_ENTITY_MATCH_BOOST;
+      matches.push(entity);
+    }
+  }
+  for (const tag of asset.tags || []) {
+    if (tag && tag.length >= 3 && briefLower.includes(tag.toLowerCase())) {
+      boost += BRIEF_TAG_MATCH_BOOST;
+      matches.push(tag);
+    }
+  }
+  if (asset.name && asset.name.length >= 3 && briefLower.includes(asset.name.toLowerCase())) {
+    boost += BRIEF_TAG_MATCH_BOOST;
+    matches.push(asset.name);
+  }
+  return { boost, matches: [...new Set(matches)] };
 }
 
 function scoreAsset(asset: Asset, role: string): number {
@@ -54,6 +98,9 @@ function hasConflict(a: Asset, b: Asset): boolean {
 // Score boost applied to a selected style profile's reference assets so they
 // always outrank organically-scored style candidates in packet assembly.
 const STYLE_PROFILE_PRIORITY_BOOST = 1000;
+// Pinned (user-chosen via influences preview) assets outrank everything,
+// including style-profile references.
+const PINNED_PRIORITY_BOOST = 10000;
 
 export async function buildGenerationPacket(params: {
   creativeId: string;
@@ -66,12 +113,25 @@ export async function buildGenerationPacket(params: {
   // loaded even when not among selectedAssetIds and are treated as top-priority
   // style references.
   priorityStyleAssetIds?: string[];
+  // Brief text: assets whose depicted entities/tags/name match the brief score
+  // higher for this generation.
+  briefText?: string | null;
+  // Subject-vs-style slot balance (default "balanced").
+  balance?: ReferenceBalance;
+  // User overrides from the influences preview.
+  overrides?: ReferenceOverrides | null;
+  // When true, skip writing the packet log (used by the influences preview).
+  dryRun?: boolean;
 }): Promise<GenerationPacket> {
   const { creativeId, brandId, templateId, platform, selectedAssetIds, franchise } = params;
   const priorityStyleAssetIds = params.priorityStyleAssetIds || [];
   const prioritySet = new Set(priorityStyleAssetIds);
+  const balance = normalizeBalance(params.balance);
+  const removedSet = new Set(params.overrides?.removedAssetIds || []);
+  const pinnedSet = new Set(params.overrides?.pinnedAssetIds || []);
+  const briefLower = params.briefText ? params.briefText.toLowerCase() : null;
 
-  const idsToLoad = [...new Set([...selectedAssetIds, ...priorityStyleAssetIds])];
+  const idsToLoad = [...new Set([...selectedAssetIds, ...priorityStyleAssetIds, ...pinnedSet])];
   let assets: Asset[] = [];
   if (idsToLoad.length > 0) {
     assets = await db.select().from(assetsTable)
@@ -91,6 +151,12 @@ export async function buildGenerationPacket(params: {
   const styleCandidates: PacketAsset[] = [];
 
   for (const asset of assets) {
+    if (removedSet.has(asset.id)) {
+      excludedAssets.push({ asset, role: "excluded", score: 0 });
+      reasoning.exclusions.push({ assetId: asset.id, assetName: asset.name, reason: "Removed by user in influences preview" });
+      continue;
+    }
+
     if (asset.status === "archived") {
       excludedAssets.push({ asset, role: "excluded", score: 0 });
       reasoning.exclusions.push({ assetId: asset.id, assetName: asset.name, reason: "Asset is archived" });
@@ -141,82 +207,103 @@ export async function buildGenerationPacket(params: {
       continue;
     }
 
-    if (prioritySet.has(asset.id)) {
-      // Style profile reference: always a style reference, boosted above any
-      // organically-scored candidate so the chosen style dominates the packet.
-      styleCandidates.push({ asset, role: "style_reference", score: STYLE_PROFILE_PRIORITY_BOOST + scoreAsset(asset, "style_reference") });
-    } else if (asset.assetClass === "style_reference") {
-      styleCandidates.push({ asset, role: "style_reference", score: scoreAsset(asset, "style_reference") });
-    } else {
-      subjectCandidates.push({ asset, role: "subject_reference", score: scoreAsset(asset, "subject_reference") });
+    const isStyle = prioritySet.has(asset.id) || asset.assetClass === "style_reference";
+    const role = isStyle ? "style_reference" : "subject_reference";
+    const { boost: briefBoost, matches } = briefMatchBoost(asset, briefLower);
+    let score = scoreAsset(asset, role) + briefBoost;
+    if (prioritySet.has(asset.id)) score += STYLE_PROFILE_PRIORITY_BOOST;
+    if (pinnedSet.has(asset.id)) score += PINNED_PRIORITY_BOOST;
+
+    const candidate: PacketAsset = { asset, role, score };
+    if (matches.length > 0) {
+      reasoning.selections.push({
+        assetId: asset.id,
+        assetName: asset.name,
+        role,
+        reason: `Brief match boost (+${briefBoost}): ${matches.join(", ")}`,
+      });
     }
+    (isStyle ? styleCandidates : subjectCandidates).push(candidate);
   }
 
   subjectCandidates.sort((a, b) => b.score - a.score);
   styleCandidates.sort((a, b) => b.score - a.score);
 
-  if (subjectCandidates.length > 0) {
-    const primary = subjectCandidates[0];
-    generationAssets.push(primary);
-    reasoning.selections.push({
-      assetId: primary.asset.id,
-      assetName: primary.asset.name,
-      role: "subject_reference",
-      reason: `Primary subject reference (score: ${primary.score})`,
-    });
-  }
+  // --- Slot-based selection for the attached reference-image slots ---
+  // The first MAX_IMAGE_REFERENCES generationAssets become attached images, so
+  // ordering here IS the slot allocation. Each balance reserves slots per role;
+  // slots a role can't fill roll over to the other role.
+  const plan = SLOT_PLANS[balance];
+  const picked = new Set<string>();
 
-  for (const style of styleCandidates) {
-    if (generationAssets.length >= MAX_GENERATION_ASSETS) break;
-    const noConflict = generationAssets.every(g => !hasConflict(g.asset, style.asset));
-    if (noConflict) {
-      generationAssets.push(style);
-      reasoning.selections.push({
-        assetId: style.asset.id,
-        assetName: style.asset.name,
-        role: "style_reference",
-        reason: `Style reference (score: ${style.score})`,
-      });
-    }
-  }
-
-  if (generationAssets.length < MAX_GENERATION_ASSETS && subjectCandidates.length > 1) {
-    for (let i = 1; i < subjectCandidates.length && generationAssets.length < MAX_GENERATION_ASSETS; i++) {
-      const candidate = subjectCandidates[i];
+  function take(from: PacketAsset[], count: number, label: string): number {
+    let taken = 0;
+    for (const candidate of from) {
+      if (taken >= count) break;
+      if (picked.has(candidate.asset.id)) continue;
+      if (generationAssets.length >= MAX_GENERATION_ASSETS) break;
       const noConflict = generationAssets.every(g => !hasConflict(g.asset, candidate.asset));
-      if (noConflict) {
-        generationAssets.push(candidate);
-        reasoning.selections.push({
-          assetId: candidate.asset.id,
-          assetName: candidate.asset.name,
-          role: "subject_reference",
-          reason: `Supporting subject reference (score: ${candidate.score})`,
-        });
-      }
+      if (!noConflict) continue;
+      picked.add(candidate.asset.id);
+      generationAssets.push(candidate);
+      reasoning.selections.push({
+        assetId: candidate.asset.id,
+        assetName: candidate.asset.name,
+        role: candidate.role,
+        reason: `${label} (score: ${candidate.score})`,
+      });
+      taken++;
     }
+    return taken;
   }
+
+  // Primary subject always leads (keeps the subject recognizable), then style
+  // slots, then remaining subject slots — so the guaranteed style slot(s)
+  // survive into the attached set whenever style candidates exist.
+  const subjectTakenFirst = take(subjectCandidates, Math.min(1, plan.subject), "Primary subject reference");
+  const styleTaken = take(styleCandidates, plan.style, "Style reference slot");
+  const remainingSubjectSlots = plan.subject - subjectTakenFirst
+    // roll unfilled style slots over to subjects
+    + (plan.style - styleTaken);
+  take(subjectCandidates, remainingSubjectSlots, "Supporting subject reference");
+  // roll unfilled subject slots over to extra style refs
+  if (generationAssets.length < MAX_IMAGE_REFERENCES) {
+    take(styleCandidates, MAX_IMAGE_REFERENCES - generationAssets.length, "Additional style reference");
+  }
+
+  // Beyond the attached slots, fill up to MAX_GENERATION_ASSETS with the rest
+  // (they ride along as text descriptors).
+  take([...subjectCandidates, ...styleCandidates].sort((a, b) => b.score - a.score), MAX_GENERATION_ASSETS - generationAssets.length, "Descriptor reference");
 
   reasoning.strategy = generationAssets.length === 0
     ? "No generation-eligible assets selected; text-only generation will be used"
-    : `Selected ${generationAssets.length} generation asset(s): top ${Math.min(generationAssets.length, MAX_IMAGE_REFERENCES)} as reference image(s), rest as text descriptors (${generationAssets.map(g => g.role).join(", ")})`;
+    : `Selected ${generationAssets.length} generation asset(s) with '${balance}' balance: top ${Math.min(generationAssets.length, MAX_IMAGE_REFERENCES)} as reference image(s) (${generationAssets.slice(0, MAX_IMAGE_REFERENCES).map(g => g.role).join(", ")}), rest as text descriptors`;
 
-  try {
-    await db.insert(generationPacketLogsTable).values({
-      creativeId,
-      platform,
-      templateId,
-      packetType: generationAssets.length > 0 ? "reference_guided" : "text_only",
-      primaryAssetId: generationAssets[0]?.asset.id || null,
-      supportingAssetIds: generationAssets.slice(1).map(a => a.asset.id),
-      styleAssetIds: generationAssets.filter(a => a.role === "style_reference").map(a => a.asset.id),
-      contextAssetIds: contextAssets.map(a => a.asset.id),
-      compositingAssetIds: compositingAssets.map(a => a.asset.id),
-      excludedAssetIds: excludedAssets.map(a => a.asset.id),
-      packetReasoning: reasoning,
-    });
-  } catch (err) {
-    console.error("Failed to log generation packet:", err instanceof Error ? err.message : err);
+  if (!params.dryRun) {
+    try {
+      await db.insert(generationPacketLogsTable).values({
+        creativeId,
+        platform,
+        templateId,
+        packetType: generationAssets.length > 0 ? "reference_guided" : "text_only",
+        primaryAssetId: generationAssets[0]?.asset.id || null,
+        supportingAssetIds: generationAssets.slice(1).map(a => a.asset.id),
+        styleAssetIds: generationAssets.filter(a => a.role === "style_reference").map(a => a.asset.id),
+        contextAssetIds: contextAssets.map(a => a.asset.id),
+        compositingAssetIds: compositingAssets.map(a => a.asset.id),
+        excludedAssetIds: excludedAssets.map(a => a.asset.id),
+        packetReasoning: reasoning,
+      });
+    } catch (err) {
+      console.error("Failed to log generation packet:", err instanceof Error ? err.message : err);
+    }
   }
 
   return { generationAssets, compositingAssets, contextAssets, excludedAssets, reasoning };
+}
+
+export interface PacketReasoning {
+  selections: Array<{ assetId: string; assetName: string; role: string; reason: string }>;
+  exclusions: Array<{ assetId: string; assetName: string; reason: string }>;
+  strategy: string;
 }

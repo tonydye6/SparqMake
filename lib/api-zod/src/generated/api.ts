@@ -680,6 +680,8 @@ export const GetCreativesResponse = zod.object({
       intent: zod.string().nullish(),
       styleProfileId: zod.string().nullish(),
       selectedLogoAssetId: zod.string().nullish(),
+      referenceBalance: zod.enum(["subject", "balanced", "style"]).optional(),
+      referenceOverrides: zod.record(zod.string(), zod.unknown()).nullish(),
       createdBy: zod.string(),
       reviewedBy: zod.string().nullish(),
       reviewComment: zod.string().nullish(),
@@ -706,6 +708,8 @@ export const CreateCreativeBody = zod.object({
   intent: zod.string().nullish(),
   styleProfileId: zod.string().nullish(),
   selectedLogoAssetId: zod.string().nullish(),
+  referenceBalance: zod.enum(["subject", "balanced", "style"]).optional(),
+  referenceOverrides: zod.record(zod.string(), zod.unknown()).nullish(),
   createdBy: zod.string(),
 });
 
@@ -730,6 +734,8 @@ export const GetCreativeResponse = zod.object({
   intent: zod.string().nullish(),
   styleProfileId: zod.string().nullish(),
   selectedLogoAssetId: zod.string().nullish(),
+  referenceBalance: zod.enum(["subject", "balanced", "style"]).optional(),
+  referenceOverrides: zod.record(zod.string(), zod.unknown()).nullish(),
   createdBy: zod.string(),
   reviewedBy: zod.string().nullish(),
   reviewComment: zod.string().nullish(),
@@ -755,6 +761,8 @@ export const UpdateCreativeBody = zod.object({
   intent: zod.string().nullish(),
   styleProfileId: zod.string().nullish(),
   selectedLogoAssetId: zod.string().nullish(),
+  referenceBalance: zod.enum(["subject", "balanced", "style"]).optional(),
+  referenceOverrides: zod.record(zod.string(), zod.unknown()).nullish(),
   reviewedBy: zod.string().nullish(),
   reviewComment: zod.string().nullish(),
 });
@@ -773,11 +781,93 @@ export const UpdateCreativeResponse = zod.object({
   intent: zod.string().nullish(),
   styleProfileId: zod.string().nullish(),
   selectedLogoAssetId: zod.string().nullish(),
+  referenceBalance: zod.enum(["subject", "balanced", "style"]).optional(),
+  referenceOverrides: zod.record(zod.string(), zod.unknown()).nullish(),
   createdBy: zod.string(),
   reviewedBy: zod.string().nullish(),
   reviewComment: zod.string().nullish(),
   createdAt: zod.date(),
   updatedAt: zod.date(),
+});
+
+/**
+ * @summary Preview the references that will influence the next generation
+ */
+export const GetCreativeInfluencesParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const GetCreativeInfluencesResponse = zod.object({
+  balance: zod.enum(["subject", "balanced", "style"]),
+  styleProfile: zod
+    .object({
+      id: zod.string(),
+      name: zod.string(),
+    })
+    .nullish(),
+  subjects: zod.array(
+    zod.object({
+      assetId: zod.string().nullish(),
+      name: zod.string(),
+      thumbnailUrl: zod.string().nullish(),
+      assetClass: zod.string().nullish(),
+      role: zod.string().optional(),
+      pinned: zod.boolean().optional(),
+      removed: zod.boolean().optional(),
+      score: zod.number().optional(),
+    }),
+  ),
+  styles: zod.array(
+    zod.object({
+      assetId: zod.string().nullish(),
+      name: zod.string(),
+      thumbnailUrl: zod.string().nullish(),
+      assetClass: zod.string().nullish(),
+      role: zod.string().optional(),
+      pinned: zod.boolean().optional(),
+      removed: zod.boolean().optional(),
+      score: zod.number().optional(),
+    }),
+  ),
+  descriptors: zod.array(
+    zod.object({
+      assetId: zod.string().nullish(),
+      name: zod.string(),
+      thumbnailUrl: zod.string().nullish(),
+      assetClass: zod.string().nullish(),
+      role: zod.string().optional(),
+      pinned: zod.boolean().optional(),
+      removed: zod.boolean().optional(),
+      score: zod.number().optional(),
+    }),
+  ),
+  logo: zod
+    .object({
+      assetId: zod.string().nullish(),
+      name: zod.string(),
+      thumbnailUrl: zod.string().nullish(),
+      assetClass: zod.string().nullish(),
+      role: zod.string().optional(),
+      pinned: zod.boolean().optional(),
+      removed: zod.boolean().optional(),
+      score: zod.number().optional(),
+    })
+    .nullish(),
+  pool: zod.array(
+    zod.object({
+      assetId: zod.string().nullish(),
+      name: zod.string(),
+      thumbnailUrl: zod.string().nullish(),
+      assetClass: zod.string().nullish(),
+      role: zod.string().optional(),
+      pinned: zod.boolean().optional(),
+      removed: zod.boolean().optional(),
+      score: zod.number().optional(),
+    }),
+  ),
+  removedAssetIds: zod.array(zod.string()),
+  pinnedAssetIds: zod.array(zod.string()),
+  strategy: zod.string(),
 });
 
 /**

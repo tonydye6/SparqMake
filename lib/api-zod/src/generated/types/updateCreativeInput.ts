@@ -5,6 +5,8 @@
  * SparqMake API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { UpdateCreativeInputReferenceBalance } from "./updateCreativeInputReferenceBalance";
+import type { UpdateCreativeInputReferenceOverrides } from "./updateCreativeInputReferenceOverrides";
 import type { UpdateCreativeInputSelectedAssetsItem } from "./updateCreativeInputSelectedAssetsItem";
 
 export interface UpdateCreativeInput {
@@ -18,6 +20,8 @@ export interface UpdateCreativeInput {
   intent?: string | null;
   styleProfileId?: string | null;
   selectedLogoAssetId?: string | null;
+  referenceBalance?: UpdateCreativeInputReferenceBalance;
+  referenceOverrides?: UpdateCreativeInputReferenceOverrides;
   reviewedBy?: string | null;
   reviewComment?: string | null;
 }

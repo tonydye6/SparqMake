@@ -25,6 +25,8 @@ export interface AssembledContext {
   // The design style profile applied to this generation (or null). Injects its
   // style direction + color treatment into the image prompt.
   styleProfile?: StyleProfile | null;
+  // Subject-vs-style reference balance for prompt emphasis (subject|balanced|style).
+  referenceBalance?: string | null;
 }
 
 // Resolve the style profile to use for a creative: the creative's explicitly
@@ -54,6 +56,7 @@ export async function assembleContext(params: {
   generationPacket?: GenerationPacket | null;
   intent?: string | null;
   styleProfile?: StyleProfile | null;
+  referenceBalance?: string | null;
 }): Promise<AssembledContext> {
   const [brand] = await db.select().from(brandsTable).where(eq(brandsTable.id, params.brandId));
   if (!brand) throw new Error(`Brand not found: ${params.brandId}`);
@@ -144,5 +147,6 @@ export async function assembleContext(params: {
     generationPacket: params.generationPacket || null,
     intent: params.intent || null,
     styleProfile: params.styleProfile || null,
+    referenceBalance: params.referenceBalance || null,
   };
 }

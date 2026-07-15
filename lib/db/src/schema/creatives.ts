@@ -45,6 +45,13 @@ export const creativesTable = pgTable("creatives", {
   //   <id>   — a specific compositing logo asset (no FK so the "none" sentinel
   //            and deleted-asset fallback stay representable).
   selectedLogoAssetId: text("selected_logo_asset_id"),
+  // Weighted reference system: how attached reference slots + prompt emphasis
+  // balance subject fidelity vs style fidelity. One of subject|balanced|style.
+  referenceBalance: text("reference_balance").notNull().default("balanced"),
+  // Influences-preview overrides persisted on the creative:
+  // { removedAssetIds: string[], pinnedAssetIds: string[] }. Removed assets are
+  // excluded from packet assembly; pinned assets are forced into attached slots.
+  referenceOverrides: json("reference_overrides"),
   estimatedCost: real("estimated_cost"),
   createdBy: text("created_by").notNull().references(() => usersTable.id, { onDelete: "restrict" }),
   reviewedBy: text("reviewed_by").references(() => usersTable.id, { onDelete: "set null" }),

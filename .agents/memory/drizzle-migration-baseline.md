@@ -37,3 +37,10 @@ merged task already applied its migration here.
 
 ## Parallel-task migration collisions
 When two tasks both generate migration N in parallel, resolve the rebase by keeping main's N (and snapshots/journal), deleting your migration file, and regenerating yours as the next index with `pnpm --filter @workspace/db run generate`. If the dev DB already applied your old migration, drop the affected column/table and delete its `drizzle.__drizzle_migrations` row before `migrate`, or it fails with a name-collision error.
+Update (July 2026): a task env's dev DB was found missing migration 0014
+(style_profiles table + creatives.style_profile_id) even though later columns
+had been added by hand — push-built DBs can have per-migration holes, not just
+an empty journal. Symptom: every creatives select 500s with "column X does not
+exist". Fix: apply the missing migration's SQL directly via psql (strip
+`--> statement-breakpoint`). Avoid `drizzle-kit push` here — it prompts
+interactively about a style_profiles rename.

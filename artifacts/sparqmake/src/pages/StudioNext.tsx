@@ -886,6 +886,239 @@ function asArray<T>(resp: unknown): T[] {
   return [];
 }
 
+// --- Influences preview -----------------------------------------------------
+// Shows exactly which subject references, style references, and logo will
+// influence the next generation, with one-tap remove/swap and a simple
+// subject-vs-style balance control. Overrides persist on the creative so
+// takes/vary/regenerate all honor them.
+interface InfluenceAssetView {
+  assetId: string | null;
+  name: string;
+  thumbnailUrl: string | null;
+  role?: string;
+  pinned?: boolean;
+}
+
+interface InfluencesView {
+  balance: "subject" | "balanced" | "style";
+  styleProfile: { id: string; name: string } | null;
+  subjects: InfluenceAssetView[];
+  styles: InfluenceAssetView[];
+  descriptors: InfluenceAssetView[];
+  logo: InfluenceAssetView | null;
+  pool: InfluenceAssetView[];
+  removedAssetIds: string[];
+  pinnedAssetIds: string[];
+  strategy: string;
+}
+
+const BALANCE_OPTIONS: Array<{ value: InfluencesView["balance"]; label: string }> = [
+  { value: "subject", label: "Match subject" },
+  { value: "balanced", label: "Balanced" },
+  { value: "style", label: "Match style" },
+];
+
+function InfluenceThumb({
+  item,
+  label,
+  onRemove,
+  onSwap,
+  swapOptions,
+}: {
+  item: InfluenceAssetView;
+  label: string;
+  onRemove?: () => void;
+  onSwap?: (assetId: string) => void;
+  swapOptions?: InfluenceAssetView[];
+}) {
+  const [swapOpen, setSwapOpen] = useState(false);
+  return (
+    <div className="relative group w-[74px]" data-testid={`influence-${item.assetId || "logo"}`}>
+      <div className="w-[74px] h-[74px] rounded-lg overflow-hidden border border-border bg-muted/40 flex items-center justify-center">
+        {item.thumbnailUrl ? (
+          <img src={`${API_BASE}${item.thumbnailUrl}`} alt={item.name} className="w-full h-full object-cover" />
+        ) : (
+          <Sparkles size={16} className="text-muted-foreground" />
+        )}
+      </div>
+      {onRemove && (
+        <button
+          className="absolute -top-1.5 -right-1.5 hidden group-hover:flex items-center justify-center w-5 h-5 rounded-full bg-foreground text-background text-[10px] shadow"
+          onClick={onRemove}
+          title={`Remove ${item.name}`}
+          data-testid={`influence-remove-${item.assetId}`}
+        >
+          ✕
+        </button>
+      )}
+      <div className="mt-1 space-y-0.5">
+        <div className="text-[10px] leading-tight text-foreground truncate" title={item.name}>{item.name}</div>
+        <div className="text-[9px] text-muted-foreground">{label}{item.pinned ? " · pinned" : ""}</div>
+        {onSwap && swapOptions && swapOptions.length > 0 && (
+          <div className="relative">
+            <button
+              className="text-[9px] text-primary underline hidden group-hover:inline"
+              onClick={() => setSwapOpen((o) => !o)}
+              data-testid={`influence-swap-${item.assetId}`}
+            >
+              Swap
+            </button>
+            {swapOpen && (
+              <div className="absolute z-30 mt-1 w-52 max-h-56 overflow-y-auto rounded-lg border border-border bg-popover shadow-md py-1">
+                {swapOptions.map((opt) => (
+                  <button
+                    key={opt.assetId}
+                    className="w-full flex items-center gap-2 px-2 py-1.5 text-left text-[11px] text-foreground hover:bg-muted"
+                    onClick={() => {
+                      setSwapOpen(false);
+                      if (opt.assetId) onSwap(opt.assetId);
+                    }}
+                    data-testid={`influence-swap-option-${opt.assetId}`}
+                  >
+                    {opt.thumbnailUrl ? (
+                      <img src={`${API_BASE}${opt.thumbnailUrl}`} alt="" className="w-6 h-6 rounded object-cover shrink-0" />
+                    ) : (
+                      <span className="w-6 h-6 rounded bg-muted shrink-0" />
+                    )}
+                    <span className="truncate">{opt.name}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function InfluencesPanel({ creativeId, onChanged }: { creativeId: string; onChanged?: () => void }) {
+  const { toast } = useToast();
+  const [influences, setInfluences] = useState<InfluencesView | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const resp = await apiFetch(`${API_BASE}/api/creatives/${creativeId}/influences`);
+      if (resp.ok) setInfluences(await resp.json());
+    } catch {
+      // Non-fatal: the panel simply stays hidden.
+    } finally {
+      setLoading(false);
+    }
+  }, [creativeId]);
+
+  useEffect(() => {
+    setLoading(true);
+    void load();
+  }, [load]);
+
+  async function persist(update: Record<string, unknown>) {
+    setSaving(true);
+    try {
+      await putJson(`${API_BASE}/api/creatives/${creativeId}`, update);
+      await load();
+      onChanged?.();
+    } catch (err) {
+      toast({ variant: "destructive", title: "Could not update influences", description: err instanceof Error ? err.message : "Please try again." });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (loading || !influences) return null;
+  const hasAny = influences.subjects.length > 0 || influences.styles.length > 0 || influences.logo;
+  if (!hasAny) return null;
+
+  const overrides = {
+    removedAssetIds: influences.removedAssetIds,
+    pinnedAssetIds: influences.pinnedAssetIds,
+  };
+
+  function removeAsset(assetId: string | null) {
+    if (!assetId) return;
+    void persist({
+      referenceOverrides: {
+        removedAssetIds: [...new Set([...overrides.removedAssetIds, assetId])],
+        pinnedAssetIds: overrides.pinnedAssetIds.filter((id) => id !== assetId),
+      },
+    });
+  }
+
+  function swapAsset(oldId: string | null, newId: string) {
+    void persist({
+      referenceOverrides: {
+        removedAssetIds: oldId
+          ? [...new Set([...overrides.removedAssetIds.filter((id) => id !== newId), oldId])]
+          : overrides.removedAssetIds.filter((id) => id !== newId),
+        pinnedAssetIds: [...new Set([...overrides.pinnedAssetIds.filter((id) => id !== oldId), newId])],
+      },
+    });
+  }
+
+  const subjectPool = influences.pool.filter((p) => p.role === "subject_reference");
+  const stylePool = influences.pool.filter((p) => p.role === "style_reference");
+
+  return (
+    <Card className="p-4 space-y-3" data-testid="influences-panel">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="space-y-0.5">
+          <div className="text-sm font-medium text-foreground">Influences</div>
+          <p className="text-xs text-muted-foreground">
+            What the next generation will reference.
+            {influences.styleProfile ? ` Style: ${influences.styleProfile.name}.` : ""}
+          </p>
+        </div>
+        <div className="inline-flex rounded-lg border border-border overflow-hidden" data-testid="balance-control">
+          {BALANCE_OPTIONS.map((opt) => (
+            <button
+              key={opt.value}
+              className={cn(
+                "px-2.5 py-1 text-xs",
+                influences.balance === opt.value ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted",
+              )}
+              disabled={saving}
+              onClick={() => influences.balance !== opt.value && void persist({ referenceBalance: opt.value })}
+              data-testid={`balance-${opt.value}`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="flex items-start gap-3 flex-wrap">
+        {influences.subjects.map((item) => (
+          <InfluenceThumb
+            key={item.assetId}
+            item={item}
+            label="Subject"
+            onRemove={() => removeAsset(item.assetId)}
+            onSwap={(newId) => swapAsset(item.assetId, newId)}
+            swapOptions={subjectPool}
+          />
+        ))}
+        {influences.styles.map((item) => (
+          <InfluenceThumb
+            key={item.assetId}
+            item={item}
+            label="Style"
+            onRemove={() => removeAsset(item.assetId)}
+            onSwap={(newId) => swapAsset(item.assetId, newId)}
+            swapOptions={stylePool}
+          />
+        ))}
+        {influences.logo && <InfluenceThumb item={influences.logo} label="Logo" />}
+      </div>
+      {influences.descriptors.length > 0 && (
+        <p className="text-[11px] text-muted-foreground">
+          Also described to the model: {influences.descriptors.map((d) => d.name).join(", ")}
+        </p>
+      )}
+    </Card>
+  );
+}
+
 function BeatBoard({
   state,
   dispatch,
@@ -1088,6 +1321,8 @@ function BeatBoard({
           ))}
         </div>
       )}
+
+      {state.creativeId && <InfluencesPanel creativeId={state.creativeId} />}
 
       {working && takes.length === 0 ? (
         <div className="grid gap-4 sm:grid-cols-3">

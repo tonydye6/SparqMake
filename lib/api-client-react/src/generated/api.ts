@@ -40,6 +40,7 @@ import type {
   CreateStyleProfileInput,
   CreateTemplateInput,
   Creative,
+  CreativeInfluencesResponse,
   CreativeListResponse,
   CreativeVariant,
   GenerateVideoBody,
@@ -2494,6 +2495,97 @@ export const useUpdateCreative = <
 > => {
   return useMutation(getUpdateCreativeMutationOptions(options));
 };
+
+/**
+ * @summary Preview the references that will influence the next generation
+ */
+export const getGetCreativeInfluencesUrl = (id: string) => {
+  return `/api/creatives/${id}/influences`;
+};
+
+export const getCreativeInfluences = async (
+  id: string,
+  options?: RequestInit,
+): Promise<CreativeInfluencesResponse> => {
+  return customFetch<CreativeInfluencesResponse>(
+    getGetCreativeInfluencesUrl(id),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetCreativeInfluencesQueryKey = (id: string) => {
+  return [`/api/creatives/${id}/influences`] as const;
+};
+
+export const getGetCreativeInfluencesQueryOptions = <
+  TData = Awaited<ReturnType<typeof getCreativeInfluences>>,
+  TError = ErrorType<void>,
+>(
+  id: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getCreativeInfluences>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetCreativeInfluencesQueryKey(id);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getCreativeInfluences>>
+  > = ({ signal }) => getCreativeInfluences(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!id,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getCreativeInfluences>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetCreativeInfluencesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getCreativeInfluences>>
+>;
+export type GetCreativeInfluencesQueryError = ErrorType<void>;
+
+/**
+ * @summary Preview the references that will influence the next generation
+ */
+
+export function useGetCreativeInfluences<
+  TData = Awaited<ReturnType<typeof getCreativeInfluences>>,
+  TError = ErrorType<void>,
+>(
+  id: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getCreativeInfluences>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetCreativeInfluencesQueryOptions(id, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
 
 /**
  * @summary Upload a file

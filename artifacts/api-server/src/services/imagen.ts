@@ -57,6 +57,31 @@ function buildImagePrompt(ctx: AssembledContext, referenceImages?: ReferenceImag
       }
     });
     parts.push("REFERENCE IMAGES:\n" + refDescriptions.join("\n"));
+
+    // Weighted reference system: prompt emphasis aligned with the selected
+    // subject-vs-style balance so the language matches the slot allocation.
+    const balance = ctx.referenceBalance === "subject" || ctx.referenceBalance === "style" ? ctx.referenceBalance : "balanced";
+    if (balance === "subject") {
+      parts.push(
+        "REFERENCE WEIGHTING: Prioritize subject fidelity above all. The subject reference images define identity — faces, uniforms, proportions, and distinguishing features must match them closely. Style references are secondary inspiration only; do not let style treatment alter the subject's recognizable identity.",
+      );
+    } else if (balance === "style") {
+      parts.push(
+        "REFERENCE WEIGHTING: Prioritize the style references' visual language above all — replicate their color palette, lighting, texture, composition energy, and overall treatment faithfully. Keep the subject recognizable, but render it fully IN that style rather than copying the subject reference's original look and lighting.",
+      );
+    } else {
+      parts.push(
+        "REFERENCE WEIGHTING: Balance both — keep the subject clearly recognizable from the subject references while faithfully applying the style references' palette, lighting, and treatment to the whole scene.",
+      );
+    }
+  }
+
+  // Brand coherence: generated subjects must carry THIS brand's identity, not a
+  // sibling brand's (production runs showed wrong-brand marks on characters).
+  if (ctx.brand?.name) {
+    parts.push(
+      `BRAND COHERENCE: This image is for the brand "${ctx.brand.name}". Every depicted character, uniform, jersey, signage, and prop must reflect ${ctx.brand.name}'s identity and colors only. Do NOT include names, wordmarks, logos, or identity marks of any other brand or team — even if a reference image shows them, replace them with ${ctx.brand.name}'s identity (or omit them).`,
+    );
   }
 
   // Tiered reference injection: generation assets beyond the attached image

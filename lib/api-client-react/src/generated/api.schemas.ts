@@ -110,7 +110,18 @@ export interface HashtagSetListResponse {
   offset?: number;
 }
 
+export type CreativeReferenceBalance =
+  (typeof CreativeReferenceBalance)[keyof typeof CreativeReferenceBalance];
+
+export const CreativeReferenceBalance = {
+  subject: "subject",
+  balanced: "balanced",
+  style: "style",
+} as const;
+
 export type CreativeSelectedAssetsItem = { [key: string]: unknown };
+
+export type CreativeReferenceOverrides = { [key: string]: unknown } | null;
 
 export interface Creative {
   id: string;
@@ -126,6 +137,8 @@ export interface Creative {
   intent?: string | null;
   styleProfileId?: string | null;
   selectedLogoAssetId?: string | null;
+  referenceBalance?: CreativeReferenceBalance;
+  referenceOverrides?: CreativeReferenceOverrides;
   createdBy: string;
   reviewedBy?: string | null;
   reviewComment?: string | null;
@@ -515,6 +528,19 @@ export interface CreateHashtagSetInput {
 
 export type CreateCreativeInputSelectedAssetsItem = { [key: string]: unknown };
 
+export type CreateCreativeInputReferenceBalance =
+  (typeof CreateCreativeInputReferenceBalance)[keyof typeof CreateCreativeInputReferenceBalance];
+
+export const CreateCreativeInputReferenceBalance = {
+  subject: "subject",
+  balanced: "balanced",
+  style: "style",
+} as const;
+
+export type CreateCreativeInputReferenceOverrides = {
+  [key: string]: unknown;
+} | null;
+
 export interface CreateCreativeInput {
   brandId: string;
   templateId?: string | null;
@@ -526,10 +552,25 @@ export interface CreateCreativeInput {
   intent?: string | null;
   styleProfileId?: string | null;
   selectedLogoAssetId?: string | null;
+  referenceBalance?: CreateCreativeInputReferenceBalance;
+  referenceOverrides?: CreateCreativeInputReferenceOverrides;
   createdBy: string;
 }
 
 export type UpdateCreativeInputSelectedAssetsItem = { [key: string]: unknown };
+
+export type UpdateCreativeInputReferenceBalance =
+  (typeof UpdateCreativeInputReferenceBalance)[keyof typeof UpdateCreativeInputReferenceBalance];
+
+export const UpdateCreativeInputReferenceBalance = {
+  subject: "subject",
+  balanced: "balanced",
+  style: "style",
+} as const;
+
+export type UpdateCreativeInputReferenceOverrides = {
+  [key: string]: unknown;
+} | null;
 
 export interface UpdateCreativeInput {
   name?: string;
@@ -542,8 +583,48 @@ export interface UpdateCreativeInput {
   intent?: string | null;
   styleProfileId?: string | null;
   selectedLogoAssetId?: string | null;
+  referenceBalance?: UpdateCreativeInputReferenceBalance;
+  referenceOverrides?: UpdateCreativeInputReferenceOverrides;
   reviewedBy?: string | null;
   reviewComment?: string | null;
+}
+
+export interface InfluenceAsset {
+  assetId?: string | null;
+  name: string;
+  thumbnailUrl?: string | null;
+  assetClass?: string | null;
+  role?: string;
+  pinned?: boolean;
+  removed?: boolean;
+  score?: number;
+}
+
+export type CreativeInfluencesResponseBalance =
+  (typeof CreativeInfluencesResponseBalance)[keyof typeof CreativeInfluencesResponseBalance];
+
+export const CreativeInfluencesResponseBalance = {
+  subject: "subject",
+  balanced: "balanced",
+  style: "style",
+} as const;
+
+export type CreativeInfluencesResponseStyleProfile = {
+  id: string;
+  name: string;
+} | null;
+
+export interface CreativeInfluencesResponse {
+  balance: CreativeInfluencesResponseBalance;
+  styleProfile?: CreativeInfluencesResponseStyleProfile;
+  subjects: InfluenceAsset[];
+  styles: InfluenceAsset[];
+  descriptors: InfluenceAsset[];
+  logo?: InfluenceAsset | null;
+  pool: InfluenceAsset[];
+  removedAssetIds: string[];
+  pinnedAssetIds: string[];
+  strategy: string;
 }
 
 export interface SocialAccount {

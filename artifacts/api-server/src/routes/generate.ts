@@ -12,7 +12,7 @@ import { renderHeadlineIntoImage, HeadlineRenderError, MAX_HEADLINE_RENDER_ATTEM
 import { detectSubject, predictClip, type SubjectBox } from "../services/focal-point.js";
 import { detectLogoIntent, type LogoPlacementPosition } from "../services/logo-intent.js";
 import { checkBrandReadiness } from "../lib/brand-readiness.js";
-import { buildGenerationPacket } from "../services/packet-assembly.js";
+import { buildGenerationPacket, normalizeBalance, MAX_IMAGE_REFERENCES, type ReferenceOverrides } from "../services/packet-assembly.js";
 import { recordAssetUsage, packetAssetIds } from "../services/asset-usage.js";
 import { writeBuffer, writeFromFile, readBuffer, deleteObject, resolveUrl } from "../services/storage.js";
 import * as fs from "fs";
@@ -378,6 +378,9 @@ router.post("/creatives/:id/generate", generationLimiter, async (req: Request, r
         platform: "all",
         selectedAssetIds,
         priorityStyleAssetIds: styleRefIds,
+        briefText: campaign.briefText,
+        balance: normalizeBalance(campaign.referenceBalance),
+        overrides: campaign.referenceOverrides as ReferenceOverrides | null,
       });
       sendEvent("progress", {
         step: "packet",
@@ -405,6 +408,7 @@ router.post("/creatives/:id/generate", generationLimiter, async (req: Request, r
       intent: campaign.intent || undefined,
       generationPacket: packet,
       styleProfile,
+      referenceBalance: campaign.referenceBalance,
     });
     sendEvent("progress", { step: "context", message: "Context assembled", done: true });
 
@@ -1064,6 +1068,9 @@ async function generateVariantImage(
       platform,
       selectedAssetIds,
       priorityStyleAssetIds: styleRefIds,
+      briefText: campaign.briefText,
+      balance: normalizeBalance(campaign.referenceBalance),
+      overrides: campaign.referenceOverrides as ReferenceOverrides | null,
     });
     referenceImages = await buildReferenceImages(packet);
   }
@@ -1078,6 +1085,7 @@ async function generateVariantImage(
       intent: campaign.intent || undefined,
     generationPacket: packet,
     styleProfile,
+    referenceBalance: campaign.referenceBalance,
   });
 
   const imgResult = await generateImage(ctx, platform, referenceImages, opts.varyMode);
@@ -1202,6 +1210,9 @@ async function runVariantImageGeneration(
         platform: variant.platform,
         selectedAssetIds,
         priorityStyleAssetIds: styleRefIds,
+        briefText: campaign.briefText,
+        balance: normalizeBalance(campaign.referenceBalance),
+        overrides: campaign.referenceOverrides as ReferenceOverrides | null,
       });
       referenceImages = await buildReferenceImages(packet);
     }
@@ -1216,6 +1227,7 @@ async function runVariantImageGeneration(
       intent: campaign.intent || undefined,
       generationPacket: packet,
       styleProfile,
+      referenceBalance: campaign.referenceBalance,
     });
 
     const imgResult = await generateImage(ctx, variant.platform, referenceImages, opts.varyMode);
@@ -2066,6 +2078,117 @@ router.post("/creatives/:id/variants/:variantId/outpaint", generationLimiter, va
     const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: `Outpaint failed: ${message}` });
   }
+});
+
+// --- Influences preview ---
+// Resolves exactly what would influence the next generation for this creative:
+// the attached subject/style reference images (post slot allocation), the
+// descriptor-only assets, the compositing logo, and a pool of swappable brand
+// assets. Dry-run: no packet log row is written.
+function influenceAssetSummary(a: typeof assetsTable.$inferSelect, extra: Record<string, unknown> = {}) {
+  return {
+    assetId: a.id,
+    name: a.name,
+    thumbnailUrl: a.thumbnailUrl || a.fileUrl || null,
+    assetClass: a.assetClass,
+    ...extra,
+  };
+}
+
+router.get("/creatives/:id/influences", validateRequest({ params: CreativeParams }), async (req: Request, res: Response): Promise<void> => {
+  const creativeId = str(req.params.id);
+  const [campaign] = await db.select().from(creativesTable).where(eq(creativesTable.id, creativeId));
+  if (!campaign) {
+    res.status(404).json({ error: "Creative not found" });
+    return;
+  }
+  if (!campaign.templateId) {
+    res.status(400).json({ error: "Creative must have a template" });
+    return;
+  }
+
+  const selectedAssets = (campaign.selectedAssets || []) as SelectedAssetRef[];
+  const selectedAssetIds = selectedAssets.map(a => a.assetId);
+  const styleProfile = await resolveStyleProfile(campaign.brandId, campaign.styleProfileId);
+  const styleRefIds = styleProfile?.referenceAssetIds || [];
+  const overrides = (campaign.referenceOverrides || {}) as ReferenceOverrides;
+  const balance = normalizeBalance(campaign.referenceBalance);
+
+  const packet = await buildGenerationPacket({
+    creativeId,
+    brandId: campaign.brandId,
+    templateId: campaign.templateId,
+    platform: "all",
+    selectedAssetIds,
+    priorityStyleAssetIds: styleRefIds,
+    briefText: campaign.briefText,
+    balance,
+    overrides,
+    dryRun: true,
+  });
+
+  const pinnedSet = new Set(overrides.pinnedAssetIds || []);
+  const attached = packet.generationAssets.slice(0, MAX_IMAGE_REFERENCES);
+  const descriptors = packet.generationAssets.slice(MAX_IMAGE_REFERENCES);
+
+  // Compositing logo (mirrors fetchLogoBuffer's selection, metadata only).
+  let logo: ReturnType<typeof influenceAssetSummary> | null = null;
+  const logoAssets = await db.select().from(assetsTable)
+    .where(and(
+      eq(assetsTable.brandId, campaign.brandId),
+      eq(assetsTable.assetClass, "compositing"),
+      eq(assetsTable.type, "image"),
+    ));
+  const [logoAsset] = logoAssets
+    .filter(a => a.generationRole === "compositing_logo" || (a.subType && a.subType.includes("logo")))
+    .sort((a, b) => {
+      if (a.subType?.includes("primary")) return -1;
+      if (b.subType?.includes("primary")) return 1;
+      return 0;
+    });
+  if (logoAsset) {
+    logo = influenceAssetSummary(logoAsset);
+  } else {
+    const [brand] = await db.select().from(brandsTable).where(eq(brandsTable.id, campaign.brandId));
+    if (brand?.logoFileUrl) {
+      logo = { assetId: null as unknown as string, name: `${brand.name} logo`, thumbnailUrl: brand.logoFileUrl, assetClass: "compositing" };
+    }
+  }
+
+  // Swap pool: generation-eligible brand image assets not already attached.
+  const attachedIds = new Set(attached.map(a => a.asset.id));
+  const poolRows = await db.select().from(assetsTable)
+    .where(and(
+      eq(assetsTable.brandId, campaign.brandId),
+      eq(assetsTable.type, "image"),
+      eq(assetsTable.generationAllowed, true),
+    ));
+  const pool = poolRows
+    .filter(a =>
+      !attachedIds.has(a.id) &&
+      a.assetClass !== "compositing" && !a.compositingOnly &&
+      a.assetClass !== "context" &&
+      (a.status === "approved" || a.status === "uploaded"))
+    .slice(0, 50)
+    .map(a => influenceAssetSummary(a, {
+      role: (styleRefIds.includes(a.id) || a.assetClass === "style_reference") ? "style_reference" : "subject_reference",
+      removed: (overrides.removedAssetIds || []).includes(a.id),
+    }));
+
+  res.json({
+    balance,
+    styleProfile: styleProfile ? { id: styleProfile.id, name: styleProfile.name } : null,
+    subjects: attached.filter(a => a.role === "subject_reference").map(a =>
+      influenceAssetSummary(a.asset, { pinned: pinnedSet.has(a.asset.id), score: a.score })),
+    styles: attached.filter(a => a.role === "style_reference").map(a =>
+      influenceAssetSummary(a.asset, { pinned: pinnedSet.has(a.asset.id), score: a.score })),
+    descriptors: descriptors.map(a => influenceAssetSummary(a.asset, { role: a.role })),
+    logo,
+    pool,
+    removedAssetIds: overrides.removedAssetIds || [],
+    pinnedAssetIds: overrides.pinnedAssetIds || [],
+    strategy: packet.reasoning.strategy,
+  });
 });
 
 export default router;
