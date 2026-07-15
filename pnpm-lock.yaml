@@ -230,6 +230,9 @@ importers:
       oauth-1.0a:
         specifier: ^2.2.6
         version: 2.2.6
+      opentype.js:
+        specifier: ^2.0.0
+        version: 2.0.0
       passport:
         specifier: ^0.7.0
         version: 0.7.0
@@ -293,7 +296,7 @@ importers:
         version: 4.21.0
       vitest:
         specifier: ^4.1.9
-        version: 4.1.9(@types/node@24.12.4)(jsdom@29.1.1)(vite@7.3.1(@types/node@24.12.4)(jiti@2.6.1)(lightningcss@1.31.1)(tsx@4.21.0)(yaml@2.8.2))
+        version: 4.1.9(@types/node@24.12.4)(jiti@2.6.1)(jsdom@29.1.1)(lightningcss@1.31.1)(tsx@4.21.0)(yaml@2.8.2)
 
   artifacts/mockup-sandbox:
     devDependencies:
@@ -684,7 +687,7 @@ importers:
         version: 7.3.1(@types/node@24.12.4)(jiti@2.6.1)(lightningcss@1.31.1)(tsx@4.21.0)(yaml@2.8.2)
       vitest:
         specifier: ^4.1.9
-        version: 4.1.9(@types/node@24.12.4)(jsdom@29.1.1)(vite@7.3.1(@types/node@24.12.4)(jiti@2.6.1)(lightningcss@1.31.1)(tsx@4.21.0)(yaml@2.8.2))
+        version: 4.1.9(@types/node@24.12.4)(jiti@2.6.1)(jsdom@29.1.1)(lightningcss@1.31.1)(tsx@4.21.0)(yaml@2.8.2)
       wouter:
         specifier: ^3.3.5
         version: 3.9.0(react@19.1.0)
@@ -3625,6 +3628,10 @@ packages:
   once@1.4.0:
     resolution: {integrity: sha512-lNaJgI+2Q5URQBkccEKHTQOPaXdUxnZZElQTZY0MFUAuaEqe1E+Nyvgdz/aIyNi6Z9MzO5dv1H8n58/GELp3+w==}
 
+  opentype.js@2.0.0:
+    resolution: {integrity: sha512-kCyjv6xdDY1W/jLWZ/L3QhhTlKUqDZMQ5+Jdlw12b3dXkKNpYBqqlMMj0YDQPShWFTMwgZI1hG14kN3XUDSg/A==}
+    hasBin: true
+
   orval@8.5.3:
     resolution: {integrity: sha512-+8Es2ZR3tPthzAL27X1a9AlboqTQ/w9U/PhMkp4vsLA9OvdkpXr+9f8lCfJUV/wtdX+lXBDQ4imx42Em943JSg==}
     engines: {node: '>=22.18.0'}
@@ -4524,7 +4531,6 @@ packages:
       '@vitest/ui': 4.1.9
       happy-dom: '*'
       jsdom: '*'
-      vite: ^6.0.0 || ^7.0.0 || ^8.0.0
     peerDependenciesMeta:
       '@edge-runtime/vm':
         optional: true
@@ -7566,6 +7572,8 @@ snapshots:
     dependencies:
       wrappy: 1.0.2
 
+  opentype.js@2.0.0: {}
+
   orval@8.5.3(prettier@3.8.1)(typescript@5.9.3):
     dependencies:
       '@commander-js/extra-typings': 14.0.0(commander@14.0.3)
@@ -8489,7 +8497,7 @@ snapshots:
       tsx: 4.21.0
       yaml: 2.8.2
 
-  vitest@4.1.9(@types/node@24.12.4)(jsdom@29.1.1)(vite@7.3.1(@types/node@24.12.4)(jiti@2.6.1)(lightningcss@1.31.1)(tsx@4.21.0)(yaml@2.8.2)):
+  vitest@4.1.9(@types/node@24.12.4)(jiti@2.6.1)(jsdom@29.1.1)(lightningcss@1.31.1)(tsx@4.21.0)(yaml@2.8.2):
     dependencies:
       '@vitest/expect': 4.1.9
       '@vitest/mocker': 4.1.9(vite@7.3.1(@types/node@24.12.4)(jiti@2.6.1)(lightningcss@1.31.1)(tsx@4.21.0)(yaml@2.8.2))
@@ -8515,7 +8523,17 @@ snapshots:
       '@types/node': 24.12.4
       jsdom: 29.1.1
     transitivePeerDependencies:
+      - jiti
+      - less
+      - lightningcss
       - msw
+      - sass
+      - sass-embedded
+      - stylus
+      - sugarss
+      - terser
+      - tsx
+      - yaml
 
   w3c-xmlserializer@5.0.0:
     dependencies:

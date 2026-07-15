@@ -7,6 +7,7 @@
  */
 import type { UpdateCreativeInputReferenceBalance } from "./updateCreativeInputReferenceBalance";
 import type { UpdateCreativeInputReferenceOverrides } from "./updateCreativeInputReferenceOverrides";
+import type { UpdateCreativeInputRenderMode } from "./updateCreativeInputRenderMode";
 import type { UpdateCreativeInputSelectedAssetsItem } from "./updateCreativeInputSelectedAssetsItem";
 
 export interface UpdateCreativeInput {
@@ -23,6 +24,7 @@ export interface UpdateCreativeInput {
   selectedLogoAssetId?: string | null;
   referenceBalance?: UpdateCreativeInputReferenceBalance;
   referenceOverrides?: UpdateCreativeInputReferenceOverrides;
+  renderMode?: UpdateCreativeInputRenderMode;
   reviewedBy?: string | null;
   reviewComment?: string | null;
 }

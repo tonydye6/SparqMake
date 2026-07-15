@@ -120,6 +120,67 @@ router.delete("/designer-personas/:id", requireDestructive, validateRequest({ pa
   res.json({ message: "Designer persona deleted" });
 });
 
+// --- Work sample upload: append sample images to an existing persona.
+// Multipart (field "images", up to 6 per request, 10 max total refs). Files
+// are stored and the persona's referenceImages list is updated atomically;
+// returns the updated persona.
+
+router.post("/designer-personas/:id/reference-images", requireStandardWrite, validateRequest({ params: PersonaParams }), (req, res): void => {
+  upload.array("images", 6)(req, res, async (err) => {
+    if (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : "Upload failed" });
+      return;
+    }
+    try {
+      const id = str(req.params.id);
+      const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+      if (files.length === 0) {
+        res.status(400).json({ error: "Provide at least one sample image" });
+        return;
+      }
+
+      const [persona] = await db.select().from(designerPersonasTable)
+        .where(eq(designerPersonasTable.id, id));
+      if (!persona) {
+        res.status(404).json({ error: "Designer persona not found" });
+        return;
+      }
+
+      const existing = (persona.referenceImages || []) as PersonaReferenceImage[];
+      if (existing.length + files.length > 10) {
+        res.status(400).json({ error: `A designer can have at most 10 reference images (currently ${existing.length})` });
+        return;
+      }
+
+      const token = crypto.randomUUID().slice(0, 8);
+      const added: PersonaReferenceImage[] = [];
+      for (const [i, file] of files.entries()) {
+        const ext = file.mimetype === "image/jpeg" ? ".jpg" : file.mimetype === "image/webp" ? ".webp" : file.mimetype === "image/gif" ? ".gif" : ".png";
+        const filename = `persona-${token}-sample-${i + 1}-${Date.now()}${ext}`;
+        await writeBuffer("generated", filename, file.buffer);
+        added.push({ url: `/api/files/generated/${filename}`, label: file.originalname || `Sample ${existing.length + i + 1}` });
+      }
+
+      const [updated] = await db.update(designerPersonasTable)
+        .set({ referenceImages: [...existing, ...added], updatedAt: new Date() })
+        .where(eq(designerPersonasTable.id, id))
+        .returning();
+
+      await recordAudit({
+        actor: actorFromRequest(req),
+        action: "designer_persona.add_reference_images",
+        entityType: "designer_persona",
+        entityIds: [id],
+        metadata: { added: added.length, total: (updated.referenceImages as PersonaReferenceImage[]).length },
+      });
+
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+});
+
 // --- AI builder: analyze a portfolio URL or uploaded sample images into a
 // draft fingerprint. Returns the draft + stored reference image URLs; nothing
 // is persisted to the personas table (review-before-save).

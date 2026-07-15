@@ -119,6 +119,14 @@ export const CreativeReferenceBalance = {
   style: "style",
 } as const;
 
+export type CreativeRenderMode =
+  (typeof CreativeRenderMode)[keyof typeof CreativeRenderMode];
+
+export const CreativeRenderMode = {
+  scene: "scene",
+  designed: "designed",
+} as const;
+
 export type CreativeSelectedAssetsItem = { [key: string]: unknown };
 
 export type CreativeReferenceOverrides = { [key: string]: unknown } | null;
@@ -140,6 +148,7 @@ export interface Creative {
   selectedLogoAssetId?: string | null;
   referenceBalance?: CreativeReferenceBalance;
   referenceOverrides?: CreativeReferenceOverrides;
+  renderMode?: CreativeRenderMode;
   createdBy: string;
   reviewedBy?: string | null;
   reviewComment?: string | null;
@@ -542,6 +551,14 @@ export type CreateCreativeInputReferenceOverrides = {
   [key: string]: unknown;
 } | null;
 
+export type CreateCreativeInputRenderMode =
+  (typeof CreateCreativeInputRenderMode)[keyof typeof CreateCreativeInputRenderMode];
+
+export const CreateCreativeInputRenderMode = {
+  scene: "scene",
+  designed: "designed",
+} as const;
+
 export interface CreateCreativeInput {
   brandId: string;
   templateId?: string | null;
@@ -556,6 +573,7 @@ export interface CreateCreativeInput {
   selectedLogoAssetId?: string | null;
   referenceBalance?: CreateCreativeInputReferenceBalance;
   referenceOverrides?: CreateCreativeInputReferenceOverrides;
+  renderMode?: CreateCreativeInputRenderMode;
   createdBy: string;
 }
 
@@ -574,6 +592,14 @@ export type UpdateCreativeInputReferenceOverrides = {
   [key: string]: unknown;
 } | null;
 
+export type UpdateCreativeInputRenderMode =
+  (typeof UpdateCreativeInputRenderMode)[keyof typeof UpdateCreativeInputRenderMode];
+
+export const UpdateCreativeInputRenderMode = {
+  scene: "scene",
+  designed: "designed",
+} as const;
+
 export interface UpdateCreativeInput {
   name?: string;
   status?: string;
@@ -588,6 +614,7 @@ export interface UpdateCreativeInput {
   selectedLogoAssetId?: string | null;
   referenceBalance?: UpdateCreativeInputReferenceBalance;
   referenceOverrides?: UpdateCreativeInputReferenceOverrides;
+  renderMode?: UpdateCreativeInputRenderMode;
   reviewedBy?: string | null;
   reviewComment?: string | null;
 }

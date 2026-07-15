@@ -683,6 +683,7 @@ export const GetCreativesResponse = zod.object({
       selectedLogoAssetId: zod.string().nullish(),
       referenceBalance: zod.enum(["subject", "balanced", "style"]).optional(),
       referenceOverrides: zod.record(zod.string(), zod.unknown()).nullish(),
+      renderMode: zod.enum(["scene", "designed"]).optional(),
       createdBy: zod.string(),
       reviewedBy: zod.string().nullish(),
       reviewComment: zod.string().nullish(),
@@ -712,6 +713,7 @@ export const CreateCreativeBody = zod.object({
   selectedLogoAssetId: zod.string().nullish(),
   referenceBalance: zod.enum(["subject", "balanced", "style"]).optional(),
   referenceOverrides: zod.record(zod.string(), zod.unknown()).nullish(),
+  renderMode: zod.enum(["scene", "designed"]).optional(),
   createdBy: zod.string(),
 });
 
@@ -739,6 +741,7 @@ export const GetCreativeResponse = zod.object({
   selectedLogoAssetId: zod.string().nullish(),
   referenceBalance: zod.enum(["subject", "balanced", "style"]).optional(),
   referenceOverrides: zod.record(zod.string(), zod.unknown()).nullish(),
+  renderMode: zod.enum(["scene", "designed"]).optional(),
   createdBy: zod.string(),
   reviewedBy: zod.string().nullish(),
   reviewComment: zod.string().nullish(),
@@ -767,6 +770,7 @@ export const UpdateCreativeBody = zod.object({
   selectedLogoAssetId: zod.string().nullish(),
   referenceBalance: zod.enum(["subject", "balanced", "style"]).optional(),
   referenceOverrides: zod.record(zod.string(), zod.unknown()).nullish(),
+  renderMode: zod.enum(["scene", "designed"]).optional(),
   reviewedBy: zod.string().nullish(),
   reviewComment: zod.string().nullish(),
 });
@@ -788,6 +792,7 @@ export const UpdateCreativeResponse = zod.object({
   selectedLogoAssetId: zod.string().nullish(),
   referenceBalance: zod.enum(["subject", "balanced", "style"]).optional(),
   referenceOverrides: zod.record(zod.string(), zod.unknown()).nullish(),
+  renderMode: zod.enum(["scene", "designed"]).optional(),
   createdBy: zod.string(),
   reviewedBy: zod.string().nullish(),
   reviewComment: zod.string().nullish(),

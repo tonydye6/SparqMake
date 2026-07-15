@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -127,6 +127,41 @@ export default function DesignersTab() {
   const [aiUrl, setAiUrl] = useState("");
   const [aiFiles, setAiFiles] = useState<File[]>([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+
+  // Work sample upload (edit dialog only): appends images to the persona
+  // immediately via the reference-images endpoint, then syncs the form.
+  const sampleInputRef = useRef<HTMLInputElement | null>(null);
+  const [isUploadingSamples, setIsUploadingSamples] = useState(false);
+
+  const uploadSamples = async (files: File[]) => {
+    if (!editing || files.length === 0) return;
+    setIsUploadingSamples(true);
+    try {
+      const fd = new FormData();
+      for (const f of files.slice(0, 6)) fd.append("images", f);
+      const res = await apiFetch(`${baseUrl}/api/designer-personas/${editing.id}/reference-images`, {
+        method: "POST",
+        body: fd,
+      });
+      if (isForbidden(res)) {
+        toast({ variant: "destructive", title: PERMISSION_DENIED_MESSAGE });
+        return;
+      }
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || "Upload failed");
+      }
+      const updated = await res.json();
+      setForm((f) => ({ ...f, referenceImages: updated.referenceImages || f.referenceImages }));
+      toast({ title: "Work samples added" });
+      reload();
+    } catch (e) {
+      toast({ variant: "destructive", title: "Upload failed", description: e instanceof Error ? e.message : "Unknown error" });
+    } finally {
+      setIsUploadingSamples(false);
+      if (sampleInputRef.current) sampleInputRef.current.value = "";
+    }
+  };
 
   const openCreate = () => {
     setEditing(null);
@@ -401,7 +436,7 @@ export default function DesignersTab() {
                 />
               </div>
             ))}
-            {form.referenceImages.length > 0 && (
+            {(form.referenceImages.length > 0 || editing) && (
               <div className="space-y-2">
                 <Label>Reference images</Label>
                 <div className="flex flex-wrap gap-2">
@@ -419,6 +454,31 @@ export default function DesignersTab() {
                     </div>
                   ))}
                 </div>
+                {editing && form.referenceImages.length < 10 && (
+                  <div>
+                    <input
+                      ref={sampleInputRef}
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp,image/gif"
+                      multiple
+                      className="hidden"
+                      onChange={(e) => void uploadSamples(Array.from(e.target.files || []))}
+                      data-testid="designer-sample-upload-input"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={isUploadingSamples}
+                      onClick={() => sampleInputRef.current?.click()}
+                      data-testid="designer-sample-upload-button"
+                    >
+                      {isUploadingSamples
+                        ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Uploading...</>)
+                        : "Add work samples"}
+                    </Button>
+                  </div>
+                )}
                 <p className="text-xs text-muted-foreground">Kept reference images get style-slot priority during generation.</p>
               </div>
             )}

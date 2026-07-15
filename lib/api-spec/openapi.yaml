@@ -2588,6 +2588,9 @@ components:
           type: object
           nullable: true
           additionalProperties: true
+        renderMode:
+          type: string
+          enum: [scene, designed]
         createdBy:
           type: string
         reviewedBy:
@@ -2657,6 +2660,9 @@ components:
           type: object
           nullable: true
           additionalProperties: true
+        renderMode:
+          type: string
+          enum: [scene, designed]
         createdBy:
           type: string
       required:
@@ -2710,6 +2716,9 @@ components:
           type: object
           nullable: true
           additionalProperties: true
+        renderMode:
+          type: string
+          enum: [scene, designed]
         reviewedBy:
           type: string
           nullable: true

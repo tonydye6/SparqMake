@@ -57,6 +57,11 @@ export const creativesTable = pgTable("creatives", {
   // { removedAssetIds: string[], pinnedAssetIds: string[] }. Removed assets are
   // excluded from packet assembly; pinned assets are forced into attached slots.
   referenceOverrides: json("reference_overrides"),
+  // How generated takes are produced:
+  //   "scene"    — single AI image (current default pipeline)
+  //   "designed" — multi-layer composited designer graphic (design-spec LLM →
+  //                subject cutout → typographic compositor → texture pass).
+  renderMode: text("render_mode").notNull().default("scene"),
   estimatedCost: real("estimated_cost"),
   createdBy: text("created_by").notNull().references(() => usersTable.id, { onDelete: "restrict" }),
   reviewedBy: text("reviewed_by").references(() => usersTable.id, { onDelete: "set null" }),

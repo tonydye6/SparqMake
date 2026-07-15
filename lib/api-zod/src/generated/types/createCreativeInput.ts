@@ -7,6 +7,7 @@
  */
 import type { CreateCreativeInputReferenceBalance } from "./createCreativeInputReferenceBalance";
 import type { CreateCreativeInputReferenceOverrides } from "./createCreativeInputReferenceOverrides";
+import type { CreateCreativeInputRenderMode } from "./createCreativeInputRenderMode";
 import type { CreateCreativeInputSelectedAssetsItem } from "./createCreativeInputSelectedAssetsItem";
 
 export interface CreateCreativeInput {
@@ -23,5 +24,6 @@ export interface CreateCreativeInput {
   selectedLogoAssetId?: string | null;
   referenceBalance?: CreateCreativeInputReferenceBalance;
   referenceOverrides?: CreateCreativeInputReferenceOverrides;
+  renderMode?: CreateCreativeInputRenderMode;
   createdBy: string;
 }

@@ -24,6 +24,7 @@ import { validateRequest } from "../middleware/validate.js";
 import { generationLimiter } from "../lib/rate-limit.js";
 import { logger } from "../lib/logger.js";
 import { recordTasteSignal } from "../services/taste-signals.js";
+import { prepareDesignedTake, renderDesignedGraphic, type PreparedDesign } from "../services/designed-take.js";
 
 interface AuthenticatedUser {
   id: string;
@@ -349,7 +350,12 @@ router.post("/creatives/:id/generate", generationLimiter, async (req: Request, r
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
 
-    const estimatedGenerationCost = estimateClaudeCost() + estimateImagenCost(Object.keys(PLATFORM_CONFIGS).length);
+    // Designed mode bills one cutout image + design-spec/QA text calls instead
+    // of one AI image per platform.
+    const platformCount = Object.keys(PLATFORM_CONFIGS).length;
+    const estimatedGenerationCost = campaign.renderMode === "designed"
+      ? estimateClaudeCost() + estimateImagenCost(1) + estimateGeminiTextCost() * (1 + platformCount)
+      : estimateClaudeCost() + estimateImagenCost(platformCount);
     reservationId = crypto.randomUUID();
 
     const budgetCheckResult = await db.transaction(async (tx) => {
@@ -486,13 +492,18 @@ router.post("/creatives/:id/generate", generationLimiter, async (req: Request, r
     const requestedPlatforms = Array.isArray(req.body?.platforms) ? req.body.platforms.filter((p: string) => allPlatforms.includes(p)) : [];
     const platforms = requestedPlatforms.length > 0 ? requestedPlatforms : allPlatforms;
 
+    const isDesigned = campaign.renderMode === "designed";
+
     sendEvent("progress", { step: "captions", message: "Generating captions with Claude..." });
     const captionsPromise = generateCaptions(ctx);
 
-    sendEvent("progress", { step: "images", message: "Generating images for all platforms..." });
-    const imagesPromise = generateAllImages(ctx, platforms, (platform, status, error) => {
-      sendEvent("image_progress", { platform, status, error });
-    }, referenceImages);
+    let imagesPromise: ReturnType<typeof generateAllImages> | null = null;
+    if (!isDesigned) {
+      sendEvent("progress", { step: "images", message: "Generating images for all platforms..." });
+      imagesPromise = generateAllImages(ctx, platforms, (platform, status, error) => {
+        sendEvent("image_progress", { platform, status, error });
+      }, referenceImages);
+    }
 
     const captions = await captionsPromise;
     sendEvent("progress", { step: "captions", message: "Captions generated", done: true });
@@ -509,10 +520,6 @@ router.post("/creatives/:id/generate", generationLimiter, async (req: Request, r
       });
     }
 
-    const images = await imagesPromise;
-    sendEvent("progress", { step: "images", message: `${images.length} images generated`, done: true });
-
-    sendEvent("progress", { step: "compositing", message: "Compositing images with overlays..." });
     const layoutSpec = ctx.template.layoutSpec as Record<string, unknown> | null;
 
     const [resolvedLogo, brandFontFamily] = await Promise.all([
@@ -520,6 +527,50 @@ router.post("/creatives/:id/generate", generationLimiter, async (req: Request, r
       fetchBrandFontFamily(campaign.brandId),
     ]);
     const logoBuffer = resolvedLogo.buffer;
+
+    let images: Awaited<ReturnType<typeof generateAllImages>>;
+    if (isDesigned) {
+      // Designed-graphic mode: one design-spec LLM call + one subject-cutout
+      // image call, then a deterministic composited render per platform.
+      sendEvent("progress", { step: "images", message: "Planning composited design (art-director stage)..." });
+      const design = await fetchBrandDesign(campaign.brandId);
+      const prepared = await prepareDesignedTake({
+        briefText: campaign.briefText || campaign.name,
+        headlineText: null,
+        brandName: design.brandName,
+        brandColors: design.colors,
+        persona: designerPersona,
+        subjectReferences: referenceImages.filter(r => r.role === "subject_reference"),
+        aspectRatio: PLATFORM_CONFIGS[platforms[0]]?.aspectRatio || "1:1",
+      });
+      if (prepared.cutoutFailed) {
+        sendEvent("progress", { step: "images", message: "Subject cutout unavailable — rendering type-led design" });
+      }
+      images = [];
+      for (const platform of platforms) {
+        const config = PLATFORM_CONFIGS[platform];
+        const captionData = captions[platform as keyof typeof captions] || { caption: "", headline: "" };
+        sendEvent("image_progress", { platform, status: "started" });
+        try {
+          const rendered = await renderDesignedGraphic(prepared, {
+            logoBuffer,
+            width: config.width,
+            height: config.height,
+            headlineText: captionData.headline || null,
+          });
+          images.push({ platform, aspectRatio: config.aspectRatio, imageBuffer: rendered.buffer, mimeType: "image/png" });
+          sendEvent("image_progress", { platform, status: "completed" });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          sendEvent("image_progress", { platform, status: "failed", error: message });
+        }
+      }
+    } else {
+      images = await imagesPromise!;
+    }
+    sendEvent("progress", { step: "images", message: `${images.length} images generated`, done: true });
+
+    sendEvent("progress", { step: "compositing", message: "Compositing images with overlays..." });
     if (logoBuffer) {
       sendEvent("progress", { step: "compositing", message: "Brand logo loaded for compositing" });
     }
@@ -541,7 +592,11 @@ router.post("/creatives/:id/generate", generationLimiter, async (req: Request, r
 
       let compositedBuffer: Buffer;
       let compositingFailed = false;
-      try {
+      if (isDesigned) {
+        // Designed graphics come out of the compositor finished — typography,
+        // logo, and texture are already baked in.
+        compositedBuffer = img.imageBuffer;
+      } else try {
         const result = await compositeImage({
           rawImageBuffer: img.imageBuffer,
           layoutSpec: applyLogoPlacement(layoutSpec as LayoutSpec | null, resolvedLogo.placement),
@@ -619,7 +674,11 @@ router.post("/creatives/:id/generate", generationLimiter, async (req: Request, r
 
     sendEvent("progress", { step: "saving", message: "Saving variants to database..." });
 
-    const totalCost = estimateClaudeCost() + estimateImagenCost(images.length);
+    // Designed mode bills one cutout image + design-spec/QA text calls instead
+    // of one image per platform.
+    const totalCost = isDesigned
+      ? estimateClaudeCost() + estimateImagenCost(1) + estimateGeminiTextCost() * (1 + images.length)
+      : estimateClaudeCost() + estimateImagenCost(images.length);
 
     const insertedVariants = await db.transaction(async (tx) => {
       const existingVariants = await tx.select().from(creativeVariantsTable)
@@ -658,13 +717,31 @@ router.post("/creatives/:id/generate", generationLimiter, async (req: Request, r
         model: AI_MODELS.CLAUDE_SONNET,
         costUsd: estimateClaudeCost(),
       });
-      await tx.insert(costLogsTable).values({
-        creativeId,
-        service: "gemini",
-        operation: "image_generation",
-        model: AI_MODELS.GEMINI_FLASH_IMAGE,
-        costUsd: estimateImagenCost(images.length),
-      });
+      if (isDesigned) {
+        // Designed mode: one cutout image + design-spec/QA text calls.
+        await tx.insert(costLogsTable).values({
+          creativeId,
+          service: "gemini",
+          operation: "designed_cutout",
+          model: AI_MODELS.GEMINI_FLASH_IMAGE,
+          costUsd: estimateImagenCost(1),
+        });
+        await tx.insert(costLogsTable).values({
+          creativeId,
+          service: "gemini",
+          operation: "designed_spec_and_qa",
+          model: AI_MODELS.GEMINI_FLASH_TEXT,
+          costUsd: estimateGeminiTextCost() * (1 + images.length),
+        });
+      } else {
+        await tx.insert(costLogsTable).values({
+          creativeId,
+          service: "gemini",
+          operation: "image_generation",
+          model: AI_MODELS.GEMINI_FLASH_IMAGE,
+          costUsd: estimateImagenCost(images.length),
+        });
+      }
 
       return inserted;
     });
@@ -1096,8 +1173,15 @@ async function reserveBudget(
 async function reserveImageBudget(
   creativeId: string,
   imageCount: number,
+  designed = false,
 ): Promise<{ ok: true; reservationId: string | null } | { ok: false; todaySpend: number; threshold: number }> {
-  return reserveBudget(creativeId, estimateImagenCost(imageCount));
+  return reserveBudget(creativeId, designed ? estimateDesignedUnitCost() * imageCount : estimateImagenCost(imageCount));
+}
+
+// Designed-graphic mode bills per rendered take: one cutout image plus two
+// Gemini text calls (design spec + vision quality check).
+function estimateDesignedUnitCost(): number {
+  return estimateImagenCost(1) + estimateGeminiTextCost() * 2;
 }
 
 function budgetExceededBody(todaySpend: number, threshold: number) {
@@ -1153,6 +1237,53 @@ async function generateVariantImage(
   }
 
   referenceImages = mergePersonaReferences(referenceImages, personaRefs);
+
+  // Designed-graphic mode: multi-layer composited pipeline (design-spec LLM →
+  // subject cutout → deterministic typographic compositor). Raw and composited
+  // outputs are the same finished graphic.
+  if (campaign.renderMode === "designed") {
+    const [design, resolvedLogo] = await Promise.all([
+      fetchBrandDesign(campaign.brandId),
+      resolveLogoForCreative(campaign),
+    ]);
+    const prepared = await prepareDesignedTake({
+      briefText: campaign.briefText || campaign.name,
+      headlineText: opts.headlineText,
+      brandName: design.brandName,
+      brandColors: design.colors,
+      persona: designerPersona,
+      subjectReferences: referenceImages.filter(r => r.role === "subject_reference"),
+      aspectRatio: config.aspectRatio,
+    });
+    const rendered = await renderDesignedGraphic(prepared, {
+      logoBuffer: resolvedLogo.buffer,
+      width: config.width,
+      height: config.height,
+      headlineText: opts.headlineText,
+    });
+
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "sparq-variant-"));
+    try {
+      const token = `${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
+      const tag = opts.varyMode ? "vary" : "take";
+      const rawFilename = `${campaign.id}_${platform}_${token}_${tag}_raw.png`;
+      const compFilename = `${campaign.id}_${platform}_${token}_${tag}_composited.png`;
+      fs.writeFileSync(path.join(tmpDir, rawFilename), rendered.buffer);
+      fs.writeFileSync(path.join(tmpDir, compFilename), rendered.buffer);
+      try {
+        await writeFromFile("generated", rawFilename, path.join(tmpDir, rawFilename));
+        await writeFromFile("generated", compFilename, path.join(tmpDir, compFilename));
+      } catch {
+        await deleteGenerated(rawFilename);
+        await deleteGenerated(compFilename);
+        throw new Error("Failed to save generated files. Please try again.");
+      }
+      await recordAssetUsage(packetAssetIds(packet));
+      return { rawFilename, compFilename, compositingFailed: false };
+    } finally {
+      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+    }
+  }
 
   const ctx = await assembleContext({
     brandId: campaign.brandId,
@@ -1264,7 +1395,8 @@ async function runVariantImageGeneration(
 ): Promise<void> {
   const creativeId = campaign.id;
 
-  const budget = await reserveImageBudget(creativeId, 1);
+  const isDesignedVariant = campaign.renderMode === "designed";
+  const budget = await reserveImageBudget(creativeId, 1, isDesignedVariant);
   if (!budget.ok) {
     res.status(429).json(budgetExceededBody(budget.todaySpend, budget.threshold));
     return;
@@ -1302,54 +1434,82 @@ async function runVariantImageGeneration(
 
     referenceImages = mergePersonaReferences(referenceImages, personaRefs);
 
-    const ctx = await assembleContext({
-      brandId: campaign.brandId,
-      templateId: campaign.templateId!,
-      selectedAssets,
-      selectedHashtagSetIds: (campaign.selectedHashtagSets || []) as string[],
-      briefText: opts.briefText,
-      referenceAnalysis: campaign.referenceAnalysis as Record<string, unknown> | null,
-      intent: campaign.intent || undefined,
-      generationPacket: packet,
-      styleProfile,
-      designerPersona,
-      referenceBalance: campaign.referenceBalance,
-    });
+    let rawBuffer: Buffer;
+    let compositedBuffer: Buffer;
+    let compositingFailed = false;
 
-    const imgResult = await generateImage(ctx, variant.platform, referenceImages, opts.varyMode);
+    if (campaign.renderMode === "designed") {
+      // Designed-graphic mode: re-run the composited pipeline for this variant.
+      const [design, resolvedLogo] = await Promise.all([
+        fetchBrandDesign(campaign.brandId),
+        resolveLogoForCreative(campaign),
+      ]);
+      const prepared = await prepareDesignedTake({
+        briefText: opts.briefText || campaign.briefText || campaign.name,
+        headlineText: variant.headlineText,
+        brandName: design.brandName,
+        brandColors: design.colors,
+        persona: designerPersona,
+        subjectReferences: referenceImages.filter(r => r.role === "subject_reference"),
+        aspectRatio: config.aspectRatio,
+      });
+      const rendered = await renderDesignedGraphic(prepared, {
+        logoBuffer: resolvedLogo.buffer,
+        width: config.width,
+        height: config.height,
+        headlineText: variant.headlineText,
+      });
+      rawBuffer = rendered.buffer;
+      compositedBuffer = rendered.buffer;
+    } else {
+      const ctx = await assembleContext({
+        brandId: campaign.brandId,
+        templateId: campaign.templateId!,
+        selectedAssets,
+        selectedHashtagSetIds: (campaign.selectedHashtagSets || []) as string[],
+        briefText: opts.briefText,
+        referenceAnalysis: campaign.referenceAnalysis as Record<string, unknown> | null,
+        intent: campaign.intent || undefined,
+        generationPacket: packet,
+        styleProfile,
+        designerPersona,
+        referenceBalance: campaign.referenceBalance,
+      });
+
+      const imgResult = await generateImage(ctx, variant.platform, referenceImages, opts.varyMode);
+      rawBuffer = imgResult.imageBuffer;
+
+      const layoutSpec = ctx.template.layoutSpec as Record<string, unknown> | null;
+      const [resolvedLogo, brandFontFamily] = await Promise.all([
+        resolveLogoForCreative(campaign),
+        fetchBrandFontFamily(campaign.brandId),
+      ]);
+      const logoBuffer = resolvedLogo.buffer;
+
+      try {
+        const result = await compositeImage({
+          rawImageBuffer: imgResult.imageBuffer,
+          layoutSpec: applyLogoPlacement(layoutSpec as LayoutSpec | null, resolvedLogo.placement),
+          headlineText: variant.headlineText || null,
+          logoBuffer,
+          width: config.width,
+          height: config.height,
+          fontFamily: brandFontFamily,
+        });
+        compositedBuffer = result.buffer;
+      } catch (err) {
+        console.error(`Compositing failed during ${opts.failureVerb} for ${variant.platform}, using raw image:`, err instanceof Error ? err.message : err);
+        compositedBuffer = imgResult.imageBuffer;
+        compositingFailed = true;
+      }
+    }
 
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), opts.tmpPrefix));
     const ts = Date.now();
     const tag = opts.fileTag ? `_${opts.fileTag}` : "";
     const rawFilename = `${creativeId}_${variant.platform}_${ts}${tag}_raw.png`;
     const rawTmpPath = path.join(tmpDir, rawFilename);
-    fs.writeFileSync(rawTmpPath, imgResult.imageBuffer);
-
-    const layoutSpec = ctx.template.layoutSpec as Record<string, unknown> | null;
-    const [resolvedLogo, brandFontFamily] = await Promise.all([
-      resolveLogoForCreative(campaign),
-      fetchBrandFontFamily(campaign.brandId),
-    ]);
-    const logoBuffer = resolvedLogo.buffer;
-
-    let compositedBuffer: Buffer;
-    let compositingFailed = false;
-    try {
-      const result = await compositeImage({
-        rawImageBuffer: imgResult.imageBuffer,
-        layoutSpec: applyLogoPlacement(layoutSpec as LayoutSpec | null, resolvedLogo.placement),
-        headlineText: variant.headlineText || null,
-        logoBuffer,
-        width: config.width,
-        height: config.height,
-        fontFamily: brandFontFamily,
-      });
-      compositedBuffer = result.buffer;
-    } catch (err) {
-      console.error(`Compositing failed during ${opts.failureVerb} for ${variant.platform}, using raw image:`, err instanceof Error ? err.message : err);
-      compositedBuffer = imgResult.imageBuffer;
-      compositingFailed = true;
-    }
+    fs.writeFileSync(rawTmpPath, rawBuffer);
 
     const compFilename = `${creativeId}_${variant.platform}_${ts}${tag}_composited.png`;
     const compTmpPath = path.join(tmpDir, compFilename);
@@ -1373,7 +1533,7 @@ async function runVariantImageGeneration(
           await tx.delete(costLogsTable).where(eq(costLogsTable.id, reservationId));
         }
 
-        const cost = estimateImagenCost(1);
+        const cost = isDesignedVariant ? estimateDesignedUnitCost() : estimateImagenCost(1);
         await tx.insert(costLogsTable).values({
           creativeId,
           service: "gemini",
@@ -1510,7 +1670,8 @@ router.post("/creatives/:id/takes", generationLimiter, validateRequest({ params:
     return;
   }
 
-  const budget = await reserveImageBudget(creativeId, count);
+  const isDesignedTakes = campaign.renderMode === "designed";
+  const budget = await reserveImageBudget(creativeId, count, isDesignedTakes);
   if (!budget.ok) {
     res.status(429).json(budgetExceededBody(budget.todaySpend, budget.threshold));
     return;
@@ -1562,7 +1723,7 @@ router.post("/creatives/:id/takes", generationLimiter, validateRequest({ params:
           service: "gemini",
           operation: "board_takes",
           model: AI_MODELS.GEMINI_FLASH_IMAGE,
-          costUsd: estimateImagenCost(produced.length),
+          costUsd: isDesignedTakes ? estimateDesignedUnitCost() * produced.length : estimateImagenCost(produced.length),
         });
         return rows;
       });
@@ -1622,7 +1783,8 @@ router.post("/creatives/:id/compare-takes", generationLimiter, validateRequest({
   const byId = new Map(personas.map(p => [p.id, p]));
   const ordered = personaIds.map(id => byId.get(id)!);
 
-  const budget = await reserveImageBudget(creativeId, ordered.length);
+  const isDesignedCompare = campaign.renderMode === "designed";
+  const budget = await reserveImageBudget(creativeId, ordered.length, isDesignedCompare);
   if (!budget.ok) {
     res.status(429).json(budgetExceededBody(budget.todaySpend, budget.threshold));
     return;
@@ -1674,7 +1836,7 @@ router.post("/creatives/:id/compare-takes", generationLimiter, validateRequest({
           service: "gemini",
           operation: "persona_compare",
           model: AI_MODELS.GEMINI_FLASH_IMAGE,
-          costUsd: estimateImagenCost(produced.length),
+          costUsd: isDesignedCompare ? estimateDesignedUnitCost() * produced.length : estimateImagenCost(produced.length),
         });
         return rows;
       });

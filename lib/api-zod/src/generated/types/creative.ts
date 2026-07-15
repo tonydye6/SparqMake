@@ -7,6 +7,7 @@
  */
 import type { CreativeReferenceBalance } from "./creativeReferenceBalance";
 import type { CreativeReferenceOverrides } from "./creativeReferenceOverrides";
+import type { CreativeRenderMode } from "./creativeRenderMode";
 import type { CreativeSelectedAssetsItem } from "./creativeSelectedAssetsItem";
 
 export interface Creative {
@@ -26,6 +27,7 @@ export interface Creative {
   selectedLogoAssetId?: string | null;
   referenceBalance?: CreativeReferenceBalance;
   referenceOverrides?: CreativeReferenceOverrides;
+  renderMode?: CreativeRenderMode;
   createdBy: string;
   reviewedBy?: string | null;
   reviewComment?: string | null;

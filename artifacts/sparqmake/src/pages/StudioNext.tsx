@@ -8,6 +8,7 @@ import { cn, apiFetch } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { Switch } from "@/components/ui/switch";
 import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -170,6 +171,10 @@ interface StudioState {
   // no persona. Account-scoped, so it survives brand switches conceptually,
   // but we still reset it with the rest of the downstream state for clarity.
   personaId: string | null;
+  // How images are produced: "scene" = AI paints the full scene (default);
+  // "designed" = multi-layer composited graphic (design-spec → subject cutout
+  // → deterministic typographic compositor). Only offered with a persona.
+  renderMode: "scene" | "designed";
   // Logo overlaid on the finished images. null = auto (style profile's default
   // logo, then the brand default); "none" = explicitly no logo; otherwise a
   // logo asset id. Persisted onto the creative so regens reuse it.
@@ -191,6 +196,7 @@ type StudioAction =
   | { type: "setSelectedAssets"; assets: SelectedAssetPick[] }
   | { type: "setStyleProfile"; styleProfileId: string | null }
   | { type: "setPersona"; personaId: string | null }
+  | { type: "setRenderMode"; renderMode: "scene" | "designed" }
   | { type: "setLogo"; logoAssetId: string | null }
   | { type: "setCreative"; creativeId: string }
   | { type: "selectVariant"; variantId: string }
@@ -207,6 +213,7 @@ const initialState: StudioState = {
   selectedAssets: [],
   styleProfileId: null,
   personaId: null,
+  renderMode: "scene",
   logoAssetId: null,
   selectedVariantId: null,
   fanoutApproved: [],
@@ -226,6 +233,7 @@ function reducer(state: StudioState, action: StudioAction): StudioState {
         selectedAssets: [],
         styleProfileId: null,
         personaId: null,
+        renderMode: "scene",
         logoAssetId: null,
         creativeId: null,
         selectedVariantId: null,
@@ -250,7 +258,14 @@ function reducer(state: StudioState, action: StudioAction): StudioState {
     case "setStyleProfile":
       return { ...state, styleProfileId: action.styleProfileId };
     case "setPersona":
-      return { ...state, personaId: action.personaId };
+      // Dropping the persona also drops designed mode (it's persona-led).
+      return {
+        ...state,
+        personaId: action.personaId,
+        renderMode: action.personaId ? state.renderMode : "scene",
+      };
+    case "setRenderMode":
+      return { ...state, renderMode: action.renderMode };
     case "setLogo":
       return { ...state, logoAssetId: action.logoAssetId };
     case "setCreative":
@@ -734,6 +749,21 @@ function BeatHome({
               </SelectContent>
             </Select>
           </>
+        )}
+        {state.personaId && (
+          <label
+            className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer select-none"
+            data-testid="studio-next-render-mode"
+          >
+            <Switch
+              checked={state.renderMode === "designed"}
+              onCheckedChange={(on) =>
+                dispatch({ type: "setRenderMode", renderMode: on ? "designed" : "scene" })
+              }
+              data-testid="studio-next-designed-toggle"
+            />
+            Designed graphic
+          </label>
         )}
         {logos.length > 0 && (
           <>
@@ -1278,6 +1308,7 @@ function BeatBoard({
           intent: state.intent?.intent || undefined,
           styleProfileId: state.styleProfileId || undefined,
           personaId: state.personaId || undefined,
+          renderMode: state.renderMode,
           // "none" is a real choice (no logo); null/auto is simply omitted.
           selectedLogoAssetId: state.logoAssetId || undefined,
           createdBy: "self", // server overrides this with the authenticated user

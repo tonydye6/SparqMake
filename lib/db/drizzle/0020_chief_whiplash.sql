@@ -1,0 +1,1 @@
+ALTER TABLE "creatives" ADD COLUMN "render_mode" text DEFAULT 'scene' NOT NULL;
