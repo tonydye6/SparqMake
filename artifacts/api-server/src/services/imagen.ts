@@ -3,6 +3,7 @@ import { Modality } from "@google/genai";
 import type { AssembledContext } from "./context-assembly.js";
 import { AI_MODELS, estimateImagenCost } from "../lib/ai-config.js";
 import { INTENT_IMAGE_DIRECTIVES, isIntent } from "../lib/intents.js";
+import { MAX_IMAGE_REFERENCES } from "./packet-assembly.js";
 
 export const PLATFORM_CONFIGS: Record<string, { platform: string; aspectRatio: string; width: number; height: number }> = {
   instagram_feed: { platform: "instagram_feed", aspectRatio: "1:1", width: 1080, height: 1080 },
@@ -17,6 +18,12 @@ export interface ReferenceImage {
   mimeType: string;
   role: "subject_reference" | "style_reference";
   description?: string;
+  // Where the reference came from: brand-asset packet vs. designer persona.
+  // Persona refs get guaranteed slots and persona-specific prompt language.
+  source?: "packet" | "persona";
+  // Brand asset id for packet-sourced refs, so the prompt builder can tell
+  // which packet assets are attached vs. demoted to text descriptors.
+  assetId?: string;
 }
 
 // Beat 2 (Board) "Vary" constraint modes. The value is stored on the variant
@@ -46,22 +53,33 @@ export function buildImagePrompt(ctx: AssembledContext, referenceImages?: Refere
     parts.push("TEAM TASTE GUIDANCE (learned from this team's past decisions — follow these preferences):\n" + ctx.brand.tasteGuidance);
   }
 
+  const hasPersona = Boolean(ctx.designerPersona);
+
   if (referenceImages && referenceImages.length > 0) {
     const refDescriptions: string[] = [];
     referenceImages.forEach((ref, i) => {
-      const ordinal = i === 0 ? "first" : i === 1 ? "second" : "third";
-      if (ref.role === "subject_reference") {
-        refDescriptions.push(`The ${ordinal} image is the primary subject that must remain recognizable.${ref.description ? ` ${ref.description}` : ""}`);
+      const n = `Attached image ${i + 1}`;
+      if (ref.source === "persona") {
+        refDescriptions.push(`${n} is a work sample by the selected designer — study its composition, layout structure, color treatment, and texture; the final image must feel like it came from the same designer.${ref.description ? ` ${ref.description}` : ""}`);
+      } else if (ref.role === "subject_reference") {
+        refDescriptions.push(`${n} is a subject that must remain recognizable.${ref.description ? ` ${ref.description}` : ""}`);
       } else if (ref.role === "style_reference") {
-        refDescriptions.push(`The ${ordinal} image defines the visual mood and style to emulate.${ref.description ? ` ${ref.description}` : ""}`);
+        refDescriptions.push(`${n} defines the visual mood and style to emulate.${ref.description ? ` ${ref.description}` : ""}`);
       }
     });
     parts.push("REFERENCE IMAGES:\n" + refDescriptions.join("\n"));
 
     // Weighted reference system: prompt emphasis aligned with the selected
     // subject-vs-style balance so the language matches the slot allocation.
+    // When a designer persona is selected, subject-fidelity language is
+    // softened to "keep subjects recognizable" so the persona's style
+    // fingerprint stays the dominant art-direction signal.
     const balance = ctx.referenceBalance === "subject" || ctx.referenceBalance === "style" ? ctx.referenceBalance : "balanced";
-    if (balance === "subject") {
+    if (hasPersona) {
+      parts.push(
+        "REFERENCE WEIGHTING: The designer's work samples and style fingerprint are the dominant signal — the entire image must be designed in that visual language. Keep the subjects from the subject references clearly recognizable (faces, uniforms, proportions, distinguishing features), but render them fully WITHIN the designer's treatment rather than copying the subject references' original look, lighting, or composition.",
+      );
+    } else if (balance === "subject") {
       parts.push(
         "REFERENCE WEIGHTING: Prioritize subject fidelity above all. The subject reference images define identity — faces, uniforms, proportions, and distinguishing features must match them closely. Style references are secondary inspiration only; do not let style treatment alter the subject's recognizable identity.",
       );
@@ -86,11 +104,14 @@ export function buildImagePrompt(ctx: AssembledContext, referenceImages?: Refere
 
   // Tiered reference injection: generation assets beyond the attached image
   // references are injected as text descriptors so their content still guides
-  // the scene without consuming reference-image slots.
-  const attachedCount = Math.min(referenceImages?.length ?? 0, 3);
+  // the scene without consuming reference-image slots. Attached-ness is
+  // tracked by asset id (persona refs occupy slots but aren't packet assets).
+  const attachedAssetIds = new Set(
+    (referenceImages || []).map(r => r.assetId).filter((id): id is string => Boolean(id)),
+  );
   const descriptorAssets = (ctx.generationPacket?.generationAssets || [])
-    .slice(Math.max(attachedCount, 3))
     .map(g => g.asset)
+    .filter(a => !attachedAssetIds.has(a.id))
     .filter(a => a.description || a.styleNotes || (a.depictedEntities || []).length > 0);
   if (descriptorAssets.length > 0) {
     const lines = descriptorAssets.map(a => {
@@ -115,10 +136,12 @@ export function buildImagePrompt(ctx: AssembledContext, referenceImages?: Refere
     }
   }
 
-  // Designer Persona ("Inspired by ..."): an account-scoped style inspiration.
-  // Injected AFTER the Design Style block with an explicit precedence rule —
-  // the persona's fingerprint wins on look-and-feel conflicts, while brand DNA
-  // (colors, coherence, imagenPrefix) still applies.
+  // Designer Persona ("Inspired by ..."): when a persona is explicitly
+  // selected it is the PRIMARY art-direction block — the model is told to
+  // redesign the composition in the persona's language (including
+  // graphic-design/composited layouts when the fingerprint implies it),
+  // not to treat the persona as secondary inspiration. Brand DNA (colors,
+  // coherence, imagenPrefix) still applies.
   if (ctx.designerPersona) {
     const p = ctx.designerPersona;
     const bits: string[] = [];
@@ -127,14 +150,14 @@ export function buildImagePrompt(ctx: AssembledContext, referenceImages?: Refere
     if (p.colorPhilosophy) bits.push(`COLOR PHILOSOPHY: ${p.colorPhilosophy}`);
     if (p.textureAndEffects) bits.push(`TEXTURE & EFFECTS: ${p.textureAndEffects}`);
     if (p.mood) bits.push(`MOOD: ${p.mood}`);
-    if (bits.length > 0) {
-      parts.push(
-        `STYLE INSPIRATION — inspired by "${p.name}":\n` + bits.join("\n") +
-        (ctx.styleProfile
-          ? `\nPRECEDENCE: Where this style inspiration conflicts with the DESIGN STYLE above, this style inspiration takes precedence for look and feel. Brand identity, brand colors, and brand coherence rules still apply.`
-          : ""),
-      );
-    }
+    if (bits.length > 0) parts.push(
+      `PRIMARY ART DIRECTION — designed in the style of "${p.name}":\n` +
+      bits.join("\n") + "\n" +
+      `DESIGN THE COMPOSITION, don't just render a scene: reinterpret the brief entirely in this designer's visual language. If this designer's fingerprint implies graphic-design treatments — layered graphic panels, bold typographic-style layout structure, collage, treated/duotone photography, geometric framing devices — then produce a designed graphic composition with that structure, NOT a plain photographic scene. Reserve clean negative space and panel structure where headline text would sit (the actual text is overlaid separately later — do not render text yourself). Every choice (framing, palette, texture, lighting, layout) must look like this designer made it.` +
+      (ctx.styleProfile
+        ? `\nPRECEDENCE: Where this art direction conflicts with the DESIGN STYLE above, this art direction takes precedence for look and feel. Brand identity, brand colors, and brand coherence rules still apply.`
+        : ""),
+    );
   }
 
   if (ctx.brand.imagenPrefix) {
@@ -247,7 +270,7 @@ export async function generateImage(
 
   const contentParts: Array<{ text: string } | { inlineData: { data: string; mimeType: string } }> = [];
 
-  const refs = (referenceImages || []).slice(0, 3);
+  const refs = (referenceImages || []).slice(0, MAX_IMAGE_REFERENCES);
   const subjectRefs = refs.filter(r => r.role === "subject_reference");
   const styleRefs = refs.filter(r => r.role === "style_reference");
   const orderedRefs = [...subjectRefs, ...styleRefs];

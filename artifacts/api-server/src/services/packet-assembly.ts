@@ -16,8 +16,11 @@ export interface PacketAsset {
   score: number;
 }
 
-export const MAX_GENERATION_ASSETS = 6;
-export const MAX_IMAGE_REFERENCES = 3;
+// gemini-2.5-flash-image accepts well more than 3 reference images; a budget
+// of 6 lets subjects, designer-persona refs, and brand style assets coexist
+// instead of crowding each other out of a 3-slot cap.
+export const MAX_GENERATION_ASSETS = 10;
+export const MAX_IMAGE_REFERENCES = 6;
 
 // Weighted reference system: how the attached image-reference slots are split
 // between subject references and style references.
@@ -36,9 +39,9 @@ export function normalizeBalance(value: unknown): ReferenceBalance {
 // are reserved for each role. Unfillable slots (not enough candidates of that
 // role) fall back to the other role, so slots are never wasted.
 const SLOT_PLANS: Record<ReferenceBalance, { subject: number; style: number }> = {
-  subject: { subject: 2, style: 1 },
-  balanced: { subject: 2, style: 1 },
-  style: { subject: 1, style: 2 },
+  subject: { subject: 4, style: 2 },
+  balanced: { subject: 3, style: 3 },
+  style: { subject: 2, style: 4 },
 };
 
 // Content-aware scoring: boost assets whose depicted entities / tags / name
@@ -122,6 +125,10 @@ export async function buildGenerationPacket(params: {
   overrides?: ReferenceOverrides | null;
   // When true, skip writing the packet log (used by the influences preview).
   dryRun?: boolean;
+  // Note about designer-persona reference images attached alongside this
+  // packet (they don't come from brand assets), so the packet reasoning log
+  // reflects the full attached-reference set.
+  personaNote?: string | null;
 }): Promise<GenerationPacket> {
   const { creativeId, brandId, templateId, platform, selectedAssetIds, franchise } = params;
   const priorityStyleAssetIds = params.priorityStyleAssetIds || [];
@@ -278,6 +285,9 @@ export async function buildGenerationPacket(params: {
   reasoning.strategy = generationAssets.length === 0
     ? "No generation-eligible assets selected; text-only generation will be used"
     : `Selected ${generationAssets.length} generation asset(s) with '${balance}' balance: top ${Math.min(generationAssets.length, MAX_IMAGE_REFERENCES)} as reference image(s) (${generationAssets.slice(0, MAX_IMAGE_REFERENCES).map(g => g.role).join(", ")}), rest as text descriptors`;
+  if (params.personaNote) {
+    reasoning.strategy += `. ${params.personaNote}`;
+  }
 
   if (!params.dryRun) {
     try {

@@ -950,6 +950,8 @@ interface InfluenceAssetView {
 interface InfluencesView {
   balance: "subject" | "balanced" | "style";
   styleProfile: { id: string; name: string } | null;
+  // Designer persona with guaranteed reference slots (null when none selected).
+  persona: { id: string; name: string; references: Array<{ url: string; label: string | null }> } | null;
   subjects: InfluenceAssetView[];
   styles: InfluenceAssetView[];
   descriptors: InfluenceAssetView[];
@@ -1076,7 +1078,7 @@ function InfluencesPanel({ creativeId, onChanged }: { creativeId: string; onChan
   }
 
   if (loading || !influences) return null;
-  const hasAny = influences.subjects.length > 0 || influences.styles.length > 0 || influences.logo;
+  const hasAny = influences.subjects.length > 0 || influences.styles.length > 0 || influences.logo || influences.persona;
   if (!hasAny) return null;
 
   const overrides = {
@@ -1116,6 +1118,7 @@ function InfluencesPanel({ creativeId, onChanged }: { creativeId: string; onChan
           <p className="text-xs text-muted-foreground">
             What the next generation will reference.
             {influences.styleProfile ? ` Style: ${influences.styleProfile.name}.` : ""}
+            {influences.persona ? ` Designer: ${influences.persona.name}.` : ""}
           </p>
         </div>
         <div className="inline-flex rounded-lg border border-border overflow-hidden" data-testid="balance-control">
@@ -1156,6 +1159,22 @@ function InfluencesPanel({ creativeId, onChanged }: { creativeId: string; onChan
             swapOptions={stylePool}
           />
         ))}
+        {influences.persona &&
+          influences.persona.references.map((ref, i) => (
+            <div key={`persona-${i}`} className="w-20 shrink-0" data-testid={`influence-persona-${i}`}>
+              <img
+                src={`${API_BASE}${ref.url}`}
+                alt={ref.label || influences.persona?.name || "Designer reference"}
+                className="w-20 h-20 rounded-lg object-cover border border-border"
+              />
+              <div className="mt-1 space-y-0.5">
+                <div className="text-[10px] leading-tight text-foreground truncate" title={ref.label || influences.persona?.name}>
+                  {ref.label || influences.persona?.name}
+                </div>
+                <div className="text-[9px] text-muted-foreground">Designer · guaranteed</div>
+              </div>
+            </div>
+          ))}
         {influences.logo && <InfluenceThumb item={influences.logo} label="Logo" />}
       </div>
       {influences.descriptors.length > 0 && (

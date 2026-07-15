@@ -92,7 +92,7 @@ describe("normalizeBalance", () => {
 });
 
 describe("buildGenerationPacket slot plans", () => {
-  it("balanced: attaches 2 subjects + 1 style when both roles have candidates", async () => {
+  it("balanced: attaches subjects and styles with the primary subject leading", async () => {
     const s1 = makeAsset({ subjectIdentityScore: 5 });
     const s2 = makeAsset({ subjectIdentityScore: 4 });
     const s3 = makeAsset({ subjectIdentityScore: 3 });
@@ -108,16 +108,20 @@ describe("buildGenerationPacket slot plans", () => {
     });
 
     const attached = packet.generationAssets.slice(0, MAX_IMAGE_REFERENCES);
+    // 6-slot budget: primary subject leads, then the style slots, then the
+    // remaining subjects — all 5 candidates fit.
     expect(attached.map((a) => a.role)).toEqual([
       "subject_reference",
       "style_reference",
+      "style_reference",
+      "subject_reference",
       "subject_reference",
     ]);
     expect(attached[0].asset.id).toBe(s1.id);
     expect(attached[1].asset.id).toBe(st1.id);
   });
 
-  it("style: attaches 1 subject + 2 styles", async () => {
+  it("style: reserves more slots for styles while the primary subject still leads", async () => {
     const s1 = makeAsset();
     const s2 = makeAsset();
     const st1 = makeAsset({ assetClass: "style_reference" });
@@ -133,7 +137,7 @@ describe("buildGenerationPacket slot plans", () => {
 
     const attached = packet.generationAssets.slice(0, MAX_IMAGE_REFERENCES);
     expect(attached.filter((a) => a.role === "style_reference")).toHaveLength(2);
-    expect(attached.filter((a) => a.role === "subject_reference")).toHaveLength(1);
+    expect(attached.filter((a) => a.role === "subject_reference")).toHaveLength(2);
     expect(attached[0].role).toBe("subject_reference");
   });
 

@@ -81,7 +81,7 @@ async function deleteGenerated(filename: string): Promise<void> {
 // Designer Persona reference images: stored as plain file URLs on the persona
 // (account-scoped, not brand assets), loaded into buffers at generation time.
 // Unreadable/missing files degrade gracefully (skipped).
-const MAX_PERSONA_REFERENCES = 2;
+const MAX_PERSONA_REFERENCES = 3;
 
 async function loadPersonaReferenceImages(persona: DesignerPersona | null): Promise<ReferenceImage[]> {
   if (!persona) return [];
@@ -97,20 +97,39 @@ async function loadPersonaReferenceImages(persona: DesignerPersona | null): Prom
       imageBuffer: buf,
       mimeType: contentTypeFor(loc.filename),
       role: "style_reference",
-      description: `Style inspiration from "${persona.name}"${ref.label ? ` (${ref.label})` : ""}.`,
+      source: "persona",
+      description: `Work sample by "${persona.name}"${ref.label ? ` (${ref.label})` : ""}.`,
     });
   }
   return out;
 }
 
-// Persona reference images take STYLE-SLOT PRIORITY: subjects keep their slots
-// first, then persona style refs, then packet style refs — capped at the
-// model's 3 attached-reference limit.
+// Persona reference images get GUARANTEED slots: when a persona is selected,
+// its refs (up to MAX_PERSONA_REFERENCES) are always attached, and the
+// remaining budget (MAX_IMAGE_REFERENCES total) goes to packet subjects first,
+// then packet style refs. Final order stays subjects → persona → styles so
+// the prompt's numbered descriptions match the attach order.
 function mergePersonaReferences(base: ReferenceImage[], personaRefs: ReferenceImage[]): ReferenceImage[] {
-  if (personaRefs.length === 0) return base;
+  if (personaRefs.length === 0) return base.slice(0, MAX_IMAGE_REFERENCES);
+  const guaranteed = personaRefs.slice(0, MAX_PERSONA_REFERENCES);
+  const remaining = Math.max(0, MAX_IMAGE_REFERENCES - guaranteed.length);
   const subjects = base.filter(r => r.role === "subject_reference");
   const styles = base.filter(r => r.role === "style_reference");
-  return [...subjects, ...personaRefs, ...styles].slice(0, 3);
+  const keptBase = [...subjects, ...styles].slice(0, remaining);
+  return [
+    ...keptBase.filter(r => r.role === "subject_reference"),
+    ...guaranteed,
+    ...keptBase.filter(r => r.role === "style_reference"),
+  ];
+}
+
+// One-line summary of the persona refs actually attached, appended to the
+// packet reasoning log so the Influences trail shows the designer was used.
+function personaNoteFor(persona: DesignerPersona | null, personaRefs: ReferenceImage[]): string | null {
+  if (!persona) return null;
+  return personaRefs.length > 0
+    ? `Designer persona "${persona.name}": ${personaRefs.length} work-sample reference(s) attached with guaranteed slots`
+    : `Designer persona "${persona.name}" applied via style fingerprint (no reference images available)`;
 }
 
 interface ResolvedLogo {
@@ -252,7 +271,7 @@ async function fetchBrandFontFamily(brandId: string): Promise<string | undefined
 async function buildReferenceImages(packet: Awaited<ReturnType<typeof buildGenerationPacket>>): Promise<ReferenceImage[]> {
   const refs: ReferenceImage[] = [];
 
-  for (const entry of packet.generationAssets.slice(0, 3)) {
+  for (const entry of packet.generationAssets.slice(0, MAX_IMAGE_REFERENCES)) {
     if (!entry.asset.fileUrl) continue;
 
     try {
@@ -263,6 +282,8 @@ async function buildReferenceImages(packet: Awaited<ReturnType<typeof buildGener
           imageBuffer: buffer,
           mimeType: entry.asset.mimeType || "image/png",
           role: entry.role === "style_reference" ? "style_reference" : "subject_reference",
+          source: "packet",
+          assetId: entry.asset.id,
           description: (entry.role !== "style_reference" && entry.asset.characterIdentityNote) ? entry.asset.characterIdentityNote : (entry.asset.description || entry.asset.name),
         });
       }
@@ -410,6 +431,7 @@ router.post("/creatives/:id/generate", generationLimiter, async (req: Request, r
     if (designerPersona) {
       sendEvent("progress", { step: "packet", message: `Applying style inspiration "${designerPersona.name}"` });
     }
+    const personaRefs = await loadPersonaReferenceImages(designerPersona);
 
     if (selectedAssetIds.length > 0 || styleRefIds.length > 0) {
       packet = await buildGenerationPacket({
@@ -422,6 +444,7 @@ router.post("/creatives/:id/generate", generationLimiter, async (req: Request, r
         briefText: campaign.briefText,
         balance: normalizeBalance(campaign.referenceBalance),
         overrides: campaign.referenceOverrides as ReferenceOverrides | null,
+        personaNote: personaNoteFor(designerPersona, personaRefs),
       });
       sendEvent("progress", {
         step: "packet",
@@ -438,10 +461,9 @@ router.post("/creatives/:id/generate", generationLimiter, async (req: Request, r
       sendEvent("progress", { step: "packet", message: "No assets selected, using text-only generation", done: true });
     }
 
-    const personaRefs = await loadPersonaReferenceImages(designerPersona);
     if (personaRefs.length > 0) {
       referenceImages = mergePersonaReferences(referenceImages, personaRefs);
-      sendEvent("progress", { step: "references", message: `${personaRefs.length} style-inspiration reference(s) attached` });
+      sendEvent("progress", { step: "references", message: `${personaRefs.length} designer work sample(s) attached (guaranteed slots)` });
     }
 
     sendEvent("progress", { step: "context", message: "Assembling context from brand DNA..." });
@@ -1110,6 +1132,7 @@ async function generateVariantImage(
   const designerPersona = opts.personaOverride !== undefined
     ? opts.personaOverride
     : await resolveDesignerPersona(campaign.personaId);
+  const personaRefs = await loadPersonaReferenceImages(designerPersona);
 
   let packet: Awaited<ReturnType<typeof buildGenerationPacket>> | null = null;
   let referenceImages: ReferenceImage[] = [];
@@ -1124,11 +1147,12 @@ async function generateVariantImage(
       briefText: campaign.briefText,
       balance: normalizeBalance(campaign.referenceBalance),
       overrides: campaign.referenceOverrides as ReferenceOverrides | null,
+      personaNote: personaNoteFor(designerPersona, personaRefs),
     });
     referenceImages = await buildReferenceImages(packet);
   }
 
-  referenceImages = mergePersonaReferences(referenceImages, await loadPersonaReferenceImages(designerPersona));
+  referenceImages = mergePersonaReferences(referenceImages, personaRefs);
 
   const ctx = await assembleContext({
     brandId: campaign.brandId,
@@ -1255,6 +1279,7 @@ async function runVariantImageGeneration(
     const styleProfile = await resolveStyleProfile(campaign.brandId, campaign.styleProfileId);
     const styleRefIds = styleProfile?.referenceAssetIds || [];
     const designerPersona = await resolveDesignerPersona(campaign.personaId);
+    const personaRefs = await loadPersonaReferenceImages(designerPersona);
 
     let packet: Awaited<ReturnType<typeof buildGenerationPacket>> | null = null;
     let referenceImages: ReferenceImage[] = [];
@@ -1270,11 +1295,12 @@ async function runVariantImageGeneration(
         briefText: campaign.briefText,
         balance: normalizeBalance(campaign.referenceBalance),
         overrides: campaign.referenceOverrides as ReferenceOverrides | null,
+        personaNote: personaNoteFor(designerPersona, personaRefs),
       });
       referenceImages = await buildReferenceImages(packet);
     }
 
-    referenceImages = mergePersonaReferences(referenceImages, await loadPersonaReferenceImages(designerPersona));
+    referenceImages = mergePersonaReferences(referenceImages, personaRefs);
 
     const ctx = await assembleContext({
       brandId: campaign.brandId,
@@ -2299,9 +2325,18 @@ router.get("/creatives/:id/influences", validateRequest({ params: CreativeParams
     dryRun: true,
   });
 
+  // Designer persona: its reference images get guaranteed attached slots, so
+  // the packet's attached window shrinks accordingly (mirrors
+  // mergePersonaReferences) and the panel shows the designer's work samples.
+  const persona = await resolveDesignerPersona(campaign.personaId);
+  const personaRefImages = persona
+    ? ((persona.referenceImages || []) as PersonaReferenceImage[]).slice(0, MAX_PERSONA_REFERENCES)
+    : [];
+  const attachedBudget = Math.max(0, MAX_IMAGE_REFERENCES - personaRefImages.length);
+
   const pinnedSet = new Set(overrides.pinnedAssetIds || []);
-  const attached = packet.generationAssets.slice(0, MAX_IMAGE_REFERENCES);
-  const descriptors = packet.generationAssets.slice(MAX_IMAGE_REFERENCES);
+  const attached = packet.generationAssets.slice(0, attachedBudget);
+  const descriptors = packet.generationAssets.slice(attachedBudget);
 
   // Compositing logo (mirrors fetchLogoBuffer's selection, metadata only).
   let logo: ReturnType<typeof influenceAssetSummary> | null = null;
@@ -2350,6 +2385,13 @@ router.get("/creatives/:id/influences", validateRequest({ params: CreativeParams
   res.json({
     balance,
     styleProfile: styleProfile ? { id: styleProfile.id, name: styleProfile.name } : null,
+    persona: persona
+      ? {
+          id: persona.id,
+          name: persona.name,
+          references: personaRefImages.map(r => ({ url: r.url, label: r.label || null })),
+        }
+      : null,
     subjects: attached.filter(a => a.role === "subject_reference").map(a =>
       influenceAssetSummary(a.asset, { pinned: pinnedSet.has(a.asset.id), score: a.score })),
     styles: attached.filter(a => a.role === "style_reference").map(a =>
