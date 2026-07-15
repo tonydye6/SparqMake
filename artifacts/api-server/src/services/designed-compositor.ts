@@ -13,8 +13,38 @@ import type { DesignSpec, DesignFont } from "./design-spec.js";
 
 const SHARP_LIMITS = { limitInputPixels: 268_402_689, failOn: "error" } as const;
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const FONTS_DIR = path.join(__dirname, "..", "assets", "fonts");
+function resolveModuleDir(): string {
+  // ESM dev runtime: import.meta.url points at this source file.
+  // CJS production bundle (esbuild --format=cjs): import.meta is rewritten to
+  // an empty object, so url is undefined — fall back to __dirname, which CJS defines.
+  const metaUrl: string | undefined = import.meta.url;
+  if (metaUrl) return path.dirname(fileURLToPath(metaUrl));
+  return __dirname;
+}
+
+function resolveFontsDir(): string {
+  const moduleDir = resolveModuleDir();
+  const candidates = [
+    // ESM dev runtime: src/services -> src/assets/fonts
+    path.join(moduleDir, "..", "assets", "fonts"),
+    // CJS production bundle: dist/index.cjs -> dist/assets/fonts
+    path.join(moduleDir, "assets", "fonts"),
+  ];
+  for (const dir of candidates) {
+    if (fs.existsSync(dir)) return dir;
+  }
+  throw new Error(
+    `Designed-graphic fonts directory not found. Looked in: ${candidates.join(", ")}. ` +
+      "Ensure font assets are shipped alongside the build (see build.ts copy step).",
+  );
+}
+
+let fontsDir: string | null = null;
+
+function getFontsDir(): string {
+  if (!fontsDir) fontsDir = resolveFontsDir();
+  return fontsDir;
+}
 
 const FONT_FILES: Record<DesignFont, string> = {
   anton: "Anton-Regular.ttf",
@@ -27,7 +57,7 @@ const fontCache = new Map<DesignFont, OTFont>();
 export function loadDesignFont(font: DesignFont): OTFont {
   const cached = fontCache.get(font);
   if (cached) return cached;
-  const file = path.join(FONTS_DIR, FONT_FILES[font]);
+  const file = path.join(getFontsDir(), FONT_FILES[font]);
   const buffer = fs.readFileSync(file);
   const parsed = opentype.parse(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength));
   fontCache.set(font, parsed);

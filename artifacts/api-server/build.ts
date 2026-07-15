@@ -1,7 +1,7 @@
 import path from "path";
 import { fileURLToPath } from "url";
 import { build as esbuild } from "esbuild";
-import { rm, readFile } from "fs/promises";
+import { rm, readFile, mkdir, cp } from "fs/promises";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -69,6 +69,12 @@ async function buildAll() {
     external: externals,
     logLevel: "info",
   });
+
+  console.log("copying font assets...");
+  const fontsSrc = path.resolve(__dirname, "src/assets/fonts");
+  const fontsDest = path.resolve(distDir, "assets/fonts");
+  await mkdir(path.dirname(fontsDest), { recursive: true });
+  await cp(fontsSrc, fontsDest, { recursive: true });
 }
 
 buildAll().catch((err) => {
