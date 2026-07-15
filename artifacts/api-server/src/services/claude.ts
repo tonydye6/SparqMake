@@ -24,6 +24,12 @@ VOICE: ${brand.voiceDescription}
 
 `;
 
+  // Taste learning loop: distilled guidance from the team's past caption
+  // edits, approvals, and rejections shapes new copy.
+  if (brand.tasteGuidance) {
+    prompt += `TEAM TASTE GUIDANCE (learned from this team's past decisions — follow these preferences):\n${brand.tasteGuidance}\n\n`;
+  }
+
   if (bannedTerms && bannedTerms.length > 0) {
     prompt += `NEVER USE THESE WORDS/PHRASES: ${bannedTerms.join(", ")}\n\n`;
   }

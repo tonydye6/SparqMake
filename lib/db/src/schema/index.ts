@@ -16,3 +16,4 @@ export * from "./audit-logs";
 export * from "./publish-alerts";
 export * from "./post-metrics";
 export * from "./signals";
+export * from "./taste";

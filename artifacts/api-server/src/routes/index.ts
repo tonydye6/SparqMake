@@ -28,6 +28,7 @@ import usersRouter from "./users";
 import publishHealthRouter from "./publish-health";
 import insightsRouter from "./insights";
 import signalsRouter from "./signals";
+import tasteRouter from "./taste";
 
 const router: IRouter = Router();
 
@@ -60,6 +61,7 @@ router.use(usersRouter);
 router.use(publishHealthRouter);
 router.use(insightsRouter);
 router.use(signalsRouter);
+router.use(tasteRouter);
 
 router.all("/{*path}", (_req, res) => {
   res.status(404).json({ error: "Endpoint not found" });

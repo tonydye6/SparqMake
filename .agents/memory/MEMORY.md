@@ -19,3 +19,4 @@
 - [Prod media restore path](prod-media-restore.md) — bucket is shared dev/prod; restore lost prod files by uploading dev `uploads/` survivors; disk-era prod-only media is gone.
 - [SparqMake frontend tests](sparqmake-frontend-tests.md) — standalone vitest config (vite config needs PORT/BASE_PATH); RTL needs explicit cleanup when globals:false; jsdom Radix polyfills live in src/test/setup.ts.
 - [Gemini proxy supported models](gemini-model-support.md) — proxy rejects preview-dated model names (UNSUPPORTED_MODEL); use stable gemini-2.5-flash/pro; bulk vision runs hit rate limits, chunk them.
+- [Migration slot collision](migration-slot-collision.md) — parallel tasks sharing a drizzle index: renumber ours to +1, merge snapshot, manually journal locally-applied SQL (42P07 fix).

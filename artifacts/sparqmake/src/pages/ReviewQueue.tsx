@@ -19,6 +19,7 @@ import { ScheduleModal } from "@/components/ScheduleModal";
 import { useLocation } from "wouter";
 import { formatRejectComment, parseRejectComment, REJECT_CATEGORIES } from "@/lib/reject-reasons";
 import { PublishHealthBanner } from "@/components/PublishHealthBanner";
+import { TasteReactionChips } from "@/components/TasteReactionChips";
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
 
@@ -723,6 +724,15 @@ export default function ReviewQueue() {
                                 )}
                                 <p className="text-xs text-muted-foreground">{parsedComment.comment}</p>
                               </div>
+                            )}
+
+                            {expandedCreativeId && (
+                              <TasteReactionChips
+                                creativeId={expandedCreativeId}
+                                variantId={variant.id}
+                                target="variant"
+                                className="pt-1"
+                              />
                             )}
 
                             {isReviewable && variant.status !== "approved" && variant.status !== "rejected" && (

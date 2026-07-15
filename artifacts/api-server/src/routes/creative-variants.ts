@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import { eq, and, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, creativeVariantsTable, creativesTable, refinementLogsTable, assetPairingsTable } from "@workspace/db";
+import { recordTasteSignal } from "../services/taste-signals.js";
 
 const router: IRouter = Router();
 
@@ -86,8 +87,23 @@ router.put("/creatives/:creativeId/variants/:variantId", async (req, res): Promi
       .returning();
 
     if (newStatus === "approved" || newStatus === "rejected") {
-      const [camp] = await db.select({ templateId: creativesTable.templateId }).from(creativesTable)
+      const [camp] = await db.select({ templateId: creativesTable.templateId, brandId: creativesTable.brandId }).from(creativesTable)
         .where(eq(creativesTable.id, creativeId as string));
+      if (camp) {
+        // Taste learning: approve/reject decisions (with reasons) are the
+        // strongest explicit taste signals.
+        await recordTasteSignal({
+          brandId: camp.brandId,
+          creativeId: creativeId as string,
+          variantId: variantId as string,
+          signalType: newStatus === "approved" ? "variant_approved" : "variant_rejected",
+          payload: {
+            platform: existingVariant.platform,
+            comment: req.body.reviewerComment || undefined,
+          },
+          userId: (req as any).user?.id || null,
+        });
+      }
       if (camp?.templateId) {
         await db.insert(refinementLogsTable).values({
           creativeId: creativeId as string,
@@ -180,7 +196,7 @@ router.post("/creatives/:creativeId/variants/bulk-update", async (req, res): Pro
 
     // Fetch the campaign's templateId once (needed for refinement logs)
     const [camp] = await db
-      .select({ templateId: creativesTable.templateId })
+      .select({ templateId: creativesTable.templateId, brandId: creativesTable.brandId })
       .from(creativesTable)
       .where(eq(creativesTable.id, creativeId as string));
 
@@ -226,6 +242,21 @@ router.post("/creatives/:creativeId/variants/bulk-update", async (req, res): Pro
 
       return results;
     });
+
+    // Taste learning: record each bulk approve/reject decision.
+    if (camp) {
+      for (const variantId of variantIds) {
+        const variant = creativeVariants.find((v) => v.id === variantId)!;
+        await recordTasteSignal({
+          brandId: camp.brandId,
+          creativeId: creativeId as string,
+          variantId,
+          signalType: status === "approved" ? "variant_approved" : "variant_rejected",
+          payload: { platform: variant.platform, comment: reviewerComment || undefined, bulk: true },
+          userId: (req as any).user?.id || null,
+        });
+      }
+    }
 
     // 5. After transaction: check if ALL variants for this campaign are now "approved"
     const allVariantsAfterUpdate = await db

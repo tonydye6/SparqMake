@@ -21,6 +21,7 @@ import { z } from "zod";
 import { validateRequest } from "../middleware/validate.js";
 import { generationLimiter } from "../lib/rate-limit.js";
 import { logger } from "../lib/logger.js";
+import { recordTasteSignal } from "../services/taste-signals.js";
 
 interface AuthenticatedUser {
   id: string;
@@ -617,7 +618,7 @@ router.put("/creatives/:id/variants/:variantId/caption", validateRequest({ param
     .returning();
 
   if (variant.originalCaption && caption !== variant.originalCaption) {
-    const [camp] = await db.select({ templateId: creativesTable.templateId }).from(creativesTable).where(eq(creativesTable.id, creativeId));
+    const [camp] = await db.select({ templateId: creativesTable.templateId, brandId: creativesTable.brandId }).from(creativesTable).where(eq(creativesTable.id, creativeId));
     if (camp?.templateId) {
       await db.insert(refinementLogsTable).values({
         creativeId,
@@ -628,6 +629,17 @@ router.put("/creatives/:id/variants/:variantId/caption", validateRequest({ param
         originalValue: variant.originalCaption,
         newValue: caption,
         userId: ((req as unknown as Record<string, unknown>).user as AuthenticatedUser | undefined)?.id || "system",
+      });
+    }
+    if (camp && variant.caption !== caption) {
+      // Taste learning: an edit away from the AI caption reveals wording taste.
+      await recordTasteSignal({
+        brandId: camp.brandId,
+        creativeId,
+        variantId,
+        signalType: "caption_edit",
+        payload: { platform: variant.platform, before: variant.caption, after: caption },
+        userId: ((req as unknown as Record<string, unknown>).user as AuthenticatedUser | undefined)?.id || null,
       });
     }
   }
@@ -776,6 +788,18 @@ router.put("/creatives/:id/variants/:variantId/headline", validateRequest({ para
     .where(eq(creativeVariantsTable.id, variantId))
     .returning();
 
+  if (variant.headlineText && headline !== variant.headlineText) {
+    // Taste learning: headline rewrites reveal the voice the team wants.
+    await recordTasteSignal({
+      brandId: campaign.brandId,
+      creativeId,
+      variantId,
+      signalType: "headline_edit",
+      payload: { platform: variant.platform, before: variant.headlineText, after: headline },
+      userId: ((req as unknown as Record<string, unknown>).user as AuthenticatedUser | undefined)?.id || null,
+    });
+  }
+
   if (variant.originalHeadline && headline !== variant.originalHeadline) {
     await db.insert(refinementLogsTable).values({
       creativeId,
@@ -853,6 +877,16 @@ router.post("/creatives/:id/variants/:variantId/regenerate", generationLimiter, 
         });
       }
     },
+  });
+
+  // Taste learning: a regenerate means the previous image wasn't right.
+  await recordTasteSignal({
+    brandId: campaign.brandId,
+    creativeId,
+    variantId,
+    signalType: "regenerate",
+    payload: { platform: variant.platform, reason: instruction || undefined },
+    userId: ((req as unknown as Record<string, unknown>).user as AuthenticatedUser | undefined)?.id || null,
   });
 });
 
@@ -1280,6 +1314,16 @@ router.post("/creatives/:id/variants/:variantId/vary", generationLimiter, valida
       return result;
     },
   });
+
+  // Taste learning: a vary means the team liked this take enough to branch it.
+  await recordTasteSignal({
+    brandId: campaign.brandId,
+    creativeId,
+    variantId,
+    signalType: "vary",
+    payload: { varyMode, platform: variant.platform },
+    userId: ((req as unknown as Record<string, unknown>).user as AuthenticatedUser | undefined)?.id || null,
+  });
 });
 
 // Beat 2 (Board) "Takes": generate a result set of N (default 3) exploratory
@@ -1690,6 +1734,44 @@ router.post("/creatives/:id/variants/:variantId/fan-out", generationLimiter, val
     }
 
     res.status(201).json({ variants: created, focalPoint });
+
+    // Taste learning: fan-out is the definitive "this take won" moment —
+    // record the winner as selected and its unpicked Board siblings (takes
+    // with no lineage or vary branches) as passed over. Fire-and-forget.
+    void (async () => {
+      const userId = ((req as unknown as Record<string, unknown>).user as AuthenticatedUser | undefined)?.id || null;
+      await recordTasteSignal({
+        brandId: campaign.brandId,
+        creativeId,
+        variantId,
+        signalType: "take_selected",
+        payload: { headline: winner.headlineText || undefined, varyMode: winner.varyMode || undefined },
+        userId,
+      });
+      try {
+        const siblings = await db.select().from(creativeVariantsTable)
+          .where(and(
+            eq(creativeVariantsTable.creativeId, creativeId),
+            eq(creativeVariantsTable.platform, BOARD_FORMAT),
+          ));
+        for (const sib of siblings) {
+          if (sib.id === variantId) continue;
+          // Only Board takes/branches (fan-out children carry sourceVariantId without varyMode).
+          if (sib.sourceVariantId && !sib.varyMode) continue;
+          await recordTasteSignal({
+            brandId: campaign.brandId,
+            creativeId,
+            variantId: sib.id,
+            signalType: "take_passed_over",
+            payload: { varyMode: sib.varyMode || undefined },
+            userId,
+          });
+        }
+      } catch (err) {
+        console.error("Failed to record passed-over takes:", err instanceof Error ? err.message : err);
+      }
+    })();
+    return;
   } catch (error) {
     for (const fn of writtenFiles) {
       await deleteGenerated(fn);

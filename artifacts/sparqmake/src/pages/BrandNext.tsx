@@ -12,7 +12,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Palette, Save, Loader2, Plus, X, Wand2, Sparkles, Check, Link2, Trash2, LayoutTemplate } from "lucide-react";
+import { Palette, Save, Loader2, Plus, X, Wand2, Sparkles, Check, Link2, Trash2, LayoutTemplate, Brain, RefreshCw } from "lucide-react";
 import { FaInstagram, FaXTwitter, FaTiktok, FaLinkedin, FaYoutube } from "react-icons/fa6";
 import type { IconType } from "react-icons";
 
@@ -317,6 +317,7 @@ export default function BrandNext() {
                 <TabsTrigger value="assets">Assets</TabsTrigger>
                 <TabsTrigger value="templates">Templates</TabsTrigger>
                 <TabsTrigger value="platforms">Platforms</TabsTrigger>
+                <TabsTrigger value="taste" data-testid="brand-tab-taste">Taste</TabsTrigger>
               </TabsList>
 
               {/* Visual DNA */}
@@ -460,6 +461,11 @@ export default function BrandNext() {
                   </div>
                 </div>
               </TabsContent>
+
+              {/* Taste — "what we've learned" from the team's decisions */}
+              <TabsContent value="taste" className="pt-4">
+                <TastePanel brandId={draft.id} />
+              </TabsContent>
             </Tabs>
           </div>
         )}
@@ -534,6 +540,145 @@ function ChipList({ items, onChange, placeholder }: { items: string[]; onChange:
           <Plus size={14} />
         </Button>
       </div>
+    </div>
+  );
+}
+
+// "What we've learned" panel: the AI-distilled (and editable) taste guidance
+// for a brand, with signal counts, a re-learn button, and version history.
+function TastePanel({ brandId }: { brandId: string }) {
+  const { toast } = useToast();
+  const [loading, setLoading] = useState(true);
+  const [guidance, setGuidance] = useState("");
+  const [savedGuidance, setSavedGuidance] = useState("");
+  const [version, setVersion] = useState(0);
+  const [pendingSignals, setPendingSignals] = useState(0);
+  const [totalSignals, setTotalSignals] = useState(0);
+  const [versions, setVersions] = useState<{ id: string; version: number; source: string; signalCount: number; createdAt: string }[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [distilling, setDistilling] = useState(false);
+
+  const load = async () => {
+    try {
+      const resp = await apiFetch(`${API_BASE}/api/brands/${brandId}/taste`);
+      if (!resp.ok) throw new Error(`Failed (${resp.status})`);
+      const data = await resp.json();
+      setGuidance(data.guidance || "");
+      setSavedGuidance(data.guidance || "");
+      setVersion(data.version || 0);
+      setPendingSignals(data.pendingSignals || 0);
+      setTotalSignals(data.totalSignals || 0);
+      setVersions(Array.isArray(data.versions) ? data.versions : []);
+    } catch {
+      toast({ variant: "destructive", title: "Could not load taste guidance" });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    setLoading(true);
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [brandId]);
+
+  async function saveGuidance() {
+    setSaving(true);
+    try {
+      const resp = await apiFetch(`${API_BASE}/api/brands/${brandId}/taste`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ guidance }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) throw new Error(data.error || `Save failed (${resp.status})`);
+      setSavedGuidance(guidance);
+      setVersion(data.version ?? version);
+      toast({ title: "Taste guidance saved" });
+      void load();
+    } catch (err) {
+      toast({ variant: "destructive", title: "Save failed", description: err instanceof Error ? err.message : "Please try again." });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function distillNow() {
+    setDistilling(true);
+    try {
+      const resp = await apiFetch(`${API_BASE}/api/brands/${brandId}/taste/distill`, { method: "POST" });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) throw new Error(data.error || `Failed (${resp.status})`);
+      if (data.distilled) {
+        toast({ title: "Learned from recent decisions", description: "The taste guidance was updated." });
+        await load();
+      } else {
+        toast({ title: "Nothing new to learn", description: data.message || "No new decisions since the last update." });
+      }
+    } catch (err) {
+      toast({ variant: "destructive", title: "Learning failed", description: err instanceof Error ? err.message : "Please try again." });
+    } finally {
+      setDistilling(false);
+    }
+  }
+
+  if (loading) {
+    return <p className="text-sm text-muted-foreground py-8 text-center">Loading what we've learned...</p>;
+  }
+
+  return (
+    <div className="space-y-5">
+      <Card className="p-4 space-y-2">
+        <div className="flex items-center gap-2">
+          <Brain size={15} className="text-primary" />
+          <span className="text-sm font-medium text-foreground">What we've learned</span>
+          {version > 0 && <Badge variant="secondary" className="text-[10px]">v{version}</Badge>}
+          <Button
+            size="sm"
+            variant="outline"
+            className="ml-auto h-7 px-2 text-xs"
+            disabled={distilling}
+            onClick={distillNow}
+            data-testid="taste-distill-now"
+          >
+            {distilling ? <Loader2 size={12} className="mr-1 animate-spin" /> : <RefreshCw size={12} className="mr-1" />}
+            Learn now
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          The AI studies every decision your team makes — which takes win, what gets rejected and why, how captions get
+          rewritten, and your reaction chips — and turns them into guidance that steers new images and captions.
+          {" "}{totalSignals} decision{totalSignals === 1 ? "" : "s"} recorded so far{pendingSignals > 0 ? ` · ${pendingSignals} not yet learned from` : ""}.
+        </p>
+        <Textarea
+          value={guidance}
+          onChange={(e) => setGuidance(e.target.value)}
+          placeholder="Nothing learned yet. Guidance appears here after your team makes enough decisions — or write your own preferences and save."
+          className="min-h-48 resize-y text-sm font-mono"
+          data-testid="taste-guidance-input"
+        />
+        <div className="flex justify-end">
+          <Button size="sm" onClick={saveGuidance} disabled={saving || guidance === savedGuidance} data-testid="taste-guidance-save">
+            {saving ? <Loader2 size={13} className="mr-1.5 animate-spin" /> : <Save size={13} className="mr-1.5" />}
+            Save guidance
+          </Button>
+        </div>
+      </Card>
+
+      {versions.length > 0 && (
+        <div className="space-y-2">
+          <Label>History</Label>
+          <div className="space-y-1.5">
+            {versions.map((v) => (
+              <div key={v.id} className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs">
+                <Badge variant="outline" className="text-[10px]">v{v.version}</Badge>
+                <span className="text-foreground">{v.source === "manual" ? "Edited by the team" : `Learned from ${v.signalCount} decision${v.signalCount === 1 ? "" : "s"}`}</span>
+                <span className="ml-auto text-muted-foreground">{new Date(v.createdAt).toLocaleString()}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

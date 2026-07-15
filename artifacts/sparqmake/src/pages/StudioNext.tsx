@@ -12,6 +12,7 @@ import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { TasteReactionChips } from "@/components/TasteReactionChips";
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
 
@@ -997,6 +998,7 @@ function BeatBoard({
             <VariantCard
               key={take.id}
               take={take}
+              creativeId={state.creativeId ?? ""}
               selected={state.selectedVariantId === take.id}
               varying={varyingId === take.id}
               onSelect={() => dispatch({ type: "selectVariant", variantId: take.id })}
@@ -1217,6 +1219,7 @@ function IntentBadge({ intent }: { intent: string | null | undefined }) {
 
 function VariantCard({
   take,
+  creativeId,
   selected,
   varying,
   onSelect,
@@ -1224,6 +1227,7 @@ function VariantCard({
   onRegenerate,
 }: {
   take: BoardVariant;
+  creativeId: string;
   selected: boolean;
   varying: boolean;
   onSelect: () => void;
@@ -1291,6 +1295,11 @@ function VariantCard({
           ))
         )}
       </div>
+      {creativeId && (
+        <div className="px-2 pb-2">
+          <TasteReactionChips creativeId={creativeId} variantId={take.id} target="take" />
+        </div>
+      )}
     </Card>
   );
 }
@@ -2206,6 +2215,8 @@ function FanoutCard({
           placeholder="Caption"
           className="min-h-16 resize-none text-xs flex-1"
         />
+
+        <TasteReactionChips creativeId={creativeId} variantId={variant.id} target="variant" />
 
         <div className="flex items-center justify-between gap-2">
           <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">

@@ -40,6 +40,12 @@ function buildImagePrompt(ctx: AssembledContext, referenceImages?: ReferenceImag
     parts.push("CHARACTER STYLE CONSTRAINTS:\n" + ctx.brand.characterStyleRules);
   }
 
+  // Taste learning loop: guidance distilled from the team's past decisions
+  // (selected takes, rejections, edits, reactions) steers new generations.
+  if (ctx.brand.tasteGuidance) {
+    parts.push("TEAM TASTE GUIDANCE (learned from this team's past decisions — follow these preferences):\n" + ctx.brand.tasteGuidance);
+  }
+
   if (referenceImages && referenceImages.length > 0) {
     const refDescriptions: string[] = [];
     referenceImages.forEach((ref, i) => {

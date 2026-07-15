@@ -1,4 +1,4 @@
-import { pgTable, text, boolean, timestamp, json } from "drizzle-orm/pg-core";
+import { pgTable, text, boolean, timestamp, json, integer } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -21,6 +21,11 @@ export const brandsTable = pgTable("brands", {
   logoFileUrl: text("logo_file_url"),
   brandFonts: json("brand_fonts"),
   brandAssetConfig: json("brand_asset_config"),
+  // Taste learning loop: current distilled "what we've learned" guidance,
+  // injected into image + caption prompts. Versions live in
+  // taste_guidance_versions; this holds the active text for fast reads.
+  tasteGuidance: text("taste_guidance").notNull().default(""),
+  tasteGuidanceVersion: integer("taste_guidance_version").notNull().default(0),
   timezone: text("timezone").notNull().default("America/New_York"),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at").notNull().defaultNow(),
