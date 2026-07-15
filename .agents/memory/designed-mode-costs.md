@@ -7,4 +7,4 @@ Designed mode (creatives.render_mode='designed') does NOT bill one AI image per 
 
 **Why:** budget reservation, 429 gating, and persisted cost_logs rows all read from the same daily-spend sum; if any entry point (SSE /generate, variant regen/vary, board takes, persona compare) uses the scene-mode estimate for designed creatives, budgets over- or under-enforce silently (architect flagged this exact drift on first integration).
 
-**How to apply:** any new generation entry point or change to the designed pipeline's billable calls must update `estimateDesignedUnitCost()` and every reservation + cost-log site in lockstep, branching on `campaign.renderMode === "designed"`.
+**How to apply:** any new generation entry point, or any change to which designed-pipeline calls are billable, must update the shared designed unit-cost estimate and every budget-reservation and cost-log site together, branching on the creative's render mode.

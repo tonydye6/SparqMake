@@ -541,6 +541,7 @@ router.post("/creatives/:id/generate", generationLimiter, async (req: Request, r
         brandColors: design.colors,
         persona: designerPersona,
         subjectReferences: referenceImages.filter(r => r.role === "subject_reference"),
+        styleReferences: personaRefs,
         aspectRatio: PLATFORM_CONFIGS[platforms[0]]?.aspectRatio || "1:1",
       });
       if (prepared.cutoutFailed) {
@@ -1253,6 +1254,7 @@ async function generateVariantImage(
       brandColors: design.colors,
       persona: designerPersona,
       subjectReferences: referenceImages.filter(r => r.role === "subject_reference"),
+      styleReferences: personaRefs,
       aspectRatio: config.aspectRatio,
     });
     const rendered = await renderDesignedGraphic(prepared, {
@@ -1451,6 +1453,7 @@ async function runVariantImageGeneration(
         brandColors: design.colors,
         persona: designerPersona,
         subjectReferences: referenceImages.filter(r => r.role === "subject_reference"),
+        styleReferences: personaRefs,
         aspectRatio: config.aspectRatio,
       });
       const rendered = await renderDesignedGraphic(prepared, {

@@ -89,8 +89,12 @@ export interface DesignSpecInput {
     textureAndEffects?: string | null;
     mood?: string | null;
   } | null;
+  /** Designer work-sample images (guaranteed style references for the spec). */
+  styleReferences?: Array<{ imageBuffer: Buffer; mimeType?: string; description?: string }>;
   aspectRatio: string;
 }
+
+const MAX_SPEC_STYLE_REFERENCES = 3;
 
 function personaSection(p: DesignSpecInput["persona"]): string {
   if (!p) return "No specific designer persona — use a bold contemporary sports-graphic sensibility.";
@@ -120,7 +124,7 @@ BRAND: ${input.brandName || "n/a"} — colors: ${colors}
 CANVAS ASPECT RATIO: ${input.aspectRatio}
 
 ${personaSection(input.persona)}
-
+${(input.styleReferences?.length ?? 0) > 0 ? `\n${input.styleReferences!.slice(0, MAX_SPEC_STYLE_REFERENCES).length} of the designer's actual work samples are attached as images. Study their composition, typography treatment, palette discipline, and texture — your spec must feel like it came from the same designer.\n` : ""}
 Return ONLY a JSON object with exactly this shape (all colors 6-digit hex like "#1a1a1a"; all x/y/w/h normalized 0-1 relative to the canvas):
 {
   "canvasColor": "...",            // background field color
@@ -214,9 +218,14 @@ function normalizeHex(v: string | null | undefined): string | null {
 
 export async function generateDesignSpec(input: DesignSpecInput): Promise<{ spec: DesignSpec; usedFallback: boolean }> {
   try {
+    const parts: Array<{ text: string } | { inlineData: { data: string; mimeType: string } }> = [];
+    for (const ref of (input.styleReferences || []).slice(0, MAX_SPEC_STYLE_REFERENCES)) {
+      parts.push({ inlineData: { data: ref.imageBuffer.toString("base64"), mimeType: ref.mimeType || "image/png" } });
+    }
+    parts.push({ text: buildPrompt(input) });
     const response = await ai.models.generateContent({
       model: AI_MODELS.GEMINI_FLASH_TEXT,
-      contents: [{ role: "user", parts: [{ text: buildPrompt(input) }] }],
+      contents: [{ role: "user", parts }],
     });
     const text = response.candidates?.[0]?.content?.parts
       ?.filter((p: { text?: string }) => p.text)

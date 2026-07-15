@@ -18,6 +18,9 @@ export interface DesignedTakeOptions {
   persona?: DesignSpecInput["persona"];
   /** Subject-likeness reference images (steer the cutout render). */
   subjectReferences?: Array<{ imageBuffer: Buffer; mimeType?: string }>;
+  /** Designer work samples — guaranteed style refs for BOTH the design-spec
+   * stage and the subject render (after any subject-likeness refs). */
+  styleReferences?: Array<{ imageBuffer: Buffer; mimeType?: string; description?: string }>;
   logoBuffer: Buffer | null;
   width: number;
   height: number;
@@ -118,15 +121,19 @@ export async function prepareDesignedTake(
     brandName: opts.brandName,
     brandColors: opts.brandColors,
     persona: opts.persona,
+    styleReferences: opts.styleReferences,
     aspectRatio: opts.aspectRatio,
   });
 
   let cutout: SubjectCutout | null = null;
   let cutoutFailed = false;
   try {
+    // Subject-likeness refs first (they define WHO to render), then designer
+    // work samples (they steer HOW it should look). The cutout stage caps the
+    // total it attaches, so likeness refs keep priority.
     cutout = await generateSubjectCutout({
       prompt: spec.subject.prompt,
-      referenceImages: opts.subjectReferences,
+      referenceImages: [...(opts.subjectReferences || []), ...(opts.styleReferences || [])],
     });
   } catch (err) {
     // The graphic still works as pure typographic design — degrade gracefully.
