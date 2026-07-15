@@ -85,6 +85,8 @@ router.get("/post-metrics/summary", async (req, res): Promise<void> => {
       platform: calendarEntriesTable.platform,
       publishedAt: calendarEntriesTable.publishedAt,
       platformPostId: calendarEntriesTable.platformPostId,
+      intent: calendarEntriesTable.intent,
+      creativeIntent: creativesTable.intent,
       creativeId: calendarEntriesTable.creativeId,
       creativeName: creativesTable.name,
       brandId: creativesTable.brandId,
@@ -107,10 +109,17 @@ router.get("/post-metrics/summary", async (req, res): Promise<void> => {
     impressions: number; views: number; likes: number; comments: number; shares: number; engagements: number;
   }>();
   const dailyMap = new Map<string, { date: string; posts: number; impressions: number; engagements: number }>();
+  // Intent dimension: engagement grouped by the post's strategic goal. Entry-
+  // level intent snapshot wins; falls back to the creative's current intent.
+  const intentMap = new Map<string, {
+    intent: string | null; posts: number; postsWithMetrics: number;
+    impressions: number; views: number; likes: number; comments: number; shares: number; engagements: number;
+  }>();
 
   const posts: Array<{
     calendarEntryId: string;
     platform: string;
+    intent: string | null;
     publishedAt: Date | null;
     platformPostId: string | null;
     creativeId: string;
@@ -131,10 +140,20 @@ router.get("/post-metrics/summary", async (req, res): Promise<void> => {
     }
     p.posts += 1;
 
+    const entryIntent = entry.intent || entry.creativeIntent || null;
+    const intentKey = entryIntent ?? "__none__";
+    let iAgg = intentMap.get(intentKey);
+    if (!iAgg) {
+      iAgg = { intent: entryIntent, posts: 0, postsWithMetrics: 0, impressions: 0, views: 0, likes: 0, comments: 0, shares: 0, engagements: 0 };
+      intentMap.set(intentKey, iAgg);
+    }
+    iAgg.posts += 1;
+
     const m = latest.get(entry.id) || null;
     if (m) {
       postsWithMetrics += 1;
       p.postsWithMetrics += 1;
+      iAgg.postsWithMetrics += 1;
       const eng = engagement(m);
       totals.impressions += m.impressions || 0;
       totals.views += m.views || 0;
@@ -148,6 +167,12 @@ router.get("/post-metrics/summary", async (req, res): Promise<void> => {
       p.comments += m.comments || 0;
       p.shares += m.shares || 0;
       p.engagements += eng;
+      iAgg.impressions += m.impressions || 0;
+      iAgg.views += m.views || 0;
+      iAgg.likes += m.likes || 0;
+      iAgg.comments += m.comments || 0;
+      iAgg.shares += m.shares || 0;
+      iAgg.engagements += eng;
 
       if (entry.publishedAt) {
         const dateKey = entry.publishedAt.toISOString().slice(0, 10);
@@ -165,6 +190,7 @@ router.get("/post-metrics/summary", async (req, res): Promise<void> => {
     posts.push({
       calendarEntryId: entry.id,
       platform: entry.platform,
+      intent: entryIntent,
       publishedAt: entry.publishedAt,
       platformPostId: entry.platformPostId,
       creativeId: entry.creativeId,
@@ -195,6 +221,7 @@ router.get("/post-metrics/summary", async (req, res): Promise<void> => {
     postsWithMetrics,
     totals,
     byPlatform: Array.from(platformMap.values()),
+    byIntent: Array.from(intentMap.values()).sort((a, b) => b.engagements - a.engagements),
     daily: Array.from(dailyMap.values()).sort((a, b) => a.date.localeCompare(b.date)),
     topPosts,
     posts: posts.sort((a, b) => {

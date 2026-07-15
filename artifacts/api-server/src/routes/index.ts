@@ -26,6 +26,8 @@ import smartScheduleRouter from "./smart-schedule";
 import feedbackRouter from "./feedback";
 import usersRouter from "./users";
 import publishHealthRouter from "./publish-health";
+import insightsRouter from "./insights";
+import signalsRouter from "./signals";
 
 const router: IRouter = Router();
 
@@ -56,6 +58,8 @@ router.use(smartScheduleRouter);
 router.use(feedbackRouter);
 router.use(usersRouter);
 router.use(publishHealthRouter);
+router.use(insightsRouter);
+router.use(signalsRouter);
 
 router.all("/{*path}", (_req, res) => {
   res.status(404).json({ error: "Endpoint not found" });

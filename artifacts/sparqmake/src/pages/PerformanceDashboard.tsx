@@ -65,10 +65,34 @@ interface PerformanceSummary {
     engagements: number;
   };
   byPlatform: PlatformBreakdown[];
+  byIntent?: IntentBreakdown[];
   daily: DailyPoint[];
   topPosts: PostRow[];
   posts: PostRow[];
 }
+
+interface IntentBreakdown {
+  intent: string | null;
+  posts: number;
+  postsWithMetrics: number;
+  impressions: number;
+  views: number;
+  likes: number;
+  comments: number;
+  shares: number;
+  engagements: number;
+}
+
+// Client mirror of the server intent taxonomy labels.
+const INTENT_LABELS: Record<string, string> = {
+  awareness: "Awareness",
+  acquisition: "Acquisition",
+  community_engagement: "Community engagement",
+  recognition_reward: "Recognition & reward",
+  announcement_launch: "Announcement / launch",
+  education: "Education",
+  retention: "Retention",
+};
 
 interface BrandOption {
   id: string;
@@ -343,6 +367,47 @@ export default function PerformanceDashboard() {
               )}
             </div>
           </div>
+        </div>
+
+        <div className="bg-card border border-border rounded-xl p-4 sm:p-6 mb-6" data-testid="intent-breakdown">
+          <h3 className="text-sm font-semibold text-foreground mb-1">Performance by Goal</h3>
+          <p className="text-xs text-muted-foreground mb-4">
+            How each strategic goal is performing across tracked posts.
+          </p>
+          {summary?.byIntent && summary.byIntent.length > 0 ? (
+            <div className="space-y-4">
+              {summary.byIntent.map(row => {
+                const maxIntentEngagement = Math.max(...summary.byIntent!.map(r => r.engagements), 1);
+                const pct = (row.engagements / maxIntentEngagement) * 100;
+                const avg = row.postsWithMetrics > 0 ? row.engagements / row.postsWithMetrics : 0;
+                const label = row.intent ? (INTENT_LABELS[row.intent] || row.intent) : "No goal set";
+                return (
+                  <div key={row.intent ?? "__none__"}>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs font-medium text-foreground">{label}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {fmt(row.engagements)} engagements · avg {avg.toFixed(1)}/post
+                      </span>
+                    </div>
+                    <div className="h-2 bg-muted rounded-full overflow-hidden">
+                      <div
+                        className="h-full rounded-full transition-all bg-primary"
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                    <span className="text-[10px] text-muted-foreground">
+                      {row.postsWithMetrics}/{row.posts} posts tracked
+                      {row.postsWithMetrics > 0 && row.postsWithMetrics < 3 && " · early data — treat as a hint"}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground text-center py-4">
+              No goal-level data yet — publish and track a few posts with goals to see this breakdown.
+            </p>
+          )}
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 mb-6">

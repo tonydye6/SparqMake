@@ -1,6 +1,6 @@
 import { useReducer, useEffect, useState, useCallback, useRef, useMemo } from "react";
 import type { Dispatch, MouseEvent } from "react";
-import { Sparkles, LayoutGrid, Wand2, RefreshCw, ArrowRight, Check, Plus, Loader2, Share2, AlertTriangle, Send, Clapperboard, Music, Volume2, VolumeX } from "lucide-react";
+import { Sparkles, LayoutGrid, Wand2, RefreshCw, ArrowRight, Check, Plus, Loader2, Share2, AlertTriangle, Send, Clapperboard, Music, Volume2, VolumeX, TrendingUp } from "lucide-react";
 import { FaInstagram, FaXTwitter, FaTiktok, FaLinkedin } from "react-icons/fa6";
 import type { IconType } from "react-icons";
 import { useGetBrands, useGetTemplates, useGetStyleProfiles } from "@workspace/api-client-react";
@@ -792,6 +792,8 @@ function BeatBoard({
   const [moreLoading, setMoreLoading] = useState(false);
   const [usedAssets, setUsedAssets] = useState<UsedAssetChip[]>([]);
   const startedRef = useRef(false);
+  // Performance-aware recommendations for the confirmed/inferred goal.
+  const insights = useIntentInsights(state.brandId, state.intent?.intent);
 
   // Attribution chips: which brand assets this creative was generated with.
   useEffect(() => {
@@ -947,6 +949,8 @@ function BeatBoard({
         </div>
       </div>
 
+      <InsightsPanel insights={insights} />
+
       {usedAssets.length > 0 && (
         <div className="flex items-center gap-2 flex-wrap" data-testid="board-asset-chips">
           <span className="text-xs text-muted-foreground">Made with:</span>
@@ -1079,6 +1083,125 @@ function IntentChip({ state, dispatch }: { state: StudioState; dispatch: Dispatc
         </div>
       )}
     </div>
+  );
+}
+
+// --- Performance-aware recommendations ---
+// Data-backed guidance from the insights service: which platforms and posting
+// times have worked for this intent, plus reference posts. Degrades honestly —
+// with little or no data the server says so and the panel reflects it.
+
+interface InsightPlatform {
+  platform: string;
+  posts: number;
+  avgEngagement: number;
+  emphasis: number;
+}
+
+interface InsightTime {
+  dayPart: string;
+  dayPartLabel: string;
+  suggestedHour: number;
+  posts: number;
+  avgEngagement: number;
+}
+
+interface InsightRefPost {
+  calendarEntryId: string;
+  creativeName: string;
+  platform: string;
+  engagements: number;
+}
+
+interface IntentInsights {
+  intent: string | null;
+  intentLabel: string | null;
+  sampleSize: number;
+  confidence: "none" | "low" | "medium" | "high";
+  platforms: InsightPlatform[];
+  bestTimes: InsightTime[];
+  topPosts: InsightRefPost[];
+  reasoning: string[];
+}
+
+// Fetches recommendations for a brand+intent; refetches when either changes.
+function useIntentInsights(brandId: string | null, intent: string | null | undefined): IntentInsights | null {
+  const [insights, setInsights] = useState<IntentInsights | null>(null);
+  useEffect(() => {
+    if (!intent) {
+      setInsights(null);
+      return;
+    }
+    let cancelled = false;
+    const params = new URLSearchParams({ intent });
+    if (brandId) params.set("brandId", brandId);
+    void apiFetch(`${API_BASE}/api/insights/recommendations?${params}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (!cancelled && data) setInsights(data as IntentInsights);
+      })
+      .catch(() => {
+        /* recommendations are best-effort; panel just won't show */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [brandId, intent]);
+  return insights;
+}
+
+// "9am" / "6pm" formatting for suggested schedule hours.
+function formatHour(hour: number): string {
+  const h12 = hour % 12 === 0 ? 12 : hour % 12;
+  return `${h12}${hour < 12 ? "am" : "pm"}`;
+}
+
+const FANOUT_PLATFORM_LABELS: Record<string, string> = {
+  twitter: "X",
+  instagram_feed: "Instagram Feed",
+  instagram_story: "Instagram Story",
+  linkedin: "LinkedIn",
+  tiktok: "TikTok",
+  youtube: "YouTube",
+};
+
+// Compact "what's worked" panel shown on the Board after the intent is known.
+function InsightsPanel({ insights }: { insights: IntentInsights | null }) {
+  if (!insights) return null;
+  const lowData = insights.confidence === "none" || insights.confidence === "low";
+  return (
+    <Card className="p-4 space-y-2 border-primary/20 bg-primary/[0.03]" data-testid="insights-panel">
+      <div className="flex items-center gap-2">
+        <TrendingUp size={15} className="text-primary" />
+        <h3 className="text-sm font-semibold text-foreground">
+          What's worked for {insights.intentLabel ? insights.intentLabel.toLowerCase() : "this goal"}
+        </h3>
+        {insights.sampleSize > 0 && (
+          <span className="text-[11px] text-muted-foreground">
+            {insights.sampleSize} tracked {insights.sampleSize === 1 ? "post" : "posts"} ·{" "}
+            {insights.confidence} confidence
+          </span>
+        )}
+      </div>
+      {insights.reasoning.map((line, i) => (
+        <p key={i} className={cn("text-xs", lowData && i === 0 ? "text-amber-500" : "text-muted-foreground")}>
+          {line}
+        </p>
+      ))}
+      {insights.topPosts.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 pt-1">
+          <span className="text-[11px] text-muted-foreground">Reference posts:</span>
+          {insights.topPosts.slice(0, 3).map((p) => (
+            <span
+              key={p.calendarEntryId}
+              className="inline-flex items-center rounded-full border border-border bg-muted/50 px-2 py-0.5 text-[11px] text-foreground"
+            >
+              {p.creativeName} · {FANOUT_PLATFORM_LABELS[p.platform] || p.platform} · {p.engagements} eng.
+            </span>
+          ))}
+        </div>
+      )}
+    </Card>
   );
 }
 
@@ -1708,6 +1831,22 @@ function BeatFanout({ state, dispatch }: { state: StudioState; dispatch: Dispatc
   const approveIds = useMemo(() => new Set(state.fanoutApproved), [state.fanoutApproved]);
   const [approving, setApproving] = useState(false);
   const startedRef = useRef(false);
+  // Performance-aware fan-out: platform emphasis + suggested schedule times
+  // derived from this goal's engagement history.
+  const insights = useIntentInsights(state.brandId, state.intent?.intent);
+  const bestTime = insights?.bestTimes?.[0];
+  // Suggested schedule hour from the best-performing day-part; only trusted
+  // beyond "low" confidence — otherwise the default (9am) stands.
+  const suggestedHour =
+    insights && bestTime && insights.confidence !== "none" && insights.confidence !== "low"
+      ? bestTime.suggestedHour
+      : null;
+  const recommendedPlatforms = useMemo(() => {
+    if (!insights || insights.sampleSize === 0) return new Set<string>();
+    return new Set(
+      insights.platforms.filter((p) => p.emphasis >= 0.6 && p.avgEngagement > 0).map((p) => p.platform),
+    );
+  }, [insights]);
 
   // On entry, reload any existing fan-out variants for this winner (re-entry).
   // Fan-out children carry the winner as sourceVariantId and have no varyMode
@@ -1803,9 +1942,30 @@ function BeatFanout({ state, dispatch }: { state: StudioState; dispatch: Dispatc
           <p className="text-muted-foreground">Pick and finish a take first.</p>
         ) : (
           <>
+            {insights && (
+              <div
+                className="rounded-lg border border-primary/20 bg-primary/[0.03] p-3 space-y-1"
+                data-testid="fanout-insights"
+              >
+                <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                  <TrendingUp size={13} className="text-primary" />
+                  Based on your results
+                </div>
+                {insights.reasoning.map((line, i) => (
+                  <p key={i} className="text-xs text-muted-foreground">{line}</p>
+                ))}
+                {suggestedHour !== null && bestTime && (
+                  <p className="text-xs text-muted-foreground">
+                    Scheduling will suggest {bestTime.dayPartLabel.split(" (")[0]} ({formatHour(suggestedHour)}) — your
+                    best-performing window. You confirm every time before it posts.
+                  </p>
+                )}
+              </div>
+            )}
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               {FANOUT_PLATFORMS.map((p) => {
                 const on = selected.has(p.key);
+                const recommended = recommendedPlatforms.has(p.key);
                 return (
                   <button
                     key={p.key}
@@ -1820,6 +1980,11 @@ function BeatFanout({ state, dispatch }: { state: StudioState; dispatch: Dispatc
                     <span className="text-sm font-medium text-foreground">
                       {p.group}
                       {p.sub && <span className="text-muted-foreground font-normal"> · {p.sub}</span>}
+                      {recommended && (
+                        <span className="ml-1.5 inline-flex items-center rounded-full bg-primary/10 text-primary px-1.5 py-0.5 text-[10px] font-medium align-middle">
+                          top performer
+                        </span>
+                      )}
                     </span>
                     {on && <Check size={15} className="ml-auto text-primary" />}
                   </button>
@@ -1875,6 +2040,7 @@ function BeatFanout({ state, dispatch }: { state: StudioState; dispatch: Dispatc
             key={v.id}
             variant={v}
             creativeId={state.creativeId ?? ""}
+            suggestedHour={suggestedHour}
             selectedForApprove={approveIds.has(v.id)}
             onToggleApprove={() => toggleApprove(v.id)}
             onPatched={patchVariant}
@@ -1888,12 +2054,16 @@ function BeatFanout({ state, dispatch }: { state: StudioState; dispatch: Dispatc
 function FanoutCard({
   variant,
   creativeId,
+  suggestedHour,
   selectedForApprove,
   onToggleApprove,
   onPatched,
 }: {
   variant: BoardVariant;
   creativeId: string;
+  // Data-backed suggested schedule hour (null = no confident insight; the
+  // 9am default applies). The user still confirms on the Calendar.
+  suggestedHour: number | null;
   selectedForApprove: boolean;
   onToggleApprove: () => void;
   onPatched: (v: BoardVariant) => void;
@@ -1956,14 +2126,16 @@ function FanoutCard({
     }
   }
 
-  // Send tail: schedule this approved variant. Defaults to tomorrow 9am (adjust on
-  // the Calendar). Creates a calendar entry that the Calendar can then publish.
+  // Send tail: schedule this approved variant. Defaults to tomorrow 9am, or the
+  // data-backed suggested hour when engagement history supports one. Always
+  // adjustable/confirmable on the Calendar — never auto-posts.
   async function schedule() {
     setScheduling(true);
     try {
+      const hour = suggestedHour ?? 9;
       const when = new Date();
       when.setDate(when.getDate() + 1);
-      when.setHours(9, 0, 0, 0);
+      when.setHours(hour, 0, 0, 0);
       await postJson(`${API_BASE}/api/calendar-entries`, {
         creativeId,
         variantId: variant.id,
@@ -1971,7 +2143,12 @@ function FanoutCard({
         scheduledAt: when.toISOString(),
       });
       setScheduled(true);
-      toast({ title: "Added to Calendar", description: "Scheduled for tomorrow 9am. Adjust or publish on the Calendar." });
+      toast({
+        title: "Added to Calendar",
+        description: suggestedHour !== null
+          ? `Scheduled for tomorrow ${formatHour(hour)} — your best-performing window. Adjust or publish on the Calendar.`
+          : "Scheduled for tomorrow 9am. Adjust or publish on the Calendar.",
+      });
     } catch (err) {
       toast({ variant: "destructive", title: "Schedule failed", description: err instanceof Error ? err.message : "Please try again." });
     } finally {
