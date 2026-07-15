@@ -136,6 +136,7 @@ export interface Creative {
   sourceCreativeId?: string | null;
   intent?: string | null;
   styleProfileId?: string | null;
+  personaId?: string | null;
   selectedLogoAssetId?: string | null;
   referenceBalance?: CreativeReferenceBalance;
   referenceOverrides?: CreativeReferenceOverrides;
@@ -551,6 +552,7 @@ export interface CreateCreativeInput {
   selectedHashtagSets?: string[] | null;
   intent?: string | null;
   styleProfileId?: string | null;
+  personaId?: string | null;
   selectedLogoAssetId?: string | null;
   referenceBalance?: CreateCreativeInputReferenceBalance;
   referenceOverrides?: CreateCreativeInputReferenceOverrides;
@@ -582,6 +584,7 @@ export interface UpdateCreativeInput {
   selectedHashtagSets?: string[] | null;
   intent?: string | null;
   styleProfileId?: string | null;
+  personaId?: string | null;
   selectedLogoAssetId?: string | null;
   referenceBalance?: UpdateCreativeInputReferenceBalance;
   referenceOverrides?: UpdateCreativeInputReferenceOverrides;

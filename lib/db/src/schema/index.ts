@@ -1,5 +1,6 @@
 export * from "./brands";
 export * from "./style-profiles";
+export * from "./designer-personas";
 export * from "./templates";
 export * from "./template-versions";
 export * from "./template-recommendations";

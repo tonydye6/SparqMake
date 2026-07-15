@@ -22,6 +22,7 @@ export interface Creative {
   sourceCreativeId?: string | null;
   intent?: string | null;
   styleProfileId?: string | null;
+  personaId?: string | null;
   selectedLogoAssetId?: string | null;
   referenceBalance?: CreativeReferenceBalance;
   referenceOverrides?: CreativeReferenceOverrides;

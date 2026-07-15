@@ -134,6 +134,13 @@
       "when": 1784139044846,
       "tag": "0018_lumpy_proteus",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1784142047471,
+      "tag": "0019_loose_naoko",
+      "breakpoints": true
     }
   ]
 }

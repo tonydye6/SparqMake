@@ -87,7 +87,7 @@ import {
   Plus, Save, Hexagon, Shield, Hash, Type, Trash2, Edit2, LayoutTemplate,
   Share2, RefreshCw, Unplug, AlertTriangle, CheckCircle, CheckCircle2, XCircle,
   BarChart3, Sparkles, History, ChevronDown, ChevronUp, Check, X as XIcon,
-  Image as ImageIcon, Layers, FileType, Upload, ArrowRight, Clock, Loader2
+  Image as ImageIcon, Layers, FileType, Upload, ArrowRight, Clock, Loader2, Palette
 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
@@ -110,6 +110,7 @@ import { cn, apiFetch, isForbidden, PERMISSION_DENIED_MESSAGE } from "@/lib/util
 import { useIsAdmin, useAuth } from "@/hooks/useAuth";
 import { useBrandReadiness } from "@/hooks/useBrandReadiness";
 import { LayoutSpecEditor } from "@/components/layout-editor";
+import DesignersTab from "@/components/DesignersTab";
 import { ScheduleProfileEditor } from "@/components/ScheduleProfileEditor";
 
 function FontPreview({ fontId, fileUrl }: { fontId: string; fileUrl: string }) {
@@ -156,7 +157,10 @@ export default function Settings() {
   const isAdmin = useIsAdmin();
   const tabParam = params.get("tab");
   const initialTab =
-    tabParam === "accounts" ? "accounts" : tabParam === "users" && isAdmin ? "users" : "brands";
+    tabParam === "accounts" ? "accounts"
+    : tabParam === "designers" ? "designers"
+    : tabParam === "users" && isAdmin ? "users"
+    : "brands";
   const [activeSettingsTab, setActiveSettingsTab] = useState(initialTab);
 
   return (
@@ -171,6 +175,9 @@ export default function Settings() {
           <TabsTrigger value="brands" className="data-[state=active]:bg-background data-[state=active]:shadow-sm px-6 py-2">
             <Hexagon className="mr-2 h-4 w-4" /> Brand Settings
           </TabsTrigger>
+          <TabsTrigger value="designers" className="data-[state=active]:bg-background data-[state=active]:shadow-sm px-6 py-2">
+            <Palette className="mr-2 h-4 w-4" /> Designers
+          </TabsTrigger>
           <TabsTrigger value="accounts" className="data-[state=active]:bg-background data-[state=active]:shadow-sm px-6 py-2">
             <Share2 className="mr-2 h-4 w-4" /> Connected Accounts
           </TabsTrigger>
@@ -183,6 +190,9 @@ export default function Settings() {
 
         <TabsContent value="brands" className="flex-1 flex flex-col min-h-0 mt-0">
           <BrandSettingsTab />
+        </TabsContent>
+        <TabsContent value="designers" className="flex-1 overflow-y-auto mt-0 pr-4 pb-12">
+          <DesignersTab />
         </TabsContent>
         <TabsContent value="accounts" className="flex-1 overflow-y-auto mt-0 pr-4 pb-12">
           <ConnectedAccountsTab />

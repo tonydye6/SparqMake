@@ -3,7 +3,8 @@ import { Router, type IRouter, type Request, type Response } from "express";
 import { eq, and, inArray } from "drizzle-orm";
 import { db, creativesTable, creativeVariantsTable, costLogsTable, refinementLogsTable, templatesTable, appSettingsTable, assetsTable, assetPairingsTable, brandsTable, generationPacketLogsTable } from "@workspace/db";
 import { sql, gte } from "drizzle-orm";
-import { assembleContext, resolveStyleProfile, type SelectedAssetRef } from "../services/context-assembly.js";
+import { assembleContext, resolveStyleProfile, resolveDesignerPersona, type SelectedAssetRef } from "../services/context-assembly.js";
+import { designerPersonasTable, type DesignerPersona, type PersonaReferenceImage } from "@workspace/db";
 import { generateCaptions } from "../services/claude.js";
 import { generateAllImages, generateImage, outpaintImage, PLATFORM_CONFIGS, type ReferenceImage, type VaryMode } from "../services/imagen.js";
 import { AI_MODELS, estimateClaudeCost, estimateGeminiTextCost, estimateImagenCost } from "../lib/ai-config.js";
@@ -14,7 +15,7 @@ import { detectLogoIntent, type LogoPlacementPosition } from "../services/logo-i
 import { checkBrandReadiness } from "../lib/brand-readiness.js";
 import { buildGenerationPacket, normalizeBalance, MAX_IMAGE_REFERENCES, type ReferenceOverrides } from "../services/packet-assembly.js";
 import { recordAssetUsage, packetAssetIds } from "../services/asset-usage.js";
-import { writeBuffer, writeFromFile, readBuffer, deleteObject, resolveUrl } from "../services/storage.js";
+import { writeBuffer, writeFromFile, readBuffer, deleteObject, resolveUrl, contentTypeFor } from "../services/storage.js";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
@@ -75,6 +76,41 @@ async function readFileByUrl(fileUrl: string | null | undefined): Promise<Buffer
 /** Soft-delete a generated artifact by filename (used to clean up after failures). */
 async function deleteGenerated(filename: string): Promise<void> {
   await deleteObject({ namespace: "generated", filename });
+}
+
+// Designer Persona reference images: stored as plain file URLs on the persona
+// (account-scoped, not brand assets), loaded into buffers at generation time.
+// Unreadable/missing files degrade gracefully (skipped).
+const MAX_PERSONA_REFERENCES = 2;
+
+async function loadPersonaReferenceImages(persona: DesignerPersona | null): Promise<ReferenceImage[]> {
+  if (!persona) return [];
+  const refs = (persona.referenceImages || []) as PersonaReferenceImage[];
+  const out: ReferenceImage[] = [];
+  for (const ref of refs) {
+    if (out.length >= MAX_PERSONA_REFERENCES) break;
+    const loc = resolveUrl(ref.url);
+    if (!loc) continue;
+    const buf = await readBuffer(loc);
+    if (!buf) continue;
+    out.push({
+      imageBuffer: buf,
+      mimeType: contentTypeFor(loc.filename),
+      role: "style_reference",
+      description: `Style inspiration from "${persona.name}"${ref.label ? ` (${ref.label})` : ""}.`,
+    });
+  }
+  return out;
+}
+
+// Persona reference images take STYLE-SLOT PRIORITY: subjects keep their slots
+// first, then persona style refs, then packet style refs — capped at the
+// model's 3 attached-reference limit.
+function mergePersonaReferences(base: ReferenceImage[], personaRefs: ReferenceImage[]): ReferenceImage[] {
+  if (personaRefs.length === 0) return base;
+  const subjects = base.filter(r => r.role === "subject_reference");
+  const styles = base.filter(r => r.role === "style_reference");
+  return [...subjects, ...personaRefs, ...styles].slice(0, 3);
 }
 
 interface ResolvedLogo {
@@ -370,6 +406,11 @@ router.post("/creatives/:id/generate", generationLimiter, async (req: Request, r
       sendEvent("progress", { step: "packet", message: `Applying design style "${styleProfile.name}"` });
     }
 
+    const designerPersona = await resolveDesignerPersona(campaign.personaId);
+    if (designerPersona) {
+      sendEvent("progress", { step: "packet", message: `Applying style inspiration "${designerPersona.name}"` });
+    }
+
     if (selectedAssetIds.length > 0 || styleRefIds.length > 0) {
       packet = await buildGenerationPacket({
         creativeId,
@@ -397,6 +438,12 @@ router.post("/creatives/:id/generate", generationLimiter, async (req: Request, r
       sendEvent("progress", { step: "packet", message: "No assets selected, using text-only generation", done: true });
     }
 
+    const personaRefs = await loadPersonaReferenceImages(designerPersona);
+    if (personaRefs.length > 0) {
+      referenceImages = mergePersonaReferences(referenceImages, personaRefs);
+      sendEvent("progress", { step: "references", message: `${personaRefs.length} style-inspiration reference(s) attached` });
+    }
+
     sendEvent("progress", { step: "context", message: "Assembling context from brand DNA..." });
     const ctx = await assembleContext({
       brandId: campaign.brandId,
@@ -408,6 +455,7 @@ router.post("/creatives/:id/generate", generationLimiter, async (req: Request, r
       intent: campaign.intent || undefined,
       generationPacket: packet,
       styleProfile,
+      designerPersona,
       referenceBalance: campaign.referenceBalance,
     });
     sendEvent("progress", { step: "context", message: "Context assembled", done: true });
@@ -1046,7 +1094,7 @@ function budgetExceededBody(todaySpend: number, threshold: number) {
 async function generateVariantImage(
   campaign: typeof creativesTable.$inferSelect,
   platform: string,
-  opts: { varyMode?: VaryMode; headlineText?: string | null } = {},
+  opts: { varyMode?: VaryMode; headlineText?: string | null; personaOverride?: DesignerPersona | null } = {},
 ): Promise<{ rawFilename: string; compFilename: string; compositingFailed: boolean }> {
   const config = PLATFORM_CONFIGS[platform];
   if (!config) throw new Error(`Unknown platform: ${platform}`);
@@ -1057,6 +1105,11 @@ async function generateVariantImage(
 
   const styleProfile = await resolveStyleProfile(campaign.brandId, campaign.styleProfileId);
   const styleRefIds = styleProfile?.referenceAssetIds || [];
+  // Compare mode passes an explicit persona (or null); normal takes use the
+  // creative's persisted persona.
+  const designerPersona = opts.personaOverride !== undefined
+    ? opts.personaOverride
+    : await resolveDesignerPersona(campaign.personaId);
 
   let packet: Awaited<ReturnType<typeof buildGenerationPacket>> | null = null;
   let referenceImages: ReferenceImage[] = [];
@@ -1075,6 +1128,8 @@ async function generateVariantImage(
     referenceImages = await buildReferenceImages(packet);
   }
 
+  referenceImages = mergePersonaReferences(referenceImages, await loadPersonaReferenceImages(designerPersona));
+
   const ctx = await assembleContext({
     brandId: campaign.brandId,
     templateId: campaign.templateId,
@@ -1085,6 +1140,7 @@ async function generateVariantImage(
       intent: campaign.intent || undefined,
     generationPacket: packet,
     styleProfile,
+    designerPersona,
     referenceBalance: campaign.referenceBalance,
   });
 
@@ -1198,6 +1254,7 @@ async function runVariantImageGeneration(
 
     const styleProfile = await resolveStyleProfile(campaign.brandId, campaign.styleProfileId);
     const styleRefIds = styleProfile?.referenceAssetIds || [];
+    const designerPersona = await resolveDesignerPersona(campaign.personaId);
 
     let packet: Awaited<ReturnType<typeof buildGenerationPacket>> | null = null;
     let referenceImages: ReferenceImage[] = [];
@@ -1217,6 +1274,8 @@ async function runVariantImageGeneration(
       referenceImages = await buildReferenceImages(packet);
     }
 
+    referenceImages = mergePersonaReferences(referenceImages, await loadPersonaReferenceImages(designerPersona));
+
     const ctx = await assembleContext({
       brandId: campaign.brandId,
       templateId: campaign.templateId!,
@@ -1227,6 +1286,7 @@ async function runVariantImageGeneration(
       intent: campaign.intent || undefined,
       generationPacket: packet,
       styleProfile,
+      designerPersona,
       referenceBalance: campaign.referenceBalance,
     });
 
@@ -1495,6 +1555,118 @@ router.post("/creatives/:id/takes", generationLimiter, validateRequest({ params:
     }
     const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: `Take generation failed: ${message}` });
+  }
+});
+
+const CompareTakesBody = z.object({
+  personaIds: z.array(z.string().min(1)).min(2).max(3),
+});
+
+// Designer-persona compare mode: run ONE brief through 2-3 personas and get a
+// labeled side-by-side take per persona. Each take is generated with that
+// persona's fingerprint + reference images overriding the creative's own
+// persona setting; the produced variants carry persona_id so the UI can label
+// them and let the team pick a winner. Cost = one image per persona (the UI
+// shows the multiplied-cost warning before calling).
+router.post("/creatives/:id/compare-takes", generationLimiter, validateRequest({ params: CreativeParams, body: CompareTakesBody }), async (req: Request, res: Response): Promise<void> => {
+  const creativeId = str(req.params.id);
+  const personaIds = [...new Set(req.body.personaIds as string[])];
+  if (personaIds.length < 2) {
+    res.status(400).json({ error: "Pick at least 2 distinct designers to compare" });
+    return;
+  }
+
+  const [campaign] = await db.select().from(creativesTable).where(eq(creativesTable.id, creativeId));
+  if (!campaign) {
+    res.status(404).json({ error: "Creative not found" });
+    return;
+  }
+  if (!campaign.templateId) {
+    res.status(400).json({ error: "Creative must have a template" });
+    return;
+  }
+
+  const personas = await db.select().from(designerPersonasTable)
+    .where(inArray(designerPersonasTable.id, personaIds));
+  if (personas.length !== personaIds.length) {
+    const found = new Set(personas.map(p => p.id));
+    res.status(400).json({ error: "Some designers were not found", personaIds: personaIds.filter(id => !found.has(id)) });
+    return;
+  }
+  const byId = new Map(personas.map(p => [p.id, p]));
+  const ordered = personaIds.map(id => byId.get(id)!);
+
+  const budget = await reserveImageBudget(creativeId, ordered.length);
+  if (!budget.ok) {
+    res.status(429).json(budgetExceededBody(budget.todaySpend, budget.threshold));
+    return;
+  }
+  const reservationId = budget.reservationId;
+
+  try {
+    const settled = await Promise.allSettled(
+      ordered.map(persona => generateVariantImage(campaign, BOARD_FORMAT, { personaOverride: persona })),
+    );
+    const produced: Array<{ persona: DesignerPersona; files: { rawFilename: string; compFilename: string; compositingFailed: boolean } }> = [];
+    settled.forEach((s, i) => {
+      if (s.status === "fulfilled") produced.push({ persona: ordered[i], files: s.value });
+    });
+
+    if (produced.length === 0) {
+      if (reservationId) {
+        try { await db.delete(costLogsTable).where(eq(costLogsTable.id, reservationId)); } catch {}
+      }
+      res.status(502).json({ error: "Could not generate any compare takes. Please try again." });
+      return;
+    }
+
+    const config = PLATFORM_CONFIGS[BOARD_FORMAT];
+    let created;
+    try {
+      created = await db.transaction(async (tx) => {
+        const rows: Array<typeof creativeVariantsTable.$inferSelect & { personaName?: string }> = [];
+        for (const p of produced) {
+          const [row] = await tx.insert(creativeVariantsTable)
+            .values({
+              creativeId,
+              platform: BOARD_FORMAT,
+              aspectRatio: config.aspectRatio,
+              rawImageUrl: `/api/files/generated/${p.files.rawFilename}`,
+              compositedImageUrl: `/api/files/generated/${p.files.compFilename}`,
+              status: "generated",
+              compositingFailed: p.files.compositingFailed ? `Compositing failed for ${BOARD_FORMAT}. Using raw image as fallback.` : null,
+              personaId: p.persona.id,
+            })
+            .returning();
+          rows.push({ ...row, personaName: p.persona.name });
+        }
+        if (reservationId) {
+          await tx.delete(costLogsTable).where(eq(costLogsTable.id, reservationId));
+        }
+        await tx.insert(costLogsTable).values({
+          creativeId,
+          service: "gemini",
+          operation: "persona_compare",
+          model: AI_MODELS.GEMINI_FLASH_IMAGE,
+          costUsd: estimateImagenCost(produced.length),
+        });
+        return rows;
+      });
+    } catch (dbErr) {
+      for (const p of produced) {
+        await deleteGenerated(p.files.rawFilename);
+        await deleteGenerated(p.files.compFilename);
+      }
+      throw dbErr;
+    }
+
+    res.status(201).json({ takes: created });
+  } catch (error) {
+    if (reservationId) {
+      try { await db.delete(costLogsTable).where(eq(costLogsTable.id, reservationId)); } catch {}
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: `Compare generation failed: ${message}` });
   }
 });
 

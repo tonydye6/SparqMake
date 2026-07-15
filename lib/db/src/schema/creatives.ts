@@ -4,6 +4,7 @@ import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { brandsTable } from "./brands";
 import { styleProfilesTable } from "./style-profiles";
+import { designerPersonasTable } from "./designer-personas";
 import { templatesTable } from "./templates";
 import { socialAccountsTable } from "./social-accounts";
 import { usersTable } from "./users";
@@ -39,6 +40,10 @@ export const creativesTable = pgTable("creatives", {
   // falls back to the brand's default style, or no style at all). Persisted so
   // regenerate/vary/takes reuse the same style.
   styleProfileId: text("style_profile_id").references(() => styleProfilesTable.id, { onDelete: "set null" }),
+  // Designer Persona ("Inspired by ...") chosen for this creative's
+  // generations. Account-scoped style inspiration whose fingerprint takes
+  // look-and-feel precedence over the style profile. Nullable — no persona.
+  personaId: text("persona_id").references(() => designerPersonasTable.id, { onDelete: "set null" }),
   // The compositing logo chosen for this creative's generations. Values:
   //   NULL   — auto (style profile's default logo → brand default logo)
   //   "none" — explicitly no logo overlay
@@ -121,6 +126,9 @@ export const creativeVariantsTable = pgTable("creative_variants", {
   //   directed typography, verified by OCR); fan-out re-renders per aspect.
   //   "overlay" (or NULL) — the design-aware SVG overlay path composited it.
   headlineRenderMode: text("headline_render_mode"),
+  // Designer-persona compare mode: which persona produced this take. Labels
+  // side-by-side compare takes; NULL for normal generations.
+  personaId: text("persona_id").references(() => designerPersonasTable.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (table) => [

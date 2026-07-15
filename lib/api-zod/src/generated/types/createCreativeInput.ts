@@ -19,6 +19,7 @@ export interface CreateCreativeInput {
   selectedHashtagSets?: string[] | null;
   intent?: string | null;
   styleProfileId?: string | null;
+  personaId?: string | null;
   selectedLogoAssetId?: string | null;
   referenceBalance?: CreateCreativeInputReferenceBalance;
   referenceOverrides?: CreateCreativeInputReferenceOverrides;

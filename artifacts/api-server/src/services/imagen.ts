@@ -33,7 +33,7 @@ const VARY_DIRECTIVES: Record<VaryMode, string> = {
     "VARIATION DIRECTIVE: Keep the primary subject recognizable and consistent. Vary the visual style, treatment, background, and mood around it.",
 };
 
-function buildImagePrompt(ctx: AssembledContext, referenceImages?: ReferenceImage[], varyMode?: VaryMode): string {
+export function buildImagePrompt(ctx: AssembledContext, referenceImages?: ReferenceImage[], varyMode?: VaryMode): string {
   const parts: string[] = [];
 
   if (ctx.brand.characterStyleRules) {
@@ -112,6 +112,28 @@ function buildImagePrompt(ctx: AssembledContext, referenceImages?: ReferenceImag
     if (ctx.styleProfile.colorTreatment) styleBits.push(`COLOR TREATMENT: ${ctx.styleProfile.colorTreatment}`);
     if (styleBits.length > 0) {
       parts.push(`DESIGN STYLE — "${ctx.styleProfile.name}":\n` + styleBits.join("\n"));
+    }
+  }
+
+  // Designer Persona ("Inspired by ..."): an account-scoped style inspiration.
+  // Injected AFTER the Design Style block with an explicit precedence rule —
+  // the persona's fingerprint wins on look-and-feel conflicts, while brand DNA
+  // (colors, coherence, imagenPrefix) still applies.
+  if (ctx.designerPersona) {
+    const p = ctx.designerPersona;
+    const bits: string[] = [];
+    if (p.typography) bits.push(`TYPOGRAPHY LANGUAGE: ${p.typography}`);
+    if (p.composition) bits.push(`COMPOSITION: ${p.composition}`);
+    if (p.colorPhilosophy) bits.push(`COLOR PHILOSOPHY: ${p.colorPhilosophy}`);
+    if (p.textureAndEffects) bits.push(`TEXTURE & EFFECTS: ${p.textureAndEffects}`);
+    if (p.mood) bits.push(`MOOD: ${p.mood}`);
+    if (bits.length > 0) {
+      parts.push(
+        `STYLE INSPIRATION — inspired by "${p.name}":\n` + bits.join("\n") +
+        (ctx.styleProfile
+          ? `\nPRECEDENCE: Where this style inspiration conflicts with the DESIGN STYLE above, this style inspiration takes precedence for look and feel. Brand identity, brand colors, and brand coherence rules still apply.`
+          : ""),
+      );
     }
   }
 

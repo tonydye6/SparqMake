@@ -1,8 +1,8 @@
 import { sanitizeLogoInstructions } from "./logo-intent.js";
-import { db, brandsTable, templatesTable, assetsTable, hashtagSetsTable, styleProfilesTable } from "@workspace/db";
+import { db, brandsTable, templatesTable, assetsTable, hashtagSetsTable, styleProfilesTable, designerPersonasTable } from "@workspace/db";
 import { eq, and, inArray, sql } from "drizzle-orm";
 import type { GenerationPacket } from "./packet-assembly.js";
-import type { StyleProfile } from "@workspace/db";
+import type { StyleProfile, DesignerPersona } from "@workspace/db";
 
 export interface SelectedAssetRef {
   assetId: string;
@@ -25,8 +25,25 @@ export interface AssembledContext {
   // The design style profile applied to this generation (or null). Injects its
   // style direction + color treatment into the image prompt.
   styleProfile?: StyleProfile | null;
+  // Designer Persona ("Inspired by ...") applied to this generation (or null).
+  // Account-scoped style inspiration; its fingerprint is injected into the
+  // image prompt with look-and-feel PRECEDENCE over the style profile (brand
+  // DNA — colors, coherence, imagenPrefix — still applies).
+  designerPersona?: DesignerPersona | null;
   // Subject-vs-style reference balance for prompt emphasis (subject|balanced|style).
   referenceBalance?: string | null;
+}
+
+// Resolve the designer persona chosen for a creative. Personas are
+// account-scoped, so there is no brand filter and no default fallback: no
+// personaId means no persona.
+export async function resolveDesignerPersona(
+  personaId?: string | null,
+): Promise<DesignerPersona | null> {
+  if (!personaId) return null;
+  const [persona] = await db.select().from(designerPersonasTable)
+    .where(eq(designerPersonasTable.id, personaId));
+  return persona || null;
 }
 
 // Resolve the style profile to use for a creative: the creative's explicitly
@@ -56,6 +73,7 @@ export async function assembleContext(params: {
   generationPacket?: GenerationPacket | null;
   intent?: string | null;
   styleProfile?: StyleProfile | null;
+  designerPersona?: DesignerPersona | null;
   referenceBalance?: string | null;
 }): Promise<AssembledContext> {
   const [brand] = await db.select().from(brandsTable).where(eq(brandsTable.id, params.brandId));
@@ -147,6 +165,7 @@ export async function assembleContext(params: {
     generationPacket: params.generationPacket || null,
     intent: params.intent || null,
     styleProfile: params.styleProfile || null,
+    designerPersona: params.designerPersona || null,
     referenceBalance: params.referenceBalance || null,
   };
 }

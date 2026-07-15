@@ -13,6 +13,15 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { TasteReactionChips } from "@/components/TasteReactionChips";
+import { useDesignerPersonas, type DesignerPersona } from "@/components/DesignersTab";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
 
@@ -157,6 +166,10 @@ interface StudioState {
   // Design style profile applied to image generation. null = brand default /
   // no style (server falls back to the brand's default profile if one exists).
   styleProfileId: string | null;
+  // Designer persona ("Inspired by ...") applied to image generation. null =
+  // no persona. Account-scoped, so it survives brand switches conceptually,
+  // but we still reset it with the rest of the downstream state for clarity.
+  personaId: string | null;
   // Logo overlaid on the finished images. null = auto (style profile's default
   // logo, then the brand default); "none" = explicitly no logo; otherwise a
   // logo asset id. Persisted onto the creative so regens reuse it.
@@ -177,6 +190,7 @@ type StudioAction =
   | { type: "setIntent"; intent: IntentInfo | null }
   | { type: "setSelectedAssets"; assets: SelectedAssetPick[] }
   | { type: "setStyleProfile"; styleProfileId: string | null }
+  | { type: "setPersona"; personaId: string | null }
   | { type: "setLogo"; logoAssetId: string | null }
   | { type: "setCreative"; creativeId: string }
   | { type: "selectVariant"; variantId: string }
@@ -192,6 +206,7 @@ const initialState: StudioState = {
   intent: null,
   selectedAssets: [],
   styleProfileId: null,
+  personaId: null,
   logoAssetId: null,
   selectedVariantId: null,
   fanoutApproved: [],
@@ -210,6 +225,7 @@ function reducer(state: StudioState, action: StudioAction): StudioState {
         intent: null,
         selectedAssets: [],
         styleProfileId: null,
+        personaId: null,
         logoAssetId: null,
         creativeId: null,
         selectedVariantId: null,
@@ -233,6 +249,8 @@ function reducer(state: StudioState, action: StudioAction): StudioState {
       return { ...state, selectedAssets: action.assets };
     case "setStyleProfile":
       return { ...state, styleProfileId: action.styleProfileId };
+    case "setPersona":
+      return { ...state, personaId: action.personaId };
     case "setLogo":
       return { ...state, logoAssetId: action.logoAssetId };
     case "setCreative":
@@ -412,6 +430,9 @@ function BeatHome({
     const def = styleProfiles.find((p) => p.isDefault);
     if (def) dispatch({ type: "setStyleProfile", styleProfileId: def.id });
   }, [styleProfiles, state.styleProfileId, dispatch]);
+
+  // Designer personas ("Inspired by...") — account-scoped style inspirations.
+  const { personas } = useDesignerPersonas();
 
   const loadConcepts = useCallback(
     async (briefArg?: string) => {
@@ -691,6 +712,29 @@ function BeatHome({
             </Select>
           </>
         )}
+        {personas.length > 0 && (
+          <>
+            <span className="text-sm text-muted-foreground">inspired by</span>
+            <Select
+              value={state.personaId ?? "none"}
+              onValueChange={(v) =>
+                dispatch({ type: "setPersona", personaId: v === "none" ? null : v })
+              }
+            >
+              <SelectTrigger className="w-[220px]" data-testid="studio-next-persona">
+                <SelectValue placeholder="No designer" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">No designer</SelectItem>
+                {personas.map((p) => (
+                  <SelectItem key={p.id} value={p.id}>
+                    {p.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </>
+        )}
         {logos.length > 0 && (
           <>
             <span className="text-sm text-muted-foreground">logo</span>
@@ -824,6 +868,10 @@ interface BoardVariant {
   audioSource?: string | null;
   audioUrl?: string | null;
   mergedVideoUrl?: string | null;
+  // Designer-persona compare mode: which persona produced this take (if any),
+  // plus the display name the compare endpoint attaches for labeling.
+  personaId?: string | null;
+  personaName?: string;
 }
 
 const VARY_OPTIONS: { mode: string; label: string }[] = [
@@ -1134,6 +1182,7 @@ function BeatBoard({
   const [phase, setPhase] = useState<"working" | "ready" | "error">("working");
   const [varyingId, setVaryingId] = useState<string | null>(null);
   const [moreLoading, setMoreLoading] = useState(false);
+  const [compareOpen, setCompareOpen] = useState(false);
   const [usedAssets, setUsedAssets] = useState<UsedAssetChip[]>([]);
   const startedRef = useRef(false);
   // Performance-aware recommendations for the confirmed/inferred goal.
@@ -1209,6 +1258,7 @@ function BeatBoard({
           // Goal-aware posting: persist the concept-selected or inferred intent.
           intent: state.intent?.intent || undefined,
           styleProfileId: state.styleProfileId || undefined,
+          personaId: state.personaId || undefined,
           // "none" is a real choice (no logo); null/auto is simply omitted.
           selectedLogoAssetId: state.logoAssetId || undefined,
           createdBy: "self", // server overrides this with the authenticated user
@@ -1288,6 +1338,16 @@ function BeatBoard({
             {moreLoading ? <Loader2 size={14} className="mr-1.5 animate-spin" /> : <Plus size={14} className="mr-1.5" />}
             More takes
           </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setCompareOpen(true)}
+            disabled={working || !state.creativeId}
+            data-testid="board-compare-designers"
+          >
+            <Wand2 size={14} className="mr-1.5" />
+            Compare designers
+          </Button>
           <Button size="sm" onClick={onAdvance} disabled={!state.selectedVariantId} data-testid="board-to-finish">
             To Finish
             <ArrowRight size={16} className="ml-1.5" />
@@ -1355,7 +1415,186 @@ function BeatBoard({
           ))}
         </div>
       )}
+
+      {state.creativeId && (
+        <CompareDesignersDialog
+          open={compareOpen}
+          onOpenChange={setCompareOpen}
+          creativeId={state.creativeId}
+          onKeepWinner={(winner) => {
+            setTakes((prev) => [...prev, winner]);
+            dispatch({ type: "selectVariant", variantId: winner.id });
+            setCompareOpen(false);
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+// --- Designer compare mode ---
+// Run the same brief through 2-3 designer personas side by side. Each take is
+// a full image generation, so we warn about the N× cost up front. The winner
+// joins the board (and gets selected); the other takes stay archived on the
+// creative but off the board.
+function CompareDesignersDialog({
+  open,
+  onOpenChange,
+  creativeId,
+  onKeepWinner,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  creativeId: string;
+  onKeepWinner: (winner: BoardVariant) => void;
+}) {
+  const { toast } = useToast();
+  const { personas, isLoading } = useDesignerPersonas();
+  const [picked, setPicked] = useState<string[]>([]);
+  const [running, setRunning] = useState(false);
+  const [results, setResults] = useState<BoardVariant[] | null>(null);
+
+  useEffect(() => {
+    if (!open) {
+      setPicked([]);
+      setResults(null);
+      setRunning(false);
+    }
+  }, [open]);
+
+  const toggle = (id: string) => {
+    setPicked((prev) =>
+      prev.includes(id) ? prev.filter((p) => p !== id) : prev.length >= 3 ? prev : [...prev, id]
+    );
+  };
+
+  const run = async () => {
+    if (picked.length < 2) return;
+    setRunning(true);
+    try {
+      const res = await postJson(`${API_BASE}/api/creatives/${creativeId}/compare-takes`, {
+        personaIds: picked,
+      });
+      setResults((res.takes || []) as BoardVariant[]);
+    } catch (err) {
+      toast({
+        variant: "destructive",
+        title: "Compare failed",
+        description: err instanceof Error ? err.message : "Please try again.",
+      });
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => !running && onOpenChange(o)}>
+      <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Compare designers</DialogTitle>
+          <DialogDescription>
+            Run this brief through 2-3 designer styles side by side, then keep the winner.
+          </DialogDescription>
+        </DialogHeader>
+
+        {results === null ? (
+          <>
+            {isLoading ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground py-6">
+                <Loader2 size={14} className="animate-spin" /> Loading designers...
+              </div>
+            ) : personas.length < 2 ? (
+              <p className="text-sm text-muted-foreground py-4">
+                You need at least two designers to compare. Add them in Settings → Designers.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {personas.map((p: DesignerPersona) => (
+                  <label
+                    key={p.id}
+                    className="flex items-start gap-3 rounded-lg border border-border p-3 cursor-pointer hover:bg-muted/50"
+                  >
+                    <Checkbox
+                      checked={picked.includes(p.id)}
+                      onCheckedChange={() => toggle(p.id)}
+                      disabled={running || (!picked.includes(p.id) && picked.length >= 3)}
+                      data-testid={`compare-persona-${p.id}`}
+                    />
+                    <span>
+                      <span className="text-sm font-medium text-foreground">Inspired by {p.name}</span>
+                      {p.description && (
+                        <span className="block text-xs text-muted-foreground">{p.description}</span>
+                      )}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            )}
+            {picked.length >= 2 && (
+              <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-400">
+                <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+                <span>
+                  {picked.length} designers = {picked.length}× generation cost. Each designer take is a
+                  full image generation.
+                </span>
+              </div>
+            )}
+            <DialogFooter>
+              <Button variant="outline" onClick={() => onOpenChange(false)} disabled={running}>
+                Cancel
+              </Button>
+              <Button onClick={run} disabled={running || picked.length < 2} data-testid="compare-run">
+                {running ? (
+                  <>
+                    <Loader2 size={14} className="mr-1.5 animate-spin" /> Generating {picked.length} takes...
+                  </>
+                ) : (
+                  <>Generate {picked.length >= 2 ? `${picked.length} takes` : "takes"}</>
+                )}
+              </Button>
+            </DialogFooter>
+          </>
+        ) : (
+          <>
+            <div className="grid gap-4 sm:grid-cols-3">
+              {results.map((take) => (
+                <div key={take.id} className="space-y-2" data-testid={`compare-result-${take.id}`}>
+                  <div className="aspect-square w-full overflow-hidden rounded-lg border border-border bg-muted">
+                    {take.compositedImageUrl || take.rawImageUrl ? (
+                      <img
+                        src={`${API_BASE}${take.compositedImageUrl || take.rawImageUrl}`}
+                        alt={take.personaName ? `Inspired by ${take.personaName}` : "Compare take"}
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
+                        No image
+                      </div>
+                    )}
+                  </div>
+                  <p className="text-xs font-medium text-foreground text-center">
+                    {take.personaName ? `Inspired by ${take.personaName}` : "Take"}
+                  </p>
+                  <Button
+                    size="sm"
+                    className="w-full"
+                    onClick={() => onKeepWinner(take)}
+                    data-testid={`compare-keep-${take.id}`}
+                  >
+                    <Check size={14} className="mr-1.5" /> Keep this one
+                  </Button>
+                </div>
+              ))}
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => onOpenChange(false)}>
+                Close without keeping
+              </Button>
+            </DialogFooter>
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }
 
