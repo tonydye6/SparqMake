@@ -97,13 +97,46 @@ export interface ScreenshotResult {
   mimeType: string;
 }
 
+/**
+ * Detect obvious placeholder values that aren't real credentials.
+ * Mirrors the logic in social-credentials.ts.
+ */
+function isPlaceholder(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) return true;
+  if (/^[A-Z][A-Z0-9_]*$/.test(trimmed) && trimmed.includes("_")) return true;
+  if (/^(your[_-]|changeme|change[_-]me|placeholder|todo[_-]?|xxx+$)/i.test(trimmed)) return true;
+  return false;
+}
+
+/**
+ * Resolve the ScreenshotOne API key from the canonical env var name
+ * (SparqMake_ScreenshotOne_API_Key) or its legacy SparqForge alias.
+ * Returns null when unset or set to a placeholder value.
+ */
+function resolveScreenshotOneKey(): string | null {
+  const candidates = [
+    "SparqMake_ScreenshotOne_API_Key",
+    "SparqForge_ScreenshotOne_API_Key",
+  ];
+  for (const name of candidates) {
+    const value = process.env[name];
+    if (typeof value === "string" && !isPlaceholder(value)) {
+      return value.trim();
+    }
+  }
+  return null;
+}
+
 export async function captureScreenshots(
   targetUrl: string,
   creativeId: string,
 ): Promise<ScreenshotResult[]> {
-  const apiKey = process.env.SparqMake_ScreenshotOne_API_Key;
+  const apiKey = resolveScreenshotOneKey();
   if (!apiKey) {
-    throw new Error("ScreenshotOne API key not configured (SparqMake_ScreenshotOne_API_Key)");
+    throw new Error(
+      "ScreenshotOne API key is not configured. Please set the SparqMake_ScreenshotOne_API_Key secret in your environment.",
+    );
   }
 
   const viewports = [

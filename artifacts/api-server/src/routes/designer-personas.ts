@@ -248,7 +248,7 @@ router.post("/designer-personas/analyze", requireStandardWrite, (req, res): void
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      const clientError = /Invalid URL|not allowed|Only http|at least one|No valid images/.test(message);
+      const clientError = /Invalid URL|not allowed|Only http|at least one|No valid images|not configured/.test(message);
       res.status(clientError ? 400 : 500).json({ error: message });
     }
   });
