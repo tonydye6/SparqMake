@@ -33,7 +33,7 @@ const PersonaBodyBase = {
   colorPhilosophy: z.string().max(4000).default(""),
   textureAndEffects: z.string().max(4000).default(""),
   mood: z.string().max(2000).default(""),
-  referenceImages: z.array(ReferenceImageSchema).max(10).default([]),
+  referenceImages: z.array(ReferenceImageSchema).max(20).default([]),
 };
 
 const CreatePersonaBody = z.object(PersonaBodyBase);
@@ -126,7 +126,7 @@ router.delete("/designer-personas/:id", requireDestructive, validateRequest({ pa
 // returns the updated persona.
 
 router.post("/designer-personas/:id/reference-images", requireStandardWrite, validateRequest({ params: PersonaParams }), (req, res): void => {
-  upload.array("images", 6)(req, res, async (err) => {
+  upload.array("images", 20)(req, res, async (err) => {
     if (err) {
       res.status(400).json({ error: err instanceof Error ? err.message : "Upload failed" });
       return;
@@ -147,8 +147,8 @@ router.post("/designer-personas/:id/reference-images", requireStandardWrite, val
       }
 
       const existing = (persona.referenceImages || []) as PersonaReferenceImage[];
-      if (existing.length + files.length > 10) {
-        res.status(400).json({ error: `A designer can have at most 10 reference images (currently ${existing.length})` });
+      if (existing.length + files.length > 20) {
+        res.status(400).json({ error: `A designer can have at most 20 reference images (currently ${existing.length})` });
         return;
       }
 
@@ -189,7 +189,7 @@ const ALLOWED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "i
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024, files: 6 },
+  limits: { fileSize: 10 * 1024 * 1024, files: 20 },
   fileFilter: (_req, file, cb) => {
     if (ALLOWED_IMAGE_TYPES.has(file.mimetype)) cb(null, true);
     else cb(new Error("Only PNG, JPEG, WebP, or GIF images are allowed"));
@@ -197,7 +197,7 @@ const upload = multer({
 });
 
 router.post("/designer-personas/analyze", requireStandardWrite, (req, res): void => {
-  upload.array("images", 6)(req, res, async (err) => {
+  upload.array("images", 20)(req, res, async (err) => {
     if (err) {
       res.status(400).json({ error: err instanceof Error ? err.message : "Upload failed" });
       return;

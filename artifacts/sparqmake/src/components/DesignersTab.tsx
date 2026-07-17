@@ -138,7 +138,7 @@ export default function DesignersTab() {
     setIsUploadingSamples(true);
     try {
       const fd = new FormData();
-      for (const f of files.slice(0, 6)) fd.append("images", f);
+      for (const f of files.slice(0, 20)) fd.append("images", f);
       const res = await apiFetch(`${baseUrl}/api/designer-personas/${editing.id}/reference-images`, {
         method: "POST",
         body: fd,
@@ -221,7 +221,7 @@ export default function DesignersTab() {
         mood: draft.mood || prev.mood,
         sourceType: draft.sourceType || prev.sourceType,
         sourceUrl: draft.sourceUrl ?? prev.sourceUrl,
-        referenceImages: [...prev.referenceImages, ...(draft.referenceImages || [])].slice(0, 10),
+        referenceImages: [...prev.referenceImages, ...(draft.referenceImages || [])].slice(0, 20),
       }));
       toast({ title: "Draft style fingerprint ready", description: "Review and edit the fields below, then save." });
     } catch (e) {
@@ -387,12 +387,12 @@ export default function DesignersTab() {
                 />
               </div>
               <div className="space-y-2">
-                <Label className="text-xs flex items-center gap-1"><ImagePlus className="h-3 w-3" /> Or upload sample images (up to 6)</Label>
+                <Label className="text-xs flex items-center gap-1"><ImagePlus className="h-3 w-3" /> Or upload sample images (up to 20)</Label>
                 <Input
                   type="file"
                   accept="image/png,image/jpeg,image/webp,image/gif"
                   multiple
-                  onChange={(e) => setAiFiles(Array.from(e.target.files || []).slice(0, 6))}
+                  onChange={(e) => setAiFiles(Array.from(e.target.files || []).slice(0, 20))}
                 />
                 {aiFiles.length > 0 && (
                   <p className="text-xs text-muted-foreground">{aiFiles.length} image(s) selected</p>
@@ -454,7 +454,7 @@ export default function DesignersTab() {
                     </div>
                   ))}
                 </div>
-                {editing && form.referenceImages.length < 10 && (
+                {editing && form.referenceImages.length < 20 && (
                   <div>
                     <input
                       ref={sampleInputRef}
