@@ -146,6 +146,10 @@ export async function captureScreenshots(
 
   const results: ScreenshotResult[] = [];
 
+  // One slow/heavy viewport must not sink the whole capture: try each
+  // viewport independently and only fail if NONE succeeded.
+  const viewportErrors: string[] = [];
+
   for (const vp of viewports) {
     const params = new URLSearchParams({
       access_key: apiKey,
@@ -158,7 +162,8 @@ export async function captureScreenshots(
       block_cookie_banners: "true",
       block_trackers: "true",
       delay: "3",
-      timeout: "30",
+      timeout: "60",
+      navigation_timeout: "30",
     });
 
     const screenshotUrl = `https://api.screenshotone.com/take?${params.toString()}`;
@@ -166,7 +171,10 @@ export async function captureScreenshots(
     const response = await fetch(screenshotUrl);
     if (!response.ok) {
       const errorText = await response.text().catch(() => "Unknown error");
-      throw new Error(`ScreenshotOne API error for ${vp.label} viewport: ${response.status} - ${errorText}`);
+      const message = `ScreenshotOne API error for ${vp.label} viewport: ${response.status} - ${errorText}`;
+      console.warn(message);
+      viewportErrors.push(message);
+      continue;
     }
 
     const arrayBuffer = await response.arrayBuffer();
@@ -184,6 +192,10 @@ export async function captureScreenshots(
       buffer,
       mimeType: "image/png",
     });
+  }
+
+  if (results.length === 0) {
+    throw new Error(viewportErrors[0] || "Screenshot capture failed for all viewports");
   }
 
   return results;
