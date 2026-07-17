@@ -41,8 +41,12 @@ vi.mock("../services/screenshot.js", () => ({
   validateUrl: vi.fn(),
   captureScreenshots: vi.fn(),
 }));
+const analyzePersonaImages = vi.fn(async () => ({
+  name: "Draft", description: "", typography: "t", composition: "c",
+  colorPhilosophy: "cp", textureAndEffects: "te", mood: "m",
+}));
 vi.mock("../services/persona-analysis.js", () => ({
-  analyzePersonaImages: vi.fn(),
+  analyzePersonaImages: (...args: unknown[]) => analyzePersonaImages(...(args as [])),
 }));
 vi.mock("../services/storage.js", () => ({
   writeBuffer: vi.fn(),
@@ -152,5 +156,77 @@ describe("designer persona CRUD + authorization", () => {
   it("unauthenticated mutation is rejected", async () => {
     const res = await call("POST", "/api/designer-personas", { body: { name: "X" } });
     expect(res.status).toBe(403);
+  });
+});
+
+// --- Upload boundary at the 20-image cap --------------------------------
+
+// Tiny valid 1x1 PNG.
+const PNG_BYTES = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+  "base64",
+);
+
+function makeForm(count: number): FormData {
+  const form = new FormData();
+  for (let i = 0; i < count; i++) {
+    form.append("images", new Blob([PNG_BYTES], { type: "image/png" }), `sample-${i + 1}.png`);
+  }
+  return form;
+}
+
+function upload(path: string, form: FormData) {
+  return fetch(baseUrl + path, {
+    method: "POST",
+    headers: { "x-test-role": "editor" },
+    body: form,
+  });
+}
+
+describe("upload limits: exactly 20 passes, 21 fails", () => {
+  it("POST /analyze accepts exactly 20 images", async () => {
+    const res = await upload("/api/designer-personas/analyze", makeForm(20));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { draft: { referenceImages: unknown[] } };
+    expect(body.draft.referenceImages).toHaveLength(20);
+  });
+
+  it("POST /analyze rejects 21 images with a 400", async () => {
+    const res = await upload("/api/designer-personas/analyze", makeForm(21));
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBeTruthy();
+  });
+
+  it("POST /:id/reference-images accepts exactly 20 images on an empty persona", async () => {
+    selectResults = [[{ ...persona, referenceImages: [] }]];
+    updateResults = [[{ ...persona, referenceImages: new Array(20).fill({ url: "/x" }) }]];
+    const res = await upload("/api/designer-personas/p1/reference-images", makeForm(20));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { referenceImages: unknown[] };
+    expect(body.referenceImages).toHaveLength(20);
+    expect(recordAudit).toHaveBeenCalledTimes(1);
+  });
+
+  it("POST /:id/reference-images rejects 21 images in one request", async () => {
+    const res = await upload("/api/designer-personas/p1/reference-images", makeForm(21));
+    expect(res.status).toBe(400);
+  });
+
+  it("appending up to the 20-total cap works, going over is rejected with a clear message", async () => {
+    // 15 existing + 5 new = exactly 20 → OK
+    const fifteen = new Array(15).fill(0).map((_, i) => ({ url: `/existing-${i}` }));
+    selectResults = [[{ ...persona, referenceImages: fifteen }]];
+    updateResults = [[{ ...persona, referenceImages: new Array(20).fill({ url: "/x" }) }]];
+    const ok = await upload("/api/designer-personas/p1/reference-images", makeForm(5));
+    expect(ok.status).toBe(200);
+
+    // 15 existing + 6 new = 21 → rejected with the cap message
+    selectCall = 0;
+    selectResults = [[{ ...persona, referenceImages: fifteen }]];
+    const over = await upload("/api/designer-personas/p1/reference-images", makeForm(6));
+    expect(over.status).toBe(400);
+    const body = (await over.json()) as { error: string };
+    expect(body.error).toMatch(/at most 20 reference images \(currently 15\)/);
   });
 });

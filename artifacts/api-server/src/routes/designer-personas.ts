@@ -121,7 +121,7 @@ router.delete("/designer-personas/:id", requireDestructive, validateRequest({ pa
 });
 
 // --- Work sample upload: append sample images to an existing persona.
-// Multipart (field "images", up to 6 per request, 10 max total refs). Files
+// Multipart (field "images", up to 20 per request, 20 max total refs). Files
 // are stored and the persona's referenceImages list is updated atomically;
 // returns the updated persona.
 
