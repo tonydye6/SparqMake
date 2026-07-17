@@ -221,10 +221,29 @@ router.post("/designer-personas/analyze", requireStandardWrite, (req, res): void
         validateUrl(url);
         sourceType = "url";
         sourceUrl = url;
-        const shots = await captureScreenshots(url, `persona-${token}`);
-        for (const shot of shots) {
-          referenceImages.push({ url: shot.url, label: `Portfolio (${shot.viewport})` });
-          analysisInputs.push({ buffer: shot.buffer, mimeType: shot.mimeType });
+        try {
+          const shots = await captureScreenshots(url, `persona-${token}`);
+          for (const shot of shots) {
+            referenceImages.push({ url: shot.url, label: `Portfolio (${shot.viewport})` });
+            analysisInputs.push({ buffer: shot.buffer, mimeType: shot.mimeType });
+          }
+        } catch (shotErr) {
+          const raw = shotErr instanceof Error ? shotErr.message : String(shotErr);
+          const blocked = /host_returned_error|returned_status_code/.test(raw);
+          const friendly = blocked
+            ? "The portfolio site blocked automated screenshot capture."
+            : "Could not capture screenshots of the portfolio site.";
+          // Uploaded samples can still carry the analysis — degrade instead
+          // of failing the whole request when the URL can't be captured.
+          if (files.length === 0) {
+            res.status(400).json({
+              error: `${friendly} Try a different URL, or upload sample images instead.`,
+            });
+            return;
+          }
+          console.warn(`Portfolio capture failed; analyzing uploaded samples only: ${raw}`);
+          sourceType = "samples";
+          sourceUrl = null;
         }
       }
 
