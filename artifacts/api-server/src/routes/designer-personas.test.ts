@@ -230,3 +230,45 @@ describe("upload limits: exactly 20 passes, 21 fails", () => {
     expect(body.error).toMatch(/at most 20 reference images \(currently 15\)/);
   });
 });
+
+// --- Upload validation: per-file size limit and allowed types -------------
+
+describe("upload validation: file size and type", () => {
+  it("POST /analyze rejects a file over 10 MB with a clear 400", async () => {
+    const form = new FormData();
+    const big = Buffer.alloc(10 * 1024 * 1024 + 1, 0x41);
+    form.append("images", new Blob([big], { type: "image/png" }), "huge.png");
+    const res = await upload("/api/designer-personas/analyze", form);
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toMatch(/file too large/i);
+  });
+
+  it("POST /analyze rejects a disallowed type (PDF) with the allowed-types message", async () => {
+    const form = new FormData();
+    form.append("images", new Blob([Buffer.from("%PDF-1.4")], { type: "application/pdf" }), "doc.pdf");
+    const res = await upload("/api/designer-personas/analyze", form);
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe("Only PNG, JPEG, WebP, or GIF images are allowed");
+  });
+
+  it("POST /:id/reference-images rejects a file over 10 MB with a 400", async () => {
+    const form = new FormData();
+    const big = Buffer.alloc(10 * 1024 * 1024 + 1, 0x41);
+    form.append("images", new Blob([big], { type: "image/jpeg" }), "huge.jpg");
+    const res = await upload("/api/designer-personas/p1/reference-images", form);
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toMatch(/file too large/i);
+  });
+
+  it("POST /:id/reference-images rejects a disallowed type (PDF) with the allowed-types message", async () => {
+    const form = new FormData();
+    form.append("images", new Blob([Buffer.from("%PDF-1.4")], { type: "application/pdf" }), "doc.pdf");
+    const res = await upload("/api/designer-personas/p1/reference-images", form);
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe("Only PNG, JPEG, WebP, or GIF images are allowed");
+  });
+});
