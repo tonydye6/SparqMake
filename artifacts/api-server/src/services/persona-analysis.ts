@@ -1,3 +1,4 @@
+import sharp from "sharp";
 import { ai } from "@workspace/integrations-gemini-ai";
 import { AI_MODELS } from "../lib/ai-config.js";
 
@@ -21,7 +22,27 @@ export interface PersonaImageInput {
   mimeType: string;
 }
 
-const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
+// Analysis reads style, not pixels: every sample is downscaled to a bounded
+// JPEG before upload so 20 large files can't blow the model's request-size
+// limit (and no sample is silently dropped for being too big on disk).
+const MAX_ANALYSIS_EDGE_PX = 1280;
+const ANALYSIS_JPEG_QUALITY = 80;
+
+async function toAnalysisPart(
+  img: PersonaImageInput,
+): Promise<{ inlineData: { data: string; mimeType: string } } | null> {
+  try {
+    const resized = await sharp(img.buffer)
+      .resize(MAX_ANALYSIS_EDGE_PX, MAX_ANALYSIS_EDGE_PX, { fit: "inside", withoutEnlargement: true })
+      .flatten({ background: "#ffffff" })
+      .jpeg({ quality: ANALYSIS_JPEG_QUALITY })
+      .toBuffer();
+    return { inlineData: { data: resized.toString("base64"), mimeType: "image/jpeg" } };
+  } catch (err) {
+    console.warn("Skipping persona sample: could not process image:", err instanceof Error ? err.message : err);
+    return null;
+  }
+}
 
 const PERSONA_ANALYSIS_PROMPT = `You are a senior art director building a "designer style fingerprint" from the provided image(s) of a designer's or studio's work (portfolio screenshots or sample designs).
 
@@ -62,20 +83,9 @@ export function parsePersonaFingerprint(raw: string): PersonaFingerprint {
 export async function analyzePersonaImages(
   images: PersonaImageInput[],
 ): Promise<PersonaFingerprint> {
-  const imageParts = images
-    .filter((img) => {
-      if (img.buffer.length > MAX_FILE_SIZE_BYTES) {
-        console.warn(`Skipping persona sample: size ${(img.buffer.length / 1024 / 1024).toFixed(1)}MB exceeds 10MB limit`);
-        return false;
-      }
-      return true;
-    })
-    .map((img) => ({
-      inlineData: {
-        data: img.buffer.toString("base64"),
-        mimeType: img.mimeType,
-      },
-    }));
+  const imageParts = (await Promise.all(images.map(toAnalysisPart))).filter(
+    (p): p is NonNullable<typeof p> => p !== null,
+  );
 
   if (imageParts.length === 0) {
     throw new Error("No valid images found for persona analysis");
