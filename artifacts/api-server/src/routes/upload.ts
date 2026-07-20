@@ -169,11 +169,4 @@ router.get("/files/assets/:filename", (req, res): void => {
   void serveOwnedFile("assets", req, res);
 });
 
-// Curated asset-library media lives in its own subdir (NOT brand-assets) so the
-// idempotent importer's reset can never delete app-uploaded brand logos.
-router.get("/files/assets/:filename", (req, res): void => {
-  const filename = Array.isArray(req.params.filename) ? req.params.filename[0] : req.params.filename;
-  serveFile(path.join(UPLOAD_DIR, "assets"), filename, res);
-});
-
 export default router;
