@@ -102,7 +102,7 @@ interface FanOutPlatformCard {
 // ---- Home view -------------------------------------------------------------
 
 interface HomeViewProps {
-  onSessionCreated: (sessionId: string) => void;
+  onSessionCreated: (sessionId: string, autoDraftBrief?: string) => void;
 }
 
 function HomeView({ onSessionCreated }: HomeViewProps) {
@@ -203,7 +203,9 @@ function HomeView({ onSessionCreated }: HomeViewProps) {
         throw new Error(err.error || "Failed to start session");
       }
       const session = await resp.json() as Session;
-      onSessionCreated(session.id);
+      // Picking a concept auto-applies its angle to the session composer and
+      // kicks off the first image draft immediately (no extra click needed).
+      onSessionCreated(session.id, concept ? briefText : undefined);
     } catch (err) {
       toast({
         variant: "destructive",
@@ -414,6 +416,8 @@ const CHIPS: ComposerChip[] = [
 interface SessionViewProps {
   sessionId: string;
   onBack: () => void;
+  /** When set (concept pick), pre-fill the composer and auto-start the first draft. */
+  autoDraftBrief?: string | null;
 }
 
 interface SessionState {
@@ -511,7 +515,7 @@ const PLATFORM_OPTIONS = [
   { value: "youtube", label: "YouTube" },
 ] as const;
 
-function SessionView({ sessionId, onBack }: SessionViewProps) {
+function SessionView({ sessionId, onBack, autoDraftBrief }: SessionViewProps) {
   const { toast } = useToast();
   // E2: Viewers (role = "viewer") may browse sessions but cannot submit turns.
   const canWrite = useCanWrite();
@@ -709,6 +713,21 @@ function SessionView({ sessionId, onBack }: SessionViewProps) {
     void runTurn("draft", state.composerText);
   }, [state.composerText, runTurn]);
 
+  // Auto-start the first draft when the session was created from a concept
+  // pick: the concept's angle is applied to the composer and generation kicks
+  // off immediately. One-shot guard so failures/reloads never re-trigger it.
+  const autoDraftFiredRef = useRef(false);
+  useEffect(() => {
+    if (!autoDraftBrief || autoDraftFiredRef.current) return;
+    if (state.loading || !state.session) return;
+    // Only auto-draft brand-new sessions (no copilot turns yet).
+    if (state.turns.some(t => t.role === "copilot")) { autoDraftFiredRef.current = true; return; }
+    if (!canWrite || state.running) return;
+    autoDraftFiredRef.current = true;
+    dispatch({ type: "setComposer", text: autoDraftBrief });
+    void runTurn("draft", autoDraftBrief);
+  }, [autoDraftBrief, state.loading, state.session, state.turns, state.running, canWrite, runTurn]);
+
   // A4: Removed keyword-regex routing — caption intent is too easy to false-positive
   // on ordinary edit instructions ("make the text cleaner", "shorter headline").
   // Users have explicit caption chips + platform selector for caption-only turns;
@@ -879,14 +898,21 @@ function SessionView({ sessionId, onBack }: SessionViewProps) {
               />
             ))}
 
-            {state.running && state.progressMessages.length > 0 && (
+            {state.running && (
               <div className="bg-primary/5 border border-primary/20 rounded-lg p-3 space-y-1">
-                {state.progressMessages.map((msg, i) => (
-                  <div key={i} className="flex items-center gap-2 text-xs text-primary">
+                {state.progressMessages.length === 0 ? (
+                  <div className="flex items-center gap-2 text-xs text-primary">
                     <Loader2 size={12} className="animate-spin shrink-0" />
-                    {msg}
+                    Generating...
                   </div>
-                ))}
+                ) : (
+                  state.progressMessages.map((msg, i) => (
+                    <div key={i} className="flex items-center gap-2 text-xs text-primary">
+                      <Loader2 size={12} className="animate-spin shrink-0" />
+                      {msg}
+                    </div>
+                  ))
+                )}
               </div>
             )}
           </div>
@@ -1517,6 +1543,9 @@ export default function CopilotStudio() {
   const canWrite = useCanWrite();
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [seeding, setSeeding] = useState(false);
+  // Set when a session is created from a concept pick — SessionView pre-fills
+  // the composer with it and auto-starts the first draft.
+  const [autoDraftBrief, setAutoDraftBrief] = useState<string | null>(null);
 
   // Read URL params once on mount. ?campaign=<creativeId> opens a pre-seeded
   // session from a plan-item creative. ?session=<id> jumps directly to a session.
@@ -1613,8 +1642,21 @@ export default function CopilotStudio() {
   }
 
   if (sessionId) {
-    return <SessionView sessionId={sessionId} onBack={() => setSessionId(null)} />;
+    return (
+      <SessionView
+        sessionId={sessionId}
+        autoDraftBrief={autoDraftBrief}
+        onBack={() => { setSessionId(null); setAutoDraftBrief(null); }}
+      />
+    );
   }
 
-  return <HomeView onSessionCreated={(id) => setSessionId(id)} />;
+  return (
+    <HomeView
+      onSessionCreated={(id, brief) => {
+        setAutoDraftBrief(brief ?? null);
+        setSessionId(id);
+      }}
+    />
+  );
 }
