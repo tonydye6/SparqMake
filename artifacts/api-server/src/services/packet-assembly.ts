@@ -16,9 +16,9 @@ export interface PacketAsset {
   score: number;
 }
 
-// gemini-2.5-flash-image accepts well more than 3 reference images; a budget
-// of 6 lets subjects, designer-persona refs, and brand style assets coexist
-// instead of crowding each other out of a 3-slot cap.
+// gemini-3-pro-image supports up to 14 reference images (5 with high
+// fidelity); a budget of 6 lets subjects, designer-persona refs, and brand
+// style assets coexist instead of crowding each other out of a 3-slot cap.
 export const MAX_GENERATION_ASSETS = 10;
 export const MAX_IMAGE_REFERENCES = 6;
 

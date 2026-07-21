@@ -18,7 +18,7 @@
 - [Publish failure alerting](publish-failure-alerting.md) — alert sweep runs after each scheduler poll; per-account grouping + 30-min cooldown via publish_alerts rows; retry must reset alerted_at; SMTP unset = graceful degrade.
 - [Prod media restore path](prod-media-restore.md) — bucket is shared dev/prod; restore lost prod files by uploading dev `uploads/` survivors; disk-era prod-only media is gone.
 - [SparqMake frontend tests](sparqmake-frontend-tests.md) — standalone vitest config (vite config needs PORT/BASE_PATH); RTL needs explicit cleanup when globals:false; jsdom Radix polyfills live in src/test/setup.ts.
-- [Gemini proxy supported models](gemini-model-support.md) — proxy rejects preview-dated model names (UNSUPPORTED_MODEL); use stable gemini-2.5-flash/pro; bulk vision runs hit rate limits, chunk them.
+- [Gemini model support](gemini-model-support.md) — proxy rejects gemini-3.x/preview names; pipeline prefers direct GEMINI_API_KEY (unlocks gemini-3.x + Interactions video), falls back to proxy.
 - [Designed-graphic cost model](designed-mode-costs.md) — designed render_mode bills 1 cutout + 2 text calls per take, not 1 image/platform; every budget-reservation and cost-log site must branch on it in lockstep.
 - [CJS bundle dirname & assets](cjs-bundle-dirname.md) — esbuild CJS bundle makes import.meta.url undefined (startup crash) and drops runtime assets; prefer import.meta.url, fall back to __dirname, copy assets in build.ts, verify with `node dist/index.cjs`.
 - [Migration slot collision](migration-slot-collision.md) — parallel tasks sharing a drizzle index: renumber ours to +1, merge snapshot, manually journal locally-applied SQL (42P07 fix).

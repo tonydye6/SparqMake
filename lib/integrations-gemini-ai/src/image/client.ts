@@ -1,24 +1,31 @@
 import { GoogleGenAI, Modality } from "@google/genai";
 
-if (!process.env.AI_INTEGRATIONS_GEMINI_BASE_URL) {
-  throw new Error(
-    "AI_INTEGRATIONS_GEMINI_BASE_URL must be set. Did you forget to provision the Gemini AI integration?",
-  );
+// Prefer the user's own Google AI API key (direct Google API) when set;
+// fall back to the Replit AI Integrations proxy.
+const directApiKey = process.env.GEMINI_API_KEY;
+
+if (!directApiKey) {
+  if (!process.env.AI_INTEGRATIONS_GEMINI_BASE_URL) {
+    throw new Error(
+      "Either GEMINI_API_KEY or AI_INTEGRATIONS_GEMINI_BASE_URL must be set. Did you forget to provision the Gemini AI integration?",
+    );
+  }
+  if (!process.env.AI_INTEGRATIONS_GEMINI_API_KEY) {
+    throw new Error(
+      "Either GEMINI_API_KEY or AI_INTEGRATIONS_GEMINI_API_KEY must be set. Did you forget to provision the Gemini AI integration?",
+    );
+  }
 }
 
-if (!process.env.AI_INTEGRATIONS_GEMINI_API_KEY) {
-  throw new Error(
-    "AI_INTEGRATIONS_GEMINI_API_KEY must be set. Did you forget to provision the Gemini AI integration?",
-  );
-}
-
-export const ai = new GoogleGenAI({
-  apiKey: process.env.AI_INTEGRATIONS_GEMINI_API_KEY,
-  httpOptions: {
-    apiVersion: "",
-    baseUrl: process.env.AI_INTEGRATIONS_GEMINI_BASE_URL,
-  },
-});
+export const ai = directApiKey
+  ? new GoogleGenAI({ apiKey: directApiKey })
+  : new GoogleGenAI({
+      apiKey: process.env.AI_INTEGRATIONS_GEMINI_API_KEY,
+      httpOptions: {
+        apiVersion: "",
+        baseUrl: process.env.AI_INTEGRATIONS_GEMINI_BASE_URL,
+      },
+    });
 
 export async function generateImage(
   prompt: string

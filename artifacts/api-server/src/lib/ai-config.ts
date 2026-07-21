@@ -1,8 +1,8 @@
 export const AI_MODELS = {
   CLAUDE_SONNET: process.env.CLAUDE_MODEL || "claude-sonnet-4-6",
-  GEMINI_FLASH_IMAGE: process.env.GEMINI_IMAGE_MODEL || "gemini-2.5-flash-image",
-  GEMINI_FLASH_TEXT: process.env.GEMINI_TEXT_MODEL || "gemini-2.5-flash",
-  VEO_VIDEO: process.env.VEO_MODEL || "veo-2.0-generate-001",
+  GEMINI_FLASH_IMAGE: process.env.GEMINI_IMAGE_MODEL || "gemini-3-pro-image",
+  GEMINI_FLASH_TEXT: process.env.GEMINI_TEXT_MODEL || "gemini-3.5-flash",
+  VEO_VIDEO: process.env.VEO_MODEL || "gemini-omni-flash-preview",
 } as const;
 
 export const COST_ESTIMATES = {

@@ -12,6 +12,7 @@ import * as path from "path";
 import * as os from "os";
 import multer from "multer";
 import { generationLimiter } from "../lib/rate-limit.js";
+import { AI_MODELS } from "../lib/ai-config.js";
 import { validateUploadedBuffer } from "../services/fileValidation.js";
 
 function clampVolume(v: unknown, fallback: number): number {
@@ -209,7 +210,7 @@ router.post("/creatives/:id/generate-video", generationLimiter, async (req: Requ
           creativeId,
           service: "gemini",
           operation: "video_generation",
-          model: "veo-2.0-generate-001",
+          model: AI_MODELS.VEO_VIDEO,
           costUsd: cost,
         });
       } catch (error) {

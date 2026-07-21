@@ -171,8 +171,8 @@ importers:
   artifacts/api-server:
     dependencies:
       '@google/genai':
-        specifier: ^1.44.0
-        version: 1.46.0
+        specifier: ^2.12.0
+        version: 2.12.0
       '@replit/object-storage':
         specifier: ^1.0.0
         version: 1.0.0
@@ -757,8 +757,8 @@ importers:
   lib/integrations-gemini-ai:
     dependencies:
       '@google/genai':
-        specifier: ^1.44.0
-        version: 1.46.0
+        specifier: ^2.12.0
+        version: 2.12.0
       p-limit:
         specifier: ^7.3.0
         version: 7.3.0
@@ -1008,8 +1008,8 @@ packages:
     resolution: {integrity: sha512-n2FjE7NAOYyshogdc7KQOl/VZb4sneqPjWouSyia9CMDdMhRX5+RIbqalNmC7LOLzuLAN89VlF2HvG8na9G+zQ==}
     engines: {node: '>=14'}
 
-  '@google/genai@1.46.0':
-    resolution: {integrity: sha512-ewPMN5JkKfgU5/kdco9ZhXBHDPhVqZpMQqIFQhwsHLf8kyZfx1cNpw1pHo1eV6PGEW7EhIBFi3aYZraFndAXqg==}
+  '@google/genai@2.12.0':
+    resolution: {integrity: sha512-LUr972DZosqPUhf9Mb3CIVu/B99woD3QW6ZJV1T9aNgxaoimAZARmo+IyyDsxIL+zouFiYSdA4hzfEWXc9oNIQ==}
     engines: {node: '>=20.0.0'}
     peerDependencies:
       '@modelcontextprotocol/sdk': ^1.25.2
@@ -4918,7 +4918,7 @@ snapshots:
       - encoding
       - supports-color
 
-  '@google/genai@1.46.0':
+  '@google/genai@2.12.0':
     dependencies:
       google-auth-library: 10.6.2
       p-retry: 4.6.2

@@ -39,6 +39,14 @@ export interface VideoGenerationResult {
   mimeType: string;
 }
 
+// Gemini Omni Flash generates video through the Interactions API
+// (ai.interactions.create) and returns the finished MP4 as base64 inline data
+// in `output_video` — no long-running operation polling or URI download.
+interface InteractionVideoResponse {
+  status?: string;
+  output_video?: { data?: string; mime_type?: string };
+}
+
 export async function generateVideo(
   ctx: AssembledContext,
   orientation: "landscape" | "portrait",
@@ -48,49 +56,35 @@ export async function generateVideo(
   if (!config) throw new Error(`Unknown orientation: ${orientation}`);
 
   const prompt = buildVideoPrompt(ctx);
-  const fullPrompt = `${prompt}\n\nGenerate this as a ${config.aspectRatio} aspect ratio video clip, 5-8 seconds long, for social media.`;
+  const fullPrompt = `${prompt}\n\nGenerate this as a ${config.aspectRatio} aspect ratio video clip, 5-8 seconds long, for social media. Do not show people.`;
 
-  const operation = await ai.models.generateVideos({
+  const interaction = (await ai.interactions.create({
     model: AI_MODELS.VEO_VIDEO,
-    prompt: fullPrompt,
-    config: {
-      aspectRatio: config.aspectRatio,
-      numberOfVideos: 1,
-      durationSeconds: 6,
-      personGeneration: "dont_allow",
+    input: fullPrompt,
+    response_format: {
+      type: "video",
+      aspect_ratio: config.aspectRatio as "16:9" | "9:16",
     },
-  });
+  } as Parameters<typeof ai.interactions.create>[0])) as InteractionVideoResponse;
 
-  let result = operation;
-  while (!result.done) {
-    if (signal?.aborted) {
-      throw new Error("Video generation cancelled: client disconnected");
-    }
-    await new Promise((resolve) => setTimeout(resolve, 5000));
-    result = await ai.operations.get({ operation: result });
+  if (signal?.aborted) {
+    throw new Error("Video generation cancelled: client disconnected");
   }
 
-  const generatedVideos = result.response?.generatedVideos;
-  if (!generatedVideos || generatedVideos.length === 0) {
-    throw new Error(`No video generated for ${orientation}`);
+  const videoData = interaction.output_video?.data;
+  if (!videoData) {
+    const status = interaction.status || "unknown";
+    throw new Error(`No video generated for ${orientation} (interaction status: ${status})`);
   }
 
-  const video = generatedVideos[0];
-  if (!video.video?.uri) {
-    throw new Error(`No video URI in response for ${orientation}`);
-  }
-
-  const videoResponse = await fetch(video.video.uri, { signal });
-  if (!videoResponse.ok) {
-    throw new Error(`Failed to download video: ${videoResponse.status}`);
-  }
-  const videoBuffer = Buffer.from(await videoResponse.arrayBuffer());
+  const videoBuffer = Buffer.from(videoData, "base64");
+  const mimeType = interaction.output_video?.mime_type || "video/mp4";
 
   return {
     orientation,
     aspectRatio: config.aspectRatio,
     videoBuffer,
-    mimeType: "video/mp4",
+    mimeType,
   };
 }
 
