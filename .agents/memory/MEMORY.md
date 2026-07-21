@@ -26,3 +26,4 @@
 - [SSE disconnect detection](sse-disconnect-detection.md) — req 'close' fires on body-received, not disconnect; use res.on('close') + writableEnded guard or aborts never fire.
 - [Co-pilot integration tests](copilot-integration-tests.md) — `*.integration.test.ts` use the real dev DB with mocked model boundaries; seed/cleanup pattern + ai-config mock drift trap.
 - [Copilot attached-asset slots](copilot-asset-slots.md) — edit turns send library assets as image slots (picker ids or name auto-match); brand-scoped, image-only, max 3.
+- [Image mime sniffing](image-mime-sniffing.md) — Anthropic 400s on declared-vs-actual image type mismatch; always magic-byte sniff buffers sent to model APIs (saved .png files can hold JPEG bytes).

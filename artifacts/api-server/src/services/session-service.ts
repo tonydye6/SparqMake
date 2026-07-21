@@ -209,6 +209,9 @@ Return ONLY valid JSON:
 Each headline: punchy, platform-appropriate, 3-8 words. No em dashes.`;
 
   const imageData = imageBuffer.toString("base64");
+  // Stored mime types can lie (e.g. a .png filename holding JPEG bytes from the
+  // image model) and Anthropic rejects mismatches — sniff the real format.
+  const sniffedMime = sniffImageMime(imageBuffer) || imageMimeType || "image/png";
 
   const tasteGuidanceSection = brand.tasteGuidance
     ? `\nTEAM TASTE GUIDANCE (learned from past approvals/rejections):\n${brand.tasteGuidance}\n`
@@ -227,7 +230,7 @@ Each headline: punchy, platform-appropriate, 3-8 words. No em dashes.`;
     messages: [{
       role: "user",
       content: [
-        { type: "image", source: { type: "base64", media_type: (imageMimeType as "image/png" | "image/jpeg" | "image/gif" | "image/webp") || "image/png", data: imageData } },
+        { type: "image", source: { type: "base64", media_type: sniffedMime as "image/png" | "image/jpeg" | "image/gif" | "image/webp", data: imageData } },
         { type: "text", text: userMessage },
       ],
     }],
@@ -1130,6 +1133,20 @@ async function executeCompare(params: {
 // Phase 2: QA pass
 // ============================================================================
 
+/**
+ * Detect an image's real mime type from its magic bytes. Stored mime types /
+ * file extensions can be wrong (image models sometimes return JPEG bytes that
+ * get saved as .png), and Anthropic hard-rejects a media_type mismatch.
+ */
+export function sniffImageMime(buf: Buffer): string | null {
+  if (buf.length < 12) return null;
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return "image/png";
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return "image/jpeg";
+  if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) return "image/gif";
+  if (buf.toString("ascii", 0, 4) === "RIFF" && buf.toString("ascii", 8, 12) === "WEBP") return "image/webp";
+  return null;
+}
+
 const COPILOT_QA_SYSTEM = `You are a quality-control reviewer for a social media image. Check:
 1. Did the edit instruction appear to be honored?
 2. Is the image presentable (no obvious clipping, artifacts, or glitches)?
@@ -1153,7 +1170,7 @@ async function runCopilotQaPass(
           {
             inlineData: {
               data: imageBuffer.toString("base64"),
-              mimeType: "image/png",
+              mimeType: sniffImageMime(imageBuffer) || "image/png",
             },
           },
           {
