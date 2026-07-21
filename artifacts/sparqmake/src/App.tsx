@@ -22,6 +22,7 @@ import Feedback from "@/pages/Feedback";
 import StudioNext from "@/pages/StudioNext";
 import BrandNext from "@/pages/BrandNext";
 import CalendarNext from "@/pages/CalendarNext";
+import CopilotStudio from "@/pages/CopilotStudio";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -115,6 +116,11 @@ function Router() {
         <Route path="/login" component={Login} />
         <Route path="/setup">
           <SetupWizard />
+        </Route>
+        <Route path="/copilot">
+          <FirstRunGuard>
+            <AppLayout><CopilotStudio /></AppLayout>
+          </FirstRunGuard>
         </Route>
         <Route path="/">
           <FirstRunGuard>

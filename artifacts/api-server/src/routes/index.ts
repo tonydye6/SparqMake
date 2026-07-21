@@ -30,6 +30,7 @@ import insightsRouter from "./insights";
 import signalsRouter from "./signals";
 import tasteRouter from "./taste";
 import designerPersonasRouter from "./designer-personas";
+import sessionsRouter from "./sessions";
 
 const router: IRouter = Router();
 
@@ -64,6 +65,7 @@ router.use(insightsRouter);
 router.use(signalsRouter);
 router.use(tasteRouter);
 router.use(designerPersonasRouter);
+router.use(sessionsRouter);
 
 router.all("/{*path}", (_req, res) => {
   res.status(404).json({ error: "Endpoint not found" });

@@ -10,7 +10,8 @@ export type TasteSignalType =
   | "regenerate"
   | "variant_approved"
   | "variant_rejected"
-  | "reaction";
+  | "reaction"
+  | "edit_instruction";
 
 export interface TasteSignalInput {
   brandId: string;

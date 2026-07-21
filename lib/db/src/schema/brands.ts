@@ -26,6 +26,10 @@ export const brandsTable = pgTable("brands", {
   // taste_guidance_versions; this holds the active text for fast reads.
   tasteGuidance: text("taste_guidance").notNull().default(""),
   tasteGuidanceVersion: integer("taste_guidance_version").notNull().default(0),
+  // Co-pilot Studio: 3-5 example posts in the brand's voice, used as few-shot
+  // samples in every caption call. Nullable — brands without examples get
+  // standard voice-description guidance only.
+  voiceExamples: json("voice_examples").$type<string[]>(),
   timezone: text("timezone").notNull().default("America/New_York"),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at").notNull().defaultNow(),

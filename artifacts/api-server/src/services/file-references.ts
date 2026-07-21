@@ -1,4 +1,4 @@
-import { db, assetsTable, brandsTable, creativesTable, creativeVariantsTable } from "@workspace/db";
+import { db, assetsTable, brandsTable, creativesTable, creativeVariantsTable, studioSessionsTable } from "@workspace/db";
 import { resolveUrl, internal, type StorageNamespace } from "./storage.js";
 
 /**
@@ -86,6 +86,13 @@ export async function gatherFileReferences(): Promise<FileReference[]> {
     .from(creativesTable);
   for (const c of creatives) {
     addJson(c.referenceScreenshots, "creatives", "referenceScreenshots", c.id);
+  }
+
+  const sessions = await db
+    .select({ id: studioSessionsTable.id, thumbnailUrl: studioSessionsTable.thumbnailUrl })
+    .from(studioSessionsTable);
+  for (const s of sessions) {
+    addScalar(s.thumbnailUrl, "studio_sessions", "thumbnailUrl", s.id);
   }
 
   return refs;
