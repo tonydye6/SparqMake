@@ -1559,12 +1559,35 @@ export default function CopilotStudio() {
     };
   })[0];
 
-  // Direct session link — jump straight to the session view.
+  // Keep the active session in the URL (?session=<id>) so a page reload —
+  // e.g. a dev-server restart or accidental refresh mid-generation — returns
+  // the user to their session instead of dumping them on the Studio home.
+  const openSession = useCallback((id: string) => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("session", id);
+    window.history.replaceState({}, "", url.toString());
+    setSessionId(id);
+  }, []);
+
+  // Consume-once guard: the mount-time ?session snapshot must only restore
+  // the session a single time. Without this, closeSession (Back) would set
+  // sessionId to null and the effect below would immediately re-apply the
+  // stale snapshot, trapping the user in the session view.
+  const urlSessionConsumedRef = useRef(false);
+
+  const closeSession = useCallback(() => {
+    urlSessionConsumedRef.current = true;
+    const url = new URL(window.location.href);
+    url.searchParams.delete("session");
+    window.history.replaceState({}, "", url.toString());
+    setSessionId(null);
+    setAutoDraftBrief(null);
+  }, []);
+
+  // Direct session link (or reload restore) — jump straight to the session view.
   useEffect(() => {
-    if (urlSessionId && !sessionId && !seeding) {
-      const url = new URL(window.location.href);
-      url.searchParams.delete("session");
-      window.history.replaceState({}, "", url.toString());
+    if (urlSessionId && !sessionId && !seeding && !urlSessionConsumedRef.current) {
+      urlSessionConsumedRef.current = true;
       setSessionId(urlSessionId);
     }
   }, [urlSessionId, sessionId, seeding]);
@@ -1617,7 +1640,7 @@ export default function CopilotStudio() {
         url.searchParams.delete("campaign");
         url.searchParams.delete("platform");
         window.history.replaceState({}, "", url.toString());
-        setSessionId(session.id);
+        openSession(session.id);
       } catch (err) {
         toast({
           variant: "destructive",
@@ -1628,7 +1651,7 @@ export default function CopilotStudio() {
         setSeeding(false);
       }
     })();
-  }, [campaignId, urlSessionId, urlPlatform, sessionId, seeding, toast]);
+  }, [campaignId, urlSessionId, urlPlatform, sessionId, seeding, toast, openSession, canWrite]);
 
   if (seeding) {
     return (
@@ -1646,7 +1669,7 @@ export default function CopilotStudio() {
       <SessionView
         sessionId={sessionId}
         autoDraftBrief={autoDraftBrief}
-        onBack={() => { setSessionId(null); setAutoDraftBrief(null); }}
+        onBack={closeSession}
       />
     );
   }
@@ -1655,7 +1678,7 @@ export default function CopilotStudio() {
     <HomeView
       onSessionCreated={(id, brief) => {
         setAutoDraftBrief(brief ?? null);
-        setSessionId(id);
+        openSession(id);
       }}
     />
   );
