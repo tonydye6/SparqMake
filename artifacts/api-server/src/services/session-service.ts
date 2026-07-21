@@ -52,6 +52,10 @@ export interface TurnInput {
   // Optional: target a specific variant for convert_video (e.g. a fan-out YouTube card)
   // instead of the session's current activeVariantId.
   sourceVariantId?: string;
+  // Asset Library attachments for edit turns: the referenced assets' real image
+  // files are passed to the model as reference content blocks so it reproduces
+  // the actual asset (e.g. the real brand logo) instead of hallucinating one.
+  assetIds?: string[];
   // D1: AbortSignal threaded from the HTTP route so client disconnect / SSE timeout
   // propagates into model calls, preventing zombie turns that keep billing.
   signal?: AbortSignal;
@@ -777,6 +781,73 @@ async function executeDraft(params: {
   };
 }
 
+/**
+ * Load Asset Library images to attach to an edit turn as model reference slots.
+ *
+ * Two paths:
+ *  - Explicit: the client sent assetIds (attach-asset picker). Assets are
+ *    scoped to the creative's brand so callers can't attach another brand's files.
+ *  - Auto-match: no explicit ids — scan the brand's assets for names mentioned
+ *    (case-insensitively) in the instruction, e.g. "add the Crown U logo".
+ *
+ * Returns at most MAX_ATTACHED_ASSETS slots; assets without a readable image
+ * file are skipped (never fail the whole turn over one missing file).
+ */
+const MAX_ATTACHED_ASSETS = 3;
+
+async function loadAttachedAssetSlots(params: {
+  brandId: string;
+  instruction: string;
+  assetIds?: string[];
+}): Promise<{ slots: ImageSlot[]; names: string[] }> {
+  const { brandId, instruction, assetIds } = params;
+  const { inArray } = await import("drizzle-orm");
+
+  let candidates: Array<typeof assetsTable.$inferSelect> = [];
+
+  if (assetIds && assetIds.length > 0) {
+    candidates = await db.select().from(assetsTable)
+      .where(and(inArray(assetsTable.id, assetIds.slice(0, MAX_ATTACHED_ASSETS)), eq(assetsTable.brandId, brandId)));
+  } else if (instruction.trim().length >= 3) {
+    // Auto-match: brand assets whose name appears in the instruction text.
+    const brandAssets = await db.select().from(assetsTable)
+      .where(eq(assetsTable.brandId, brandId));
+    const lower = instruction.toLowerCase();
+    candidates = brandAssets
+      .filter(a => a.name.trim().length >= 3 && lower.includes(a.name.trim().toLowerCase()))
+      .slice(0, MAX_ATTACHED_ASSETS);
+  }
+
+  const slots: ImageSlot[] = [];
+  const names: string[] = [];
+  for (const asset of candidates) {
+    if (slots.length >= MAX_ATTACHED_ASSETS) break;
+    if (!asset.fileUrl) continue;
+    const loc = resolveUrl(asset.fileUrl);
+    if (!loc) continue;
+    // Only image assets can be model reference slots — a PDF or font file
+    // would make the model request fail outright.
+    const mime = asset.mimeType || contentTypeFor(loc.filename);
+    if (!mime.startsWith("image/")) {
+      logger.warn({ assetId: asset.id, name: asset.name, mime }, "Attached asset is not an image; skipping");
+      continue;
+    }
+    const buf = await readBuffer(loc);
+    if (!buf) {
+      logger.warn({ assetId: asset.id, name: asset.name }, "Attached asset image could not be read; skipping");
+      continue;
+    }
+    slots.push({
+      imageBuffer: buf,
+      mimeType: mime,
+      slot: "object",
+      description: `Brand asset "${asset.name}"${asset.description ? ` — ${asset.description}` : ""}. Reproduce this exact asset faithfully as shown — do not redesign, restyle, or invent a different version of it.`,
+    });
+    names.push(asset.name);
+  }
+  return { slots, names };
+}
+
 async function executeEditImage(params: {
   session: StudioSession;
   creative: typeof creativesTable.$inferSelect;
@@ -789,11 +860,22 @@ async function executeEditImage(params: {
     throw new Error("No previous image interaction to edit. Start a draft turn first.");
   }
 
+  // Attach real Asset Library images (picker selection or names mentioned in
+  // the instruction) so the model uses the actual asset instead of inventing one.
+  const attached = await loadAttachedAssetSlots({
+    brandId: creative.brandId,
+    instruction: input.instruction,
+    assetIds: input.assetIds,
+  });
+  if (attached.names.length > 0) {
+    onProgress({ type: "progress", step: "image", message: `Using library asset${attached.names.length > 1 ? "s" : ""}: ${attached.names.join(", ")}` });
+  }
+
   onProgress({ type: "progress", step: "image", message: `Editing image (targeted preserving edit, not a re-roll)...` });
 
   const imageResult = await runImageInteraction({
     prompt: input.instruction,
-    slots: [],
+    slots: attached.slots,
     previousInteractionId: session.imageInteractionId,
     aspectRatio: "1:1",
     signal: input.signal,
@@ -1345,9 +1427,20 @@ async function executeEditRegion(params: {
     message: `Applying region edit within [${(region.x0 * 100).toFixed(0)}%, ${(region.y0 * 100).toFixed(0)}%] to [${(region.x1 * 100).toFixed(0)}%, ${(region.y1 * 100).toFixed(0)}%]...`,
   });
 
+  // Attach real Asset Library images for region edits too (e.g. "add the
+  // Crown U logo" within a selected region).
+  const attached = await loadAttachedAssetSlots({
+    brandId: creative.brandId,
+    instruction: input.instruction,
+    assetIds: input.assetIds,
+  });
+  if (attached.names.length > 0) {
+    onProgress({ type: "progress", step: "image", message: `Using library asset${attached.names.length > 1 ? "s" : ""}: ${attached.names.join(", ")}` });
+  }
+
   const imageResult = await runImageInteraction({
     prompt: regionPrompt,
-    slots: [],
+    slots: attached.slots,
     previousInteractionId: session.imageInteractionId,
     aspectRatio: "1:1",
     signal: input.signal,

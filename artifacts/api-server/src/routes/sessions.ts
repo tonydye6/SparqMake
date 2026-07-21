@@ -88,6 +88,8 @@ const CreateTurnBody = z.object({
   schedules: z.array(ScheduleItemSchema).max(10).optional(),
   // Optional: target a specific variant for convert_video (e.g. fan-out YouTube card)
   sourceVariantId: z.string().min(1).max(100).optional(),
+  // Asset Library attachments — real asset images passed to the model on edit turns.
+  assetIds: z.array(z.string().min(1).max(100)).max(3).optional(),
 });
 
 const PickTakeBody = z.object({
@@ -259,6 +261,7 @@ router.post(
           region: body.region,
           schedules: body.schedules,
           sourceVariantId: body.sourceVariantId,
+          assetIds: body.assetIds,
           signal: turnAbort.signal,
         },
         userId: actor.id,

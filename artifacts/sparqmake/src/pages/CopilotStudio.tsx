@@ -12,7 +12,7 @@ import {
   Sparkles, Bot, ArrowRight, RotateCcw, MessageSquare,
   Loader2, Clock, ChevronRight, Image as ImageIcon, DollarSign,
   Check, History, X, AlertCircle, Send,
-  Video, Layers, Calendar, Crop, Play,
+  Video, Layers, Calendar, Crop, Play, Paperclip,
 } from "lucide-react";
 import { useGetBrands, useGetStyleProfiles } from "@workspace/api-client-react";
 import { cn, apiFetch } from "@/lib/utils";
@@ -597,6 +597,7 @@ function SessionView({ sessionId, onBack, autoDraftBrief }: SessionViewProps) {
     region?: {x0:number;y0:number;x1:number;y1:number} | null,
     schedules?: Array<{variantId:string;platform:string;scheduledAt:string}>,
     sourceVariantId?: string,
+    assetIds?: string[],
   ) => {
     if (state.running) return;
     dispatch({ type: "setRunning", running: true });
@@ -621,6 +622,7 @@ function SessionView({ sessionId, onBack, autoDraftBrief }: SessionViewProps) {
           ...(region ? { region } : {}),
           ...(schedules ? { schedules } : {}),
           ...(sourceVariantId ? { sourceVariantId } : {}),
+          ...(assetIds && assetIds.length > 0 ? { assetIds } : {}),
         }),
       });
 
@@ -732,24 +734,70 @@ function SessionView({ sessionId, onBack, autoDraftBrief }: SessionViewProps) {
   // on ordinary edit instructions ("make the text cleaner", "shorter headline").
   // Users have explicit caption chips + platform selector for caption-only turns;
   // the composer defaults to edit_image when an image interaction exists.
+  // Attach-asset picker: real Asset Library images the user explicitly attaches
+  // to their next instruction, so the model uses the actual file (e.g. the real
+  // Crown U logo) instead of inventing one.
+  const [attachedAssets, setAttachedAssets] = useState<Array<{ id: string; name: string; thumbnailUrl: string | null }>>([]);
+  const [assetPickerOpen, setAssetPickerOpen] = useState(false);
+  const [brandAssets, setBrandAssets] = useState<Array<{ id: string; name: string; type: string; thumbnailUrl: string | null; fileUrl: string | null }> | null>(null);
+  const [assetsLoading, setAssetsLoading] = useState(false);
+
+  // Reset picker state when switching sessions (different session may belong
+  // to a different brand — never show stale asset lists or attachments).
+  useEffect(() => {
+    setAttachedAssets([]);
+    setAssetPickerOpen(false);
+    setBrandAssets(null);
+  }, [sessionId]);
+
+  const openAssetPicker = useCallback(async () => {
+    setAssetPickerOpen(o => !o);
+    if (brandAssets !== null || !state.session?.brandId) return;
+    setAssetsLoading(true);
+    try {
+      const resp = await apiFetch(`${API_BASE}/api/assets?brandId=${state.session.brandId}&limit=100`);
+      if (!resp.ok) throw new Error("Failed to load assets");
+      const data = await resp.json() as { data?: Array<{ id: string; name: string; type: string; thumbnailUrl: string | null; fileUrl: string | null; mimeType: string | null }> };
+      const list = (data.data ?? []).filter(a => a.fileUrl && (!a.mimeType || a.mimeType.startsWith("image/")));
+      setBrandAssets(list);
+    } catch {
+      setBrandAssets([]);
+    } finally {
+      setAssetsLoading(false);
+    }
+  }, [brandAssets, state.session]);
+
+  const toggleAttachedAsset = useCallback((asset: { id: string; name: string; thumbnailUrl: string | null }) => {
+    setAttachedAssets(prev => {
+      if (prev.some(a => a.id === asset.id)) return prev.filter(a => a.id !== asset.id);
+      if (prev.length >= 3) return prev;
+      return [...prev, asset];
+    });
+  }, []);
+
   const handleSend = useCallback(() => {
     if (!state.composerText.trim() || state.running) return;
     const text = state.composerText.trim();
     const hasPrev = state.session?.imageInteractionId;
+    const assetIds = attachedAssets.map(a => a.id);
     if (!hasPrev) {
-      void runTurn("draft", text);
+      void runTurn("draft", text, undefined, undefined, undefined, undefined, assetIds);
     } else {
-      void runTurn("edit_image", text);
+      void runTurn("edit_image", text, undefined, undefined, undefined, undefined, assetIds);
     }
-  }, [state.composerText, state.running, state.session, runTurn]);
+    setAttachedAssets([]);
+    setAssetPickerOpen(false);
+  }, [state.composerText, state.running, state.session, runTurn, attachedAssets]);
 
   const handleRegionEdit = useCallback(() => {
     if (!regionInstruction.trim() || !pendingRegion) return;
-    void runTurn("edit_region", regionInstruction, undefined, pendingRegion);
+    void runTurn("edit_region", regionInstruction, undefined, pendingRegion, undefined, undefined, attachedAssets.map(a => a.id));
+    setAttachedAssets([]);
+    setAssetPickerOpen(false);
     setPendingRegion(null);
     setRegionInstruction("");
     setRegionMode(false);
-  }, [regionInstruction, pendingRegion, runTurn]);
+  }, [regionInstruction, pendingRegion, runTurn, attachedAssets]);
 
   const handleImgMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     if (!regionMode) return;
@@ -1024,7 +1072,70 @@ function SessionView({ sessionId, onBack, autoDraftBrief }: SessionViewProps) {
                   </div>
                 )}
 
+                {assetPickerOpen && (
+                  <div className="border border-border rounded-lg p-2 max-h-44 overflow-auto space-y-1 bg-card">
+                    <div className="flex items-center justify-between px-1 pb-1">
+                      <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Attach library assets (max 3)</span>
+                      <button onClick={() => setAssetPickerOpen(false)} className="text-muted-foreground hover:text-foreground"><X size={12} /></button>
+                    </div>
+                    {assetsLoading && (
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground px-1 py-2">
+                        <Loader2 size={12} className="animate-spin" /> Loading assets...
+                      </div>
+                    )}
+                    {!assetsLoading && brandAssets !== null && brandAssets.length === 0 && (
+                      <p className="text-xs text-muted-foreground px-1 py-2">No image assets in this brand's library.</p>
+                    )}
+                    {!assetsLoading && brandAssets?.map(a => {
+                      const selected = attachedAssets.some(s => s.id === a.id);
+                      return (
+                        <button
+                          key={a.id}
+                          onClick={() => toggleAttachedAsset(a)}
+                          className={cn(
+                            "w-full flex items-center gap-2 px-1.5 py-1 rounded text-left text-xs transition-colors",
+                            selected ? "bg-primary/10 text-primary" : "hover:bg-muted",
+                          )}
+                        >
+                          {a.thumbnailUrl ? (
+                            <img src={`${API_BASE}${a.thumbnailUrl}`} alt="" className="w-8 h-8 rounded object-cover shrink-0" />
+                          ) : (
+                            <div className="w-8 h-8 rounded bg-muted flex items-center justify-center shrink-0"><ImageIcon size={12} /></div>
+                          )}
+                          <span className="flex-1 truncate">{a.name}</span>
+                          <span className="text-muted-foreground shrink-0">{a.type}</span>
+                          {selected && <Check size={12} className="shrink-0" />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {attachedAssets.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {attachedAssets.map(a => (
+                      <span key={a.id} className="inline-flex items-center gap-1 bg-primary/10 text-primary text-xs rounded-full pl-1 pr-1.5 py-0.5">
+                        {a.thumbnailUrl
+                          ? <img src={`${API_BASE}${a.thumbnailUrl}`} alt="" className="w-4 h-4 rounded-full object-cover" />
+                          : <Paperclip size={10} />}
+                        {a.name}
+                        <button onClick={() => setAttachedAssets(prev => prev.filter(p => p.id !== a.id))} className="hover:text-foreground"><X size={10} /></button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+
                 <div className="flex gap-2">
+                  <Button
+                    size="icon"
+                    variant={assetPickerOpen || attachedAssets.length > 0 ? "secondary" : "ghost"}
+                    onClick={() => void openAssetPicker()}
+                    disabled={state.running}
+                    className="self-end shrink-0"
+                    title="Attach an asset from the library"
+                  >
+                    <Paperclip size={14} />
+                  </Button>
                   <Textarea
                     value={state.composerText}
                     onChange={e => dispatch({ type: "setComposer", text: e.target.value })}
