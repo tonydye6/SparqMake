@@ -7,17 +7,20 @@
  * calendar, metrics, taste) keep working untouched.
  */
 
-import { db, studioSessionsTable, sessionTurnsTable, creativesTable, creativeVariantsTable, costLogsTable, brandsTable, assetsTable, styleProfilesTable, designerPersonasTable } from "@workspace/db";
+import { db, studioSessionsTable, sessionTurnsTable, creativesTable, creativeVariantsTable, costLogsTable, brandsTable, assetsTable, styleProfilesTable, designerPersonasTable, calendarEntriesTable, socialAccountsTable } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
 import { sql } from "drizzle-orm";
-import { runImageInteraction, type ImageSlot } from "./interactions-client.js";
+import { runImageInteraction, runVideoInteraction, type ImageSlot } from "./interactions-client.js";
 import { generateCaptions } from "./claude.js";
 import { assembleContext, resolveStyleProfile, resolveDesignerPersona } from "./context-assembly.js";
-import { compositeImage } from "./compositing.js";
+import { compositeImage, reframeImage, imageDimensions } from "./compositing.js";
+import { detectSubject, predictClip } from "./focal-point.js";
+import { outpaintImage } from "./imagen.js";
+import { getIntentInsights } from "./performance-insights.js";
 import { writeBuffer, resolveUrl, readBuffer, contentTypeFor } from "./storage.js";
 import { buildGenerationPacket, normalizeBalance, MAX_IMAGE_REFERENCES, type ReferenceBalance } from "./packet-assembly.js";
 import { recordTasteSignal } from "./taste-signals.js";
-import { COPILOT_MODELS, COST_ESTIMATES, estimateImagenCost, estimateClaudeCost, estimateGeminiTextCost } from "../lib/ai-config.js";
+import { COPILOT_MODELS, COST_ESTIMATES, estimateImagenCost, estimateClaudeCost, estimateGeminiTextCost, estimateVideoDurationSeconds } from "../lib/ai-config.js";
 import { logger } from "../lib/logger.js";
 import { anthropic } from "@workspace/integrations-anthropic-ai";
 import { ai as geminiAi } from "@workspace/integrations-gemini-ai";
@@ -31,14 +34,36 @@ export type { StudioSession, SessionTurn };
 export type TurnAction =
   | "draft"
   | "edit_image"
+  | "edit_region"
   | "caption"
-  | "compare";
+  | "compare"
+  | "convert_video"
+  | "edit_video"
+  | "fan_out"
+  | "schedule";
 
 export interface TurnInput {
   action: TurnAction;
   instruction: string;
   platform?: string;
   compareCount?: number;
+  region?: { x0: number; y0: number; x1: number; y1: number };
+  schedules?: Array<{ variantId: string; platform: string; scheduledAt: string }>;
+  // Optional: target a specific variant for convert_video (e.g. a fan-out YouTube card)
+  // instead of the session's current activeVariantId.
+  sourceVariantId?: string;
+}
+
+export interface FanOutPlatformCard {
+  platform: string;
+  variantId: string;
+  imageUrl: string;
+  caption: string;
+  headline: string;
+  suggestedAt: string;
+  // true for video platforms (YouTube) — the thumbnail reframe is stored but
+  // scheduling requires a video variant from convert_video first.
+  requiresVideo?: boolean;
 }
 
 export interface TurnProgressEvent {
@@ -385,6 +410,8 @@ export async function executeTurn(params: {
     instructionPayload: {
       platform: input.platform,
       compareCount: input.compareCount,
+      region: input.region,
+      schedules: input.schedules,
     },
   }).returning();
 
@@ -427,6 +454,7 @@ export async function executeTurn(params: {
 
     await db.update(studioSessionsTable).set({
       imageInteractionId: result.interactionId || session.imageInteractionId,
+      videoInteractionId: result.videoInteractionId || session.videoInteractionId,
       activeVariantId,
       thumbnailUrl,
       lastTurnSummary: result.summary,
@@ -445,7 +473,7 @@ export async function executeTurn(params: {
       });
     }
 
-    if (input.action === "edit_image" || input.action === "caption") {
+    if (input.action === "edit_image" || input.action === "edit_region" || input.action === "caption") {
       void recordTasteSignal({
         brandId: creative.brandId,
         creativeId: creative.id,
@@ -465,6 +493,10 @@ export async function executeTurn(params: {
         interactionId: result.interactionId,
         // Surface caption alternates so the SSE client can populate the alternates panel
         ...(result.metadata?.alternates ? { alternates: result.metadata.alternates } : {}),
+        // Surface sourceVariantId for convert_video turns triggered from fan-out
+        // YouTube cards — lets the frontend map the new video variant back to
+        // the card that requested the conversion.
+        ...(result.metadata?.sourceVariantId ? { sourceVariantId: result.metadata.sourceVariantId } : {}),
       },
     });
     return refreshed;
@@ -486,6 +518,7 @@ export async function executeTurn(params: {
 interface ActionResult {
   variantIds: string[];
   interactionId?: string;
+  videoInteractionId?: string;
   costUsd: number;
   summary: string;
   thumbnailUrl?: string;
@@ -503,10 +536,15 @@ async function executeActionCore(params: {
   const { session, creative, input, onProgress } = params;
 
   switch (input.action) {
-    case "draft": return executeDraft({ session, creative, input, onProgress });
-    case "edit_image": return executeEditImage({ session, creative, input, onProgress });
+    case "draft": return executeDraftWithQa({ session, creative, input, onProgress });
+    case "edit_image": return executeEditImageWithQa({ session, creative, input, onProgress });
+    case "edit_region": return executeEditRegion({ session, creative, input, onProgress });
     case "caption": return executeCaption({ session, creative, input, onProgress });
     case "compare": return executeCompare({ session, creative, input, onProgress });
+    case "convert_video": return executeConvertVideo({ session, creative, input, onProgress });
+    case "edit_video": return executeEditVideo({ session, creative, input, onProgress });
+    case "fan_out": return executeFanOut({ session, creative, input, onProgress });
+    case "schedule": return executeSchedule({ session, creative, input, onProgress });
     default:
       throw new Error(`Unknown action: ${(input as TurnInput).action}`);
   }
@@ -859,5 +897,889 @@ async function executeCompare(params: {
     summary: `${count} takes generated side-by-side for comparison`,
     metadata: { count, perTakeVariantIds, perTakeInteractionIds },
     modelUsed: COPILOT_MODELS.NANO_BANANA_MODEL,
+  };
+}
+
+// ============================================================================
+// Phase 2: QA pass
+// ============================================================================
+
+const COPILOT_QA_SYSTEM = `You are a quality-control reviewer for a social media image. Check:
+1. Did the edit instruction appear to be honored?
+2. Is the image presentable (no obvious clipping, artifacts, or glitches)?
+3. Are brand rules respected — no banned terms, no off-brand visual elements, voice and style consistent with the brand guidelines provided?
+Return ONLY valid JSON, no markdown fences: {"ok": boolean, "issue": string|null, "correctionHint": string|null}`;
+
+async function runCopilotQaPass(
+  imageBuffer: Buffer,
+  instruction: string,
+  brandContext?: string,
+): Promise<{ ok: boolean; issue?: string; correctionHint?: string }> {
+  try {
+    const brandSection = brandContext
+      ? `\nBrand rules to verify:\n${brandContext}\n`
+      : "";
+    const response = await geminiAi.models.generateContent({
+      model: COPILOT_MODELS.QA_MODEL,
+      contents: [{
+        role: "user",
+        parts: [
+          {
+            inlineData: {
+              data: imageBuffer.toString("base64"),
+              mimeType: "image/png",
+            },
+          },
+          {
+            text: `Original instruction: "${instruction}"${brandSection}\n\n${COPILOT_QA_SYSTEM}`,
+          },
+        ],
+      }],
+    });
+    const text = (response.candidates?.[0]?.content?.parts ?? [])
+      .filter((p: { text?: string }) => p.text)
+      .map((p: { text?: string }) => p.text)
+      .join("") || "{}";
+    const parsed = extractJSON<Record<string, unknown>>(text);
+    return {
+      ok: parsed.ok === true,
+      issue: typeof parsed.issue === "string" ? parsed.issue : undefined,
+      correctionHint: typeof parsed.correctionHint === "string" ? parsed.correctionHint : undefined,
+    };
+  } catch (err) {
+    logger.warn({ err }, "Copilot QA pass failed — skipping gate");
+    return { ok: true };
+  }
+}
+
+/**
+ * Post-generation QA: read a variant image, run the QA model, optionally apply
+ * one corrective image interaction and update the variant rows in-place.
+ *
+ * When a correction fires it is surfaced as its own copilot session turn so the
+ * user can see it in the turn history (max one corrective turn per QA pass).
+ */
+async function applyQaPass(params: {
+  variantIds: string[];
+  instruction: string;
+  interactionId?: string;
+  sessionId: string;
+  parentAction: TurnAction;
+  creativeId: string;
+  brandId: string;
+  onProgress: ProgressCallback;
+}): Promise<{ interactionId?: string; qaRetried: boolean; qaIssue?: string }> {
+  const { variantIds, instruction, interactionId, sessionId, parentAction, creativeId, brandId, onProgress } = params;
+
+  if (!variantIds.length || !interactionId) {
+    return { interactionId, qaRetried: false };
+  }
+
+  const [primaryVariant] = await db
+    .select()
+    .from(creativeVariantsTable)
+    .where(eq(creativeVariantsTable.id, variantIds[0]!));
+
+  if (!primaryVariant?.rawImageUrl) return { interactionId, qaRetried: false };
+
+  const loc = resolveUrl(primaryVariant.rawImageUrl);
+  if (!loc) return { interactionId, qaRetried: false };
+  const imageBuffer = await readBuffer(loc);
+  if (!imageBuffer) return { interactionId, qaRetried: false };
+
+  // Build brand-rule context for QA verification so the model checks both
+  // instruction adherence and brand-compliance in a single pass.
+  const [brand] = await db.select().from(brandsTable).where(eq(brandsTable.id, brandId));
+  const brandContext = brand
+    ? [
+        brand.name ? `Brand: ${brand.name}` : null,
+        brand.voiceDescription ? `Voice/style: ${brand.voiceDescription}` : null,
+      ].filter(Boolean).join(". ")
+    : undefined;
+
+  onProgress({ type: "progress", step: "qa", message: "QA: reviewing edit quality and brand compliance..." });
+  const verdict = await runCopilotQaPass(imageBuffer, instruction, brandContext);
+
+  if (verdict.ok || !verdict.correctionHint) {
+    return { interactionId, qaRetried: false };
+  }
+
+  onProgress({
+    type: "progress",
+    step: "qa",
+    message: `QA: correcting — ${verdict.issue ?? "refining composition"}`,
+  });
+
+  // Reserve a DB turn row for the corrective pass so it appears in history.
+  const [lastTurn] = await db
+    .select()
+    .from(sessionTurnsTable)
+    .where(eq(sessionTurnsTable.sessionId, sessionId))
+    .orderBy(desc(sessionTurnsTable.seq))
+    .limit(1);
+  const qaSeq = (lastTurn?.seq ?? 0) + 1;
+
+  const [qaTurn] = await db
+    .insert(sessionTurnsTable)
+    .values({
+      sessionId,
+      seq: qaSeq,
+      role: "copilot",
+      action: parentAction,
+      status: "running",
+      instruction: `QA correction: ${verdict.correctionHint}`,
+    })
+    .returning();
+
+  const qaStartMs = Date.now();
+  // One image generation for the corrective pass.
+  const correctionCostUsd = estimateImagenCost(1);
+
+  try {
+    const corrected = await runImageInteraction({
+      prompt: `Correction needed: ${verdict.correctionHint}. Original instruction: "${instruction}"`,
+      slots: [],
+      previousInteractionId: interactionId,
+      aspectRatio: "1:1",
+    });
+
+    const correctedFilename = `copilot-qa-${crypto.randomUUID()}.png`;
+    await writeBuffer("generated", correctedFilename, corrected.imageBuffer);
+    const correctedUrl = `/api/files/generated/${correctedFilename}`;
+
+    for (const vid of variantIds) {
+      await db
+        .update(creativeVariantsTable)
+        .set({ rawImageUrl: correctedUrl, compositedImageUrl: correctedUrl })
+        .where(eq(creativeVariantsTable.id, vid));
+    }
+
+    if (qaTurn) {
+      await db
+        .update(sessionTurnsTable)
+        .set({
+          status: "done",
+          resultVariantIds: variantIds,
+          interactionId: corrected.interactionId,
+          costUsd: correctionCostUsd,
+          durationMs: Date.now() - qaStartMs,
+          metadata: { isQaCorrection: true, issue: verdict.issue, correctionHint: verdict.correctionHint },
+          updatedAt: new Date(),
+        })
+        .where(eq(sessionTurnsTable.id, qaTurn.id));
+    }
+
+    // Log the corrective generation cost separately so the cost dashboard
+    // accurately reflects the extra generation spend.
+    await db.insert(costLogsTable).values({
+      creativeId,
+      service: "copilot",
+      operation: "qa_correction",
+      model: COPILOT_MODELS.NANO_BANANA_MODEL,
+      costUsd: correctionCostUsd,
+    });
+
+    onProgress({ type: "progress", step: "qa", message: "QA: correction applied", done: true });
+    return { interactionId: corrected.interactionId, qaRetried: true, qaIssue: verdict.issue };
+  } catch (err) {
+    if (qaTurn) {
+      await db
+        .update(sessionTurnsTable)
+        .set({ status: "error", error: String(err), updatedAt: new Date() })
+        .where(eq(sessionTurnsTable.id, qaTurn.id));
+    }
+    logger.warn({ err }, "QA corrective edit failed — keeping original image");
+    return { interactionId, qaRetried: false };
+  }
+}
+
+async function executeDraftWithQa(params: {
+  session: StudioSession;
+  creative: typeof creativesTable.$inferSelect;
+  input: TurnInput;
+  onProgress: ProgressCallback;
+}): Promise<ActionResult> {
+  const result = await executeDraft(params);
+  const qa = await applyQaPass({
+    variantIds: result.variantIds,
+    instruction: params.input.instruction,
+    interactionId: result.interactionId,
+    sessionId: params.session.id,
+    parentAction: "draft",
+    creativeId: params.creative.id,
+    brandId: params.creative.brandId,
+    onProgress: params.onProgress,
+  });
+  return {
+    ...result,
+    interactionId: qa.interactionId ?? result.interactionId,
+    metadata: { ...(result.metadata || {}), qaRetried: qa.qaRetried, qaIssue: qa.qaIssue },
+  };
+}
+
+async function executeEditImageWithQa(params: {
+  session: StudioSession;
+  creative: typeof creativesTable.$inferSelect;
+  input: TurnInput;
+  onProgress: ProgressCallback;
+}): Promise<ActionResult> {
+  const result = await executeEditImage(params);
+  const qa = await applyQaPass({
+    variantIds: result.variantIds,
+    instruction: params.input.instruction,
+    interactionId: result.interactionId,
+    sessionId: params.session.id,
+    parentAction: "edit_image",
+    creativeId: params.creative.id,
+    brandId: params.creative.brandId,
+    onProgress: params.onProgress,
+  });
+  return {
+    ...result,
+    interactionId: qa.interactionId ?? result.interactionId,
+    metadata: { ...(result.metadata || {}), qaRetried: qa.qaRetried, qaIssue: qa.qaIssue },
+  };
+}
+
+// ============================================================================
+// Phase 2: edit_region
+// ============================================================================
+
+async function executeEditRegion(params: {
+  session: StudioSession;
+  creative: typeof creativesTable.$inferSelect;
+  input: TurnInput;
+  onProgress: ProgressCallback;
+}): Promise<ActionResult> {
+  const { session, creative, input, onProgress } = params;
+
+  if (!session.imageInteractionId) {
+    throw new Error("No previous image interaction to edit. Run a draft or edit first.");
+  }
+
+  const region = input.region;
+  if (!region) {
+    throw new Error("edit_region requires a region bounding box { x0, y0, x1, y1 }.");
+  }
+
+  const regionPrompt =
+    `Apply ONLY within the region bounded by normalized coordinates ` +
+    `top-left [${region.x0.toFixed(3)}, ${region.y0.toFixed(3)}] ` +
+    `to bottom-right [${region.x1.toFixed(3)}, ${region.y1.toFixed(3)}]: ` +
+    `${input.instruction}. ` +
+    `Keep all content outside this region completely unchanged.`;
+
+  onProgress({
+    type: "progress",
+    step: "image",
+    message: `Applying region edit within [${(region.x0 * 100).toFixed(0)}%, ${(region.y0 * 100).toFixed(0)}%] to [${(region.x1 * 100).toFixed(0)}%, ${(region.y1 * 100).toFixed(0)}%]...`,
+  });
+
+  const imageResult = await runImageInteraction({
+    prompt: regionPrompt,
+    slots: [],
+    previousInteractionId: session.imageInteractionId,
+    aspectRatio: "1:1",
+  });
+
+  onProgress({ type: "progress", step: "image", message: "Region edit applied", done: true });
+  onProgress({ type: "progress", step: "captions", message: "Updating captions..." });
+
+  const { captions } = await buildImageAwareCaption({
+    brandId: creative.brandId,
+    briefText: input.instruction || creative.briefText || "",
+    imageBuffer: imageResult.imageBuffer,
+    imageMimeType: imageResult.mimeType,
+    intent: creative.intent,
+  });
+
+  onProgress({ type: "progress", step: "captions", message: "Captions updated", done: true });
+
+  const activeVariantId = session.activeVariantId;
+  const variantIds = await saveTurnVariants({
+    creativeId: creative.id,
+    sessionId: session.id,
+    imageBuffer: imageResult.imageBuffer,
+    imageMimeType: imageResult.mimeType,
+    captions,
+    sourceVariantId: activeVariantId || undefined,
+    label: "edit-region",
+  });
+
+  const qa = await applyQaPass({
+    variantIds,
+    instruction: input.instruction,
+    interactionId: imageResult.interactionId,
+    sessionId: session.id,
+    parentAction: "edit_region",
+    creativeId: creative.id,
+    brandId: creative.brandId,
+    onProgress,
+  });
+
+  const costUsd = estimateImagenCost(1) + estimateClaudeCost();
+
+  return {
+    variantIds,
+    interactionId: qa.interactionId ?? imageResult.interactionId,
+    costUsd,
+    summary: `Region edit applied within [${(region.x0 * 100).toFixed(0)}%,${(region.y0 * 100).toFixed(0)}%] to [${(region.x1 * 100).toFixed(0)}%,${(region.y1 * 100).toFixed(0)}%]`,
+    metadata: { instruction: input.instruction, region, qaRetried: qa.qaRetried, qaIssue: qa.qaIssue },
+    modelUsed: COPILOT_MODELS.NANO_BANANA_MODEL,
+  };
+}
+
+// ============================================================================
+// Phase 2: convert_video / edit_video
+// ============================================================================
+
+async function executeConvertVideo(params: {
+  session: StudioSession;
+  creative: typeof creativesTable.$inferSelect;
+  input: TurnInput;
+  onProgress: ProgressCallback;
+}): Promise<ActionResult> {
+  const { session, creative, input, onProgress } = params;
+
+  // When sourceVariantId is supplied (e.g. from a fan-out YouTube card's inline
+  // "Convert to video" button) use that variant as the source image instead of
+  // the session's current activeVariantId.  This allows per-card conversion
+  // without changing the active variant.
+  const targetVariantId = input.sourceVariantId || session.activeVariantId;
+  if (!targetVariantId) {
+    throw new Error("No active image to convert. Run a draft or edit first.");
+  }
+
+  onProgress({ type: "progress", step: "image", message: "Loading current image for video conversion..." });
+
+  const [variant] = await db
+    .select()
+    .from(creativeVariantsTable)
+    .where(eq(creativeVariantsTable.id, targetVariantId));
+  if (!variant) throw new Error("Active variant not found");
+
+  // Ownership check: when sourceVariantId was explicitly supplied (fan-out card
+  // button), verify the variant belongs to this creative to prevent cross-creative
+  // targeting.  Sessions are already scoped to a creative; activeVariantId is
+  // implicitly trusted.
+  if (input.sourceVariantId && (variant as Record<string, unknown>).creativeId !== creative.id) {
+    throw new Error("Variant does not belong to this creative and cannot be converted.");
+  }
+
+  const imageUrl = variant.compositedImageUrl || variant.rawImageUrl;
+  if (!imageUrl) throw new Error("Active variant has no image");
+
+  const loc = resolveUrl(imageUrl);
+  if (!loc) throw new Error("Cannot resolve image URL");
+  const imageBuffer = await readBuffer(loc);
+  if (!imageBuffer) throw new Error("Could not read image buffer");
+
+  onProgress({
+    type: "progress",
+    step: "video",
+    message: `Converting image to video via ${COPILOT_MODELS.OMNI_VIDEO_MODEL}...`,
+  });
+
+  // When converting a fan-out YouTube card, use the YouTube aspect ratio (16:9).
+  // Fall back to explicit platform param, then to the source variant's own aspectRatio.
+  const aspectRatio =
+    (input.platform && PLATFORM_CONFIGS[input.platform]?.aspectRatio) ??
+    (variant.aspectRatio || "1:1");
+
+  const videoResult = await runVideoInteraction({
+    prompt: input.instruction || "Convert this image into a short, dynamic video clip. Animate the subject naturally with subtle movement, camera drift, and ambient motion. Keep the brand framing intact.",
+    imageBuffer,
+    imageMimeType: contentTypeFor(loc.filename) || "image/png",
+    previousInteractionId: null,
+    aspectRatio,
+  });
+
+  onProgress({ type: "progress", step: "video", message: "Video generated", done: true });
+  onProgress({ type: "progress", step: "saving", message: "Saving video variant..." });
+
+  const videoFilename = `copilot-video-${crypto.randomUUID()}.mp4`;
+  await writeBuffer("generated", videoFilename, videoResult.videoBuffer);
+  const videoUrl = `/api/files/generated/${videoFilename}`;
+
+  // Use the source variant's platform so the video card stays associated with
+  // the same platform slot (e.g. "youtube" from fan-out).
+  const platform = input.platform || (variant.platform as string | null) || "all";
+
+  const [videoVariant] = await db
+    .insert(creativeVariantsTable)
+    .values({
+      creativeId: creative.id,
+      platform,
+      aspectRatio,
+      rawImageUrl: imageUrl,
+      compositedImageUrl: imageUrl,
+      videoUrl,
+      status: "generated",
+      sourceVariantId: targetVariantId,
+    })
+    .returning({ id: creativeVariantsTable.id });
+
+  if (!videoVariant) throw new Error("Failed to save video variant");
+
+  const durationSeconds = estimateVideoDurationSeconds(videoResult.videoBuffer.length);
+  const costUsd = durationSeconds * COST_ESTIMATES.VIDEO_COST_PER_SECOND_USD;
+
+  return {
+    variantIds: [videoVariant.id],
+    videoInteractionId: videoResult.interactionId,
+    costUsd,
+    summary: "Image converted to video — edit the video with follow-up instructions",
+    thumbnailUrl: imageUrl,
+    // sourceVariantId in metadata lets the frontend update fan-out card state
+    // when this conversion was triggered from a YouTube fan-out card button.
+    metadata: { videoUrl, aspectRatio, durationSeconds, costUsd, sourceVariantId: targetVariantId },
+    modelUsed: COPILOT_MODELS.OMNI_VIDEO_MODEL,
+  };
+}
+
+async function executeEditVideo(params: {
+  session: StudioSession;
+  creative: typeof creativesTable.$inferSelect;
+  input: TurnInput;
+  onProgress: ProgressCallback;
+}): Promise<ActionResult> {
+  const { session, creative, input, onProgress } = params;
+
+  if (!session.videoInteractionId) {
+    throw new Error("No previous video interaction to edit. Convert an image to video first.");
+  }
+
+  onProgress({
+    type: "progress",
+    step: "video",
+    message: `Editing video via ${COPILOT_MODELS.OMNI_VIDEO_MODEL}...`,
+  });
+
+  // Preserve the source variant's platform and aspect ratio so follow-up
+  // video edits stay associated with the same platform slot (e.g. YouTube 16:9).
+  const activeVariantId = session.activeVariantId;
+  const [sourceVariant] = activeVariantId
+    ? await db.select().from(creativeVariantsTable).where(eq(creativeVariantsTable.id, activeVariantId))
+    : [null];
+  const inheritedAspectRatio = (input.platform && PLATFORM_CONFIGS[input.platform]?.aspectRatio)
+    || (sourceVariant as { aspectRatio?: string | null } | null)?.aspectRatio
+    || "1:1";
+  const inheritedPlatform = input.platform
+    || (sourceVariant as { platform?: string | null } | null)?.platform
+    || "all";
+
+  const videoResult = await runVideoInteraction({
+    prompt: input.instruction,
+    imageBuffer: null,
+    previousInteractionId: session.videoInteractionId,
+    aspectRatio: inheritedAspectRatio,
+  });
+
+  onProgress({ type: "progress", step: "video", message: "Video edit applied", done: true });
+  onProgress({ type: "progress", step: "saving", message: "Saving edited video..." });
+
+  const videoFilename = `copilot-video-edit-${crypto.randomUUID()}.mp4`;
+  await writeBuffer("generated", videoFilename, videoResult.videoBuffer);
+  const videoUrl = `/api/files/generated/${videoFilename}`;
+
+  const thumbnailUrl = session.thumbnailUrl || undefined;
+
+  const [videoVariant] = await db
+    .insert(creativeVariantsTable)
+    .values({
+      creativeId: creative.id,
+      platform: inheritedPlatform,
+      aspectRatio: inheritedAspectRatio,
+      rawImageUrl: thumbnailUrl || "",
+      compositedImageUrl: thumbnailUrl || "",
+      videoUrl,
+      status: "generated",
+      sourceVariantId: activeVariantId || undefined,
+    })
+    .returning({ id: creativeVariantsTable.id });
+
+  if (!videoVariant) throw new Error("Failed to save video variant");
+
+  const durationSeconds = estimateVideoDurationSeconds(videoResult.videoBuffer.length);
+  const costUsd = durationSeconds * COST_ESTIMATES.VIDEO_COST_PER_SECOND_USD;
+
+  return {
+    variantIds: [videoVariant.id],
+    videoInteractionId: videoResult.interactionId,
+    costUsd,
+    summary: "Video edit applied — targeted change while preserving the clip",
+    thumbnailUrl,
+    metadata: { videoUrl, durationSeconds, costUsd },
+    modelUsed: COPILOT_MODELS.OMNI_VIDEO_MODEL,
+  };
+}
+
+// ============================================================================
+// Phase 2: fan_out
+// ============================================================================
+
+
+async function buildFanOutCaptions(params: {
+  brandId: string;
+  briefText: string;
+  imageBuffer: Buffer;
+  imageMimeType: string;
+  intent?: string | null;
+}): Promise<Record<string, { caption: string; headline: string }>> {
+  const { brandId, briefText, imageBuffer, imageMimeType, intent } = params;
+  const [brand] = await db.select().from(brandsTable).where(eq(brandsTable.id, brandId));
+  if (!brand) return {};
+
+  const platforms = Object.keys(PLATFORM_CONFIGS);
+  const platformList = platforms.map(p => `"${p}": { "caption": "...", "headline": "..." }`).join(",\n  ");
+  const intentLine = intent ? `Post intent: ${intent}\n` : "";
+  const briefLine = briefText ? `Brief: ${briefText}\n` : "";
+  const userText =
+    `${intentLine}${briefLine}Look at the image and write platform-specific captions.\n` +
+    `Return ONLY valid JSON:\n{\n  ${platformList}\n}\n\n` +
+    `Headline: punchy, platform-appropriate, 3-8 words, no em dashes. ` +
+    `YouTube headline should work as a video title.`;
+
+  const response = await anthropic.messages.create({
+    model: "claude-sonnet-4-6",
+    max_tokens: 2048,
+    temperature: 0.7,
+    system:
+      `You are a social media copywriter for ${brand.name}. Voice: ${brand.voiceDescription ?? "professional and engaging"}. ` +
+      `Write image-aware captions for all requested platforms. Return only raw JSON.`,
+    messages: [{
+      role: "user",
+      content: [
+        {
+          type: "image",
+          source: {
+            type: "base64",
+            media_type: (imageMimeType as "image/png" | "image/jpeg" | "image/gif" | "image/webp"),
+            data: imageBuffer.toString("base64"),
+          },
+        },
+        { type: "text", text: userText },
+      ],
+    }],
+  });
+
+  const textBlock = response.content.find(b => b.type === "text");
+  if (!textBlock || textBlock.type !== "text") return {};
+
+  const parsed = extractJSON<Record<string, unknown>>(textBlock.text);
+  const result: Record<string, { caption: string; headline: string }> = {};
+  for (const p of platforms) {
+    const raw = parsed[p] as { caption?: unknown; headline?: unknown } | undefined;
+    result[p] = {
+      caption: typeof raw?.caption === "string" ? raw.caption : "",
+      headline: typeof raw?.headline === "string" ? raw.headline : "",
+    };
+  }
+  return result;
+}
+
+async function executeFanOut(params: {
+  session: StudioSession;
+  creative: typeof creativesTable.$inferSelect;
+  input: TurnInput;
+  onProgress: ProgressCallback;
+}): Promise<ActionResult> {
+  const { session, creative, input, onProgress } = params;
+
+  const activeVariantId = session.activeVariantId;
+  if (!activeVariantId) {
+    throw new Error("No active image for fan-out. Run a draft or edit first.");
+  }
+
+  onProgress({ type: "progress", step: "fan_out", message: "Loading current image..." });
+
+  const [variant] = await db
+    .select()
+    .from(creativeVariantsTable)
+    .where(eq(creativeVariantsTable.id, activeVariantId));
+  if (!variant) throw new Error("Active variant not found");
+
+  const imageUrl = variant.compositedImageUrl || variant.rawImageUrl;
+  if (!imageUrl) throw new Error("Active variant has no image");
+
+  const loc = resolveUrl(imageUrl);
+  if (!loc) throw new Error("Cannot resolve image URL");
+  const imageBuffer = await readBuffer(loc);
+  if (!imageBuffer) throw new Error("Could not read image buffer");
+
+  onProgress({ type: "progress", step: "fan_out", message: "Detecting subject for smart reframe..." });
+
+  const { focal, box } = await detectSubject(imageBuffer);
+
+  onProgress({ type: "progress", step: "fan_out", message: "Generating image-aware captions for all platforms..." });
+
+  const fanOutCaptions = await buildFanOutCaptions({
+    brandId: creative.brandId,
+    briefText: input.instruction || creative.briefText || "",
+    imageBuffer,
+    imageMimeType: contentTypeFor(loc.filename) || "image/png",
+    intent: creative.intent,
+  });
+
+  // Fetch performance insights once; used for insights-backed schedule times
+  // per platform instead of hardcoded hour slots.
+  const intentInsights = await getIntentInsights({
+    brandId: creative.brandId,
+    intent: creative.intent,
+  }).catch(() => null);
+
+  // Build a lookup from insights: use the best-time suggestedHour as the
+  // schedule anchor for all platforms. PlatformInsight doesn't carry per-slot
+  // timing, so we use the leading TimeInsight (highest engagement day-part).
+  // Falls back to 10am when there is no historical data.
+  const bestHour = intentInsights?.bestTimes?.[0]?.suggestedHour ?? 10;
+
+  // Spread platforms across adjacent slots (+1h each) so they don't all fire
+  // at exactly the same moment, mirroring the existing publish-scheduler idiom.
+  const platformOrder = Object.keys(PLATFORM_CONFIGS);
+  const insightHour = (platform: string): number =>
+    bestHour + platformOrder.indexOf(platform);
+
+  const now = new Date();
+
+  // Compute the next occurrence of a given hour (today if still in the future,
+  // otherwise tomorrow).
+  const nextSlot = (hour: number): Date => {
+    const d = new Date(now);
+    d.setHours(hour, 0, 0, 0);
+    if (d.getTime() <= now.getTime() + 60 * 60 * 1000) {
+      d.setDate(d.getDate() + 1);
+    }
+    return d;
+  };
+
+  // Measure source image dimensions once so predictClip can be called per platform.
+  const { width: srcW, height: srcH } = await imageDimensions(imageBuffer);
+  const sourceAspect = srcW / srcH;
+
+  onProgress({ type: "progress", step: "fan_out", message: "Creating platform variants..." });
+
+  const platformCards: FanOutPlatformCard[] = [];
+  const allVariantIds: string[] = [];
+  let outpaintCount = 0;
+
+  for (const [platformKey, config] of Object.entries(PLATFORM_CONFIGS)) {
+    try {
+      const [targetW, targetH] = config.aspectRatio.split(":").map(Number) as [number, number];
+      const targetAspect = targetW / targetH;
+
+      // Use the existing focal-point pipeline: when a standard crop would clip
+      // the subject, escalate to generative outpainting (N1); otherwise reframe.
+      const willClip = predictClip(box, focal, sourceAspect, targetAspect);
+      let outputBuffer: Buffer;
+      if (willClip) {
+        outputBuffer = await outpaintImage(
+          imageBuffer,
+          contentTypeFor(loc.filename) || "image/png",
+          config.aspectRatio,
+          input.instruction || creative.briefText || undefined,
+        );
+        outpaintCount++;
+      } else {
+        outputBuffer = await reframeImage(imageBuffer, config.width, config.height, focal, box);
+      }
+
+      const filename = `copilot-fanout-${platformKey}-${crypto.randomUUID()}.png`;
+      await writeBuffer("generated", filename, outputBuffer);
+      const reframedUrl = `/api/files/generated/${filename}`;
+
+      const cap = fanOutCaptions[platformKey] ?? { caption: "", headline: "" };
+
+      const [variantRow] = await db
+        .insert(creativeVariantsTable)
+        .values({
+          creativeId: creative.id,
+          platform: platformKey,
+          aspectRatio: config.aspectRatio,
+          rawImageUrl: reframedUrl,
+          compositedImageUrl: reframedUrl,
+          caption: cap.caption,
+          headlineText: cap.headline,
+          status: "generated",
+          sourceVariantId: activeVariantId,
+        })
+        .returning({ id: creativeVariantsTable.id });
+
+      if (!variantRow) continue;
+      allVariantIds.push(variantRow.id);
+
+      platformCards.push({
+        platform: platformKey,
+        variantId: variantRow.id,
+        imageUrl: reframedUrl,
+        caption: cap.caption,
+        headline: cap.headline,
+        // Insights-backed schedule time: uses historical engagement data
+        // from performance-insights.ts rather than hardcoded hour slots.
+        suggestedAt: nextSlot(insightHour(platformKey)).toISOString(),
+        // YouTube is a video platform — the thumbnail reframe is stored so the
+        // card appears in the inline grid, but the user must run convert_video
+        // before scheduling.  Card renders a "Generate video first" CTA.
+        ...(platformKey === "youtube" ? { requiresVideo: true } : {}),
+      });
+    } catch (err) {
+      logger.warn({ err, platform: platformKey }, "Fan-out reframe failed for platform — skipping");
+    }
+  }
+
+  if (allVariantIds.length === 0) {
+    throw new Error("Fan-out produced no platform variants");
+  }
+
+  // Caption generation (Claude) + subject detection (Gemini text) +
+  // any outpaint calls (each is one Imagen generation).
+  const costUsd = estimateClaudeCost() + estimateGeminiTextCost() + estimateImagenCost(outpaintCount);
+
+  return {
+    variantIds: allVariantIds,
+    costUsd,
+    summary: `Platform set: ${platformCards.length} platforms ready`,
+    metadata: { platforms: platformCards },
+    modelUsed: "claude-sonnet-4-6",
+  };
+}
+
+// ============================================================================
+// Phase 2: schedule
+// ============================================================================
+
+async function executeSchedule(params: {
+  session: StudioSession;
+  creative: typeof creativesTable.$inferSelect;
+  input: TurnInput;
+  onProgress: ProgressCallback;
+}): Promise<ActionResult> {
+  const { creative, input, onProgress } = params;
+  const schedules = input.schedules ?? [];
+
+  if (schedules.length === 0) {
+    throw new Error("No schedules provided. Approve platforms and set times before scheduling.");
+  }
+
+  onProgress({
+    type: "progress",
+    step: "schedule",
+    message: `Scheduling ${schedules.length} platform post${schedules.length !== 1 ? "s" : ""}...`,
+  });
+
+  const [creativeRow] = await db
+    .select({ intent: creativesTable.intent })
+    .from(creativesTable)
+    .where(eq(creativesTable.id, creative.id));
+
+  // Ownership check: verify every variantId belongs to this creative before
+  // inserting calendar rows. Prevents cross-creative IDOR-style scheduling.
+  // Collect the full variant rows so we can inspect videoUrl below.
+  const ownedVariants = new Map<string, Record<string, unknown>>();
+  for (const sched of schedules) {
+    const [variant] = await db
+      .select()
+      .from(creativeVariantsTable)
+      .where(
+        and(
+          eq(creativeVariantsTable.id, sched.variantId),
+          eq(creativeVariantsTable.creativeId, creative.id),
+        ),
+      );
+    if (!variant) {
+      throw new Error(
+        `Variant "${sched.variantId}" does not belong to this creative and cannot be scheduled.`,
+      );
+    }
+    ownedVariants.set(sched.variantId, variant as Record<string, unknown>);
+  }
+
+  // Mirror the platform-to-account-platform mapping used by publish-scheduler
+  // so we can resolve the correct connected social account for each entry.
+  const ACCOUNT_PLATFORM_MAP: Record<string, string> = {
+    twitter:         "twitter",
+    instagram_feed:  "instagram",
+    instagram_story: "instagram",
+    linkedin:        "linkedin",
+    tiktok:          "tiktok",
+    youtube:         "youtube",
+  };
+
+  // Load all connected accounts for this brand once, keyed by account platform.
+  const brandAccounts = await db
+    .select({ id: socialAccountsTable.id, platform: socialAccountsTable.platform })
+    .from(socialAccountsTable)
+    .where(
+      and(
+        eq(socialAccountsTable.brandId, creative.brandId),
+        eq(socialAccountsTable.status, "connected"),
+      ),
+    );
+  const accountByPlatform = new Map(brandAccounts.map(a => [a.platform, a.id]));
+
+  // Validate that every scheduled platform has a connected account before
+  // inserting any rows — fail fast with a clear message so the user can
+  // connect the missing account in Settings first.
+  for (const sched of schedules) {
+    const accountPlatform = ACCOUNT_PLATFORM_MAP[sched.platform] ?? sched.platform;
+    if (!accountByPlatform.has(accountPlatform)) {
+      throw new Error(
+        `No connected ${sched.platform} account found for this brand. ` +
+        `Connect the account in Settings before scheduling.`,
+      );
+    }
+  }
+
+  // YouTube requires a video asset — block scheduling if the variant only has
+  // an image thumbnail (produced by fan-out, requiresVideo: true).  The user
+  // must run convert_video on the YouTube variant first.
+  // Uses ownedVariants already loaded above to avoid a second DB query.
+  for (const sched of schedules) {
+    if (sched.platform === "youtube") {
+      const variant = ownedVariants.get(sched.variantId);
+      if (!variant?.videoUrl && !variant?.mergedVideoUrl) {
+        throw new Error(
+          "YouTube variants require a video asset before scheduling. " +
+          "Run convert_video on the YouTube card first, then schedule.",
+        );
+      }
+    }
+  }
+
+  const entryIds: string[] = [];
+
+  // Each row is inserted with publishStatus="scheduled" so the existing
+  // publish-scheduler (pollAndPublish) will pick it up at the scheduled time
+  // and dispatch through the platform-specific publish services.
+  for (const sched of schedules) {
+    const accountPlatform = ACCOUNT_PLATFORM_MAP[sched.platform] ?? sched.platform;
+    const socialAccountId = accountByPlatform.get(accountPlatform) ?? null;
+    const [entry] = await db
+      .insert(calendarEntriesTable)
+      .values({
+        creativeId: creative.id,
+        variantId: sched.variantId,
+        platform: sched.platform,
+        socialAccountId,
+        scheduledAt: new Date(sched.scheduledAt),
+        publishStatus: "scheduled",
+        intent: creativeRow?.intent ?? null,
+        scheduleMethod: "copilot",
+      })
+      .returning({ id: calendarEntriesTable.id });
+    if (entry) entryIds.push(entry.id);
+  }
+
+  onProgress({ type: "progress", step: "schedule", message: `${entryIds.length} posts queued for publish scheduler`, done: true });
+
+  const platformSet = new Set(schedules.map(s => s.platform));
+
+  return {
+    variantIds: schedules.map(s => s.variantId),
+    costUsd: 0,
+    summary:
+      `${entryIds.length} post${entryIds.length !== 1 ? "s" : ""} scheduled across ` +
+      `${platformSet.size} platform${platformSet.size !== 1 ? "s" : ""}`,
+    metadata: { entryIds, schedules },
   };
 }

@@ -43,6 +43,88 @@ interface RawInteractionResponse {
  *   the artifact the model already holds — composition stays intact unless the
  *   instruction explicitly asks for a re-roll ("new take").
  */
+export interface InteractionVideoResult {
+  interactionId: string;
+  videoBuffer: Buffer;
+  mimeType: string;
+}
+
+/**
+ * Create or continue a video interaction via Omni Flash.
+ *
+ * - First call (no previousInteractionId): seeds the model with the current
+ *   image to convert it into a video clip.
+ * - Subsequent calls (previousInteractionId set): targeted preserving edit on
+ *   the video the model already holds.
+ */
+export async function runVideoInteraction(params: {
+  prompt: string;
+  imageBuffer?: Buffer | null;
+  imageMimeType?: string;
+  previousInteractionId?: string | null;
+  aspectRatio?: string;
+}): Promise<InteractionVideoResult> {
+  const { prompt, imageBuffer, imageMimeType, previousInteractionId, aspectRatio = "1:1" } = params;
+
+  const requestBody: Record<string, unknown> = {
+    model: COPILOT_MODELS.OMNI_VIDEO_MODEL,
+    input: prompt,
+    response_format: {
+      type: "video",
+      aspect_ratio: aspectRatio as "16:9" | "9:16" | "1:1",
+    },
+  };
+
+  if (imageBuffer) {
+    requestBody.media = [{
+      data: imageBuffer.toString("base64"),
+      mime_type: imageMimeType || "image/png",
+      slot: "image_1",
+      description: "Seed image for video generation",
+    }];
+  }
+
+  if (previousInteractionId) {
+    requestBody.previous_interaction_id = previousInteractionId;
+  }
+
+  logger.debug(
+    {
+      model: COPILOT_MODELS.OMNI_VIDEO_MODEL,
+      hasPreviousInteraction: Boolean(previousInteractionId),
+      hasImageSeed: Boolean(imageBuffer),
+      aspectRatio,
+    },
+    "Running video interaction",
+  );
+
+  const response = (await ai.interactions.create(
+    requestBody as Parameters<typeof ai.interactions.create>[0],
+  )) as RawInteractionResponse;
+
+  const videoData = response.output_video?.data;
+  if (!videoData) {
+    const status = response.status || "unknown";
+    throw new Error(
+      `Omni Flash returned no video data (status: ${status}). ` +
+      `Model: ${COPILOT_MODELS.OMNI_VIDEO_MODEL}. Do not substitute.`,
+    );
+  }
+
+  const interactionId = response.id;
+  if (!interactionId) {
+    throw new Error(
+      "Video Interactions API returned no interaction id — cannot chain subsequent edits.",
+    );
+  }
+
+  return {
+    interactionId,
+    videoBuffer: Buffer.from(videoData, "base64"),
+    mimeType: response.output_video?.mime_type || "video/mp4",
+  };
+}
+
 export async function runImageInteraction(params: {
   prompt: string;
   slots?: ImageSlot[];

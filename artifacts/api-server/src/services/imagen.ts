@@ -11,6 +11,7 @@ export const PLATFORM_CONFIGS: Record<string, { platform: string; aspectRatio: s
   twitter: { platform: "twitter", aspectRatio: "16:9", width: 1200, height: 675 },
   linkedin: { platform: "linkedin", aspectRatio: "1.91:1", width: 1200, height: 628 },
   tiktok: { platform: "tiktok", aspectRatio: "9:16", width: 1080, height: 1920 },
+  youtube: { platform: "youtube", aspectRatio: "16:9", width: 1280, height: 720 },
 };
 
 export interface ReferenceImage {

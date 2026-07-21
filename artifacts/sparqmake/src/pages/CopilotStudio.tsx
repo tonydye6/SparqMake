@@ -11,6 +11,7 @@ import {
   Sparkles, Bot, ArrowRight, RotateCcw, MessageSquare,
   Loader2, Clock, ChevronRight, Image as ImageIcon, DollarSign,
   Check, History, X, AlertCircle, Send,
+  Video, Layers, Calendar, Crop, Play,
 } from "lucide-react";
 import { useGetBrands, useGetStyleProfiles } from "@workspace/api-client-react";
 import { cn, apiFetch } from "@/lib/utils";
@@ -68,6 +69,7 @@ interface Session {
   status: string;
   activeVariantId: string | null;
   imageInteractionId: string | null;
+  videoInteractionId: string | null;
   sessionTitle: string | null;
   lastTurnSummary: string | null;
   thumbnailUrl: string | null;
@@ -81,8 +83,19 @@ interface Variant {
   platform: string;
   compositedImageUrl: string | null;
   rawImageUrl: string | null;
+  videoUrl?: string | null;
   caption: string;
   headlineText: string | null;
+}
+
+interface FanOutPlatformCard {
+  platform: string;
+  variantId: string;
+  imageUrl: string;
+  caption: string;
+  headline: string;
+  suggestedAt: string;
+  requiresVideo?: boolean;
 }
 
 // ---- Home view -------------------------------------------------------------
@@ -374,17 +387,18 @@ function StatusBadge({ status }: { status: string }) {
 
 type ComposerChip = {
   label: string;
-  action: "draft" | "edit_image" | "caption" | "compare";
+  action: "draft" | "edit_image" | "edit_region" | "caption" | "compare" | "convert_video" | "edit_video" | "fan_out" | "schedule";
   instruction: string;
-  comingSoon?: boolean;
+  requiresImage?: boolean;
+  requiresVideo?: boolean;
 };
 
 const CHIPS: ComposerChip[] = [
-  { label: "Make it bolder", action: "edit_image", instruction: "Make the composition bolder and more energetic" },
-  { label: "New take", action: "compare", instruction: "Generate 3 fresh takes" },
-  { label: "Punchier caption", action: "caption", instruction: "Rewrite all captions to be punchier and more engaging" },
-  { label: "Convert to video", action: "edit_image", instruction: "Convert to video", comingSoon: true },
-  { label: "Make platform set", action: "edit_image", instruction: "Make platform set", comingSoon: true },
+  { label: "Make it bolder", action: "edit_image", instruction: "Make the composition bolder and more energetic", requiresImage: true },
+  { label: "New take", action: "compare", instruction: "Generate 3 fresh takes", requiresImage: true },
+  { label: "Punchier caption", action: "caption", instruction: "Rewrite all captions to be punchier and more engaging", requiresImage: true },
+  { label: "Convert to video", action: "convert_video", instruction: "Convert this image into a dynamic short video clip with natural movement and ambient animation", requiresImage: true },
+  { label: "Make platform set", action: "fan_out", instruction: "Create platform-optimized versions for all channels", requiresImage: true },
 ];
 
 interface SessionViewProps {
@@ -405,6 +419,8 @@ interface SessionState {
   error: string | null;
   captionAlternates: Array<{ caption: string; headline: string }> | null;
   captionPlatform: string | null;
+  // Maps fan-out YouTube card image variantId → converted video variantId
+  fanOutVideoVariants: Record<string, string>;
 }
 
 type SessionAction =
@@ -416,7 +432,8 @@ type SessionAction =
   | { type: "setError"; error: string | null }
   | { type: "setActiveVariant"; variant: Variant }
   | { type: "addTurn"; turn: Turn }
-  | { type: "setCaptionAlternates"; alternates: Array<{ caption: string; headline: string }> | null; platform: string | null };
+  | { type: "setCaptionAlternates"; alternates: Array<{ caption: string; headline: string }> | null; platform: string | null }
+  | { type: "setFanOutVideoVariant"; sourceId: string; videoId: string };
 
 function sessionReducer(state: SessionState, action: SessionAction): SessionState {
   switch (action.type) {
@@ -434,6 +451,10 @@ function sessionReducer(state: SessionState, action: SessionAction): SessionStat
     case "setActiveVariant": return { ...state, activeVariant: action.variant };
     case "addTurn": return { ...state, turns: [...state.turns, action.turn] };
     case "setCaptionAlternates": return { ...state, captionAlternates: action.alternates, captionPlatform: action.platform };
+    case "setFanOutVideoVariant": return {
+      ...state,
+      fanOutVideoVariants: { ...state.fanOutVideoVariants, [action.sourceId]: action.videoId },
+    };
     default: return state;
   }
 }
@@ -452,10 +473,23 @@ function buildHistory(turns: Turn[], variants: Variant[]) {
 const ACTION_LABELS: Record<string, string> = {
   draft: "Draft",
   edit_image: "Targeted edit",
+  edit_region: "Region edit",
   caption: "Caption rewrite",
   compare: "Compare takes",
+  convert_video: "Convert to video",
+  edit_video: "Edit video",
+  fan_out: "Platform set",
+  schedule: "Scheduled",
 };
 
+const PLATFORM_LABELS: Record<string, string> = {
+  instagram_feed: "IG Feed",
+  instagram_story: "IG Story",
+  twitter: "Twitter",
+  linkedin: "LinkedIn",
+  tiktok: "TikTok",
+  youtube: "YouTube",
+};
 
 const PLATFORM_OPTIONS = [
   { value: "all", label: "All" },
@@ -464,12 +498,19 @@ const PLATFORM_OPTIONS = [
   { value: "twitter", label: "Twitter" },
   { value: "linkedin", label: "LinkedIn" },
   { value: "tiktok", label: "TikTok" },
+  { value: "youtube", label: "YouTube" },
 ] as const;
 
 function SessionView({ sessionId, onBack }: SessionViewProps) {
   const { toast } = useToast();
   // Platform target for caption turns — "all" means rewrite every platform
   const [captionTargetPlatform, setCaptionTargetPlatform] = useState<string>("all");
+  // Region selection state
+  const [regionMode, setRegionMode] = useState(false);
+  const [pendingRegion, setPendingRegion] = useState<{x0:number;y0:number;x1:number;y1:number} | null>(null);
+  const [regionInstruction, setRegionInstruction] = useState("");
+  const [dragStart, setDragStart] = useState<{x:number;y:number} | null>(null);
+  const [dragCurrent, setDragCurrent] = useState<{x:number;y:number} | null>(null);
   const [state, dispatch] = useReducer(sessionReducer, {
     session: null,
     turns: [],
@@ -483,6 +524,7 @@ function SessionView({ sessionId, onBack }: SessionViewProps) {
     error: null,
     captionAlternates: null,
     captionPlatform: null,
+    fanOutVideoVariants: {},
   });
 
   const threadRef = useRef<HTMLDivElement>(null);
@@ -519,7 +561,14 @@ function SessionView({ sessionId, onBack }: SessionViewProps) {
     }
   }, [state.turns, state.progressMessages]);
 
-  const runTurn = useCallback(async (action: "draft" | "edit_image" | "caption" | "compare", instruction: string, platform?: string) => {
+  const runTurn = useCallback(async (
+    action: string,
+    instruction: string,
+    platform?: string,
+    region?: {x0:number;y0:number;x1:number;y1:number} | null,
+    schedules?: Array<{variantId:string;platform:string;scheduledAt:string}>,
+    sourceVariantId?: string,
+  ) => {
     if (state.running) return;
     dispatch({ type: "setRunning", running: true });
     dispatch({ type: "clearProgress" });
@@ -529,7 +578,15 @@ function SessionView({ sessionId, onBack }: SessionViewProps) {
       const resp = await apiFetch(`${API_BASE}/api/sessions/${sessionId}/turns`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, instruction, platform, compareCount: action === "compare" ? 3 : undefined }),
+        body: JSON.stringify({
+          action,
+          instruction,
+          platform,
+          compareCount: action === "compare" ? 3 : undefined,
+          ...(region ? { region } : {}),
+          ...(schedules ? { schedules } : {}),
+          ...(sourceVariantId ? { sourceVariantId } : {}),
+        }),
       });
 
       if (!resp.ok) {
@@ -560,6 +617,17 @@ function SessionView({ sessionId, onBack }: SessionViewProps) {
                   type: "setCaptionAlternates",
                   alternates: data.alternates as Array<{ caption: string; headline: string }>,
                   platform: platform || null,
+                });
+              }
+              // When a convert_video turn was triggered from a fan-out YouTube card,
+              // the result carries sourceVariantId + the new video variantIds[0].
+              // Update the fanOutVideoVariants map so FanOutCard can switch to
+              // the video-backed variantId for scheduling.
+              if (data.sourceVariantId && Array.isArray(data.variantIds) && data.variantIds[0]) {
+                dispatch({
+                  type: "setFanOutVideoVariant",
+                  sourceId: data.sourceVariantId as string,
+                  videoId: data.variantIds[0] as string,
                 });
               }
             } catch {}
@@ -606,6 +674,48 @@ function SessionView({ sessionId, onBack }: SessionViewProps) {
       }
     }
   }, [state.composerText, state.running, state.session, captionTargetPlatform, runTurn]);
+
+  const handleRegionEdit = useCallback(() => {
+    if (!regionInstruction.trim() || !pendingRegion) return;
+    void runTurn("edit_region", regionInstruction, undefined, pendingRegion);
+    setPendingRegion(null);
+    setRegionInstruction("");
+    setRegionMode(false);
+  }, [regionInstruction, pendingRegion, runTurn]);
+
+  const handleImgMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (!regionMode) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    setDragStart({ x: (e.clientX - rect.left) / rect.width, y: (e.clientY - rect.top) / rect.height });
+    setDragCurrent(null);
+    e.preventDefault();
+  }, [regionMode]);
+
+  const handleImgMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (!regionMode || !dragStart) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    setDragCurrent({
+      x: Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)),
+      y: Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height)),
+    });
+  }, [regionMode, dragStart]);
+
+  const handleImgMouseUp = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (!regionMode || !dragStart || !dragCurrent) { setDragStart(null); return; }
+    const region = {
+      x0: Math.min(dragStart.x, dragCurrent.x),
+      y0: Math.min(dragStart.y, dragCurrent.y),
+      x1: Math.max(dragStart.x, dragCurrent.x),
+      y1: Math.max(dragStart.y, dragCurrent.y),
+    };
+    if ((region.x1 - region.x0) > 0.05 && (region.y1 - region.y0) > 0.05) {
+      setPendingRegion(region);
+      setRegionMode(false);
+    }
+    setDragStart(null);
+    setDragCurrent(null);
+    e.preventDefault();
+  }, [regionMode, dragStart, dragCurrent]);
 
   const pickHistoryVariant = useCallback(async (variantId: string) => {
     if (!state.session) return;
@@ -707,6 +817,16 @@ function SessionView({ sessionId, onBack }: SessionViewProps) {
                 allVariants={state.allVariants}
                 isActive={session?.activeVariantId !== null}
                 onPickTake={(variantId) => void pickCompareTake(turn.id, variantId)}
+                onSchedule={(schedules) => void runTurn("schedule", "", undefined, undefined, schedules)}
+                onConvertVideo={(sourceVariantId) => void runTurn(
+                  "convert_video",
+                  "Convert this image into a dynamic short video clip with natural movement and ambient animation",
+                  "youtube",
+                  undefined,
+                  undefined,
+                  sourceVariantId,
+                )}
+                convertedVariants={state.fanOutVideoVariants}
               />
             ))}
 
@@ -724,21 +844,44 @@ function SessionView({ sessionId, onBack }: SessionViewProps) {
 
           <div className="border-t border-border p-3 space-y-2">
             <div className="flex flex-wrap gap-1.5">
-              {CHIPS.filter(c => !c.comingSoon).map(chip => (
+              {CHIPS.map(chip => {
+                const disabled = state.running || (chip.requiresImage && !state.session?.imageInteractionId);
+                return (
+                  <button
+                    key={chip.label}
+                    onClick={() => void runTurn(chip.action, chip.instruction)}
+                    disabled={disabled}
+                    className="text-xs px-2.5 py-1 rounded-full border border-border hover:bg-primary/10 hover:border-primary/40 transition-colors disabled:opacity-40"
+                  >
+                    {chip.action === "convert_video" && <Video size={10} className="inline mr-1" />}
+                    {chip.action === "fan_out" && <Layers size={10} className="inline mr-1" />}
+                    {chip.label}
+                  </button>
+                );
+              })}
+              {state.session?.imageInteractionId && (
                 <button
-                  key={chip.label}
-                  onClick={() => void runTurn(chip.action, chip.instruction)}
+                  onClick={() => { setRegionMode(m => !m); setPendingRegion(null); }}
                   disabled={state.running}
+                  className={cn(
+                    "text-xs px-2.5 py-1 rounded-full border transition-colors disabled:opacity-40",
+                    regionMode ? "border-primary bg-primary/10 text-primary" : "border-border hover:bg-primary/10 hover:border-primary/40",
+                  )}
+                >
+                  <Crop size={10} className="inline mr-1" />
+                  Edit region
+                </button>
+              )}
+              {state.session?.videoInteractionId && (
+                <button
+                  onClick={() => void runTurn("edit_video", state.composerText || "Refine the video")}
+                  disabled={state.running || !state.session?.videoInteractionId}
                   className="text-xs px-2.5 py-1 rounded-full border border-border hover:bg-primary/10 hover:border-primary/40 transition-colors disabled:opacity-40"
                 >
-                  {chip.label}
+                  <Video size={10} className="inline mr-1" />
+                  Edit video
                 </button>
-              ))}
-              {CHIPS.filter(c => c.comingSoon).map(chip => (
-                <span key={chip.label} className="text-xs px-2.5 py-1 rounded-full border border-dashed border-border text-muted-foreground cursor-not-allowed">
-                  {chip.label}
-                </span>
-              ))}
+              )}
             </div>
 
             {/* Platform selector: shown once a draft exists so caption turns can target one platform */}
@@ -760,6 +903,41 @@ function SessionView({ sessionId, onBack }: SessionViewProps) {
                     {opt.label}
                   </button>
                 ))}
+              </div>
+            )}
+
+            {pendingRegion && (
+              <div className="bg-primary/5 border border-primary/20 rounded-lg px-3 py-2 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-medium text-primary flex items-center gap-1">
+                    <Crop size={11} />
+                    Region selected — describe the edit:
+                  </span>
+                  <button onClick={() => { setPendingRegion(null); setRegionInstruction(""); }} className="text-muted-foreground hover:text-foreground">
+                    <X size={12} />
+                  </button>
+                </div>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="e.g. add a soft glow, change to sunset sky..."
+                    className="flex-1 text-xs border border-border rounded px-2 py-1 bg-background"
+                    value={regionInstruction}
+                    onChange={e => setRegionInstruction(e.target.value)}
+                    onKeyDown={e => { if (e.key === "Enter") handleRegionEdit(); }}
+                    autoFocus
+                  />
+                  <Button size="sm" onClick={handleRegionEdit} disabled={!regionInstruction.trim() || state.running}>
+                    Apply
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {regionMode && !pendingRegion && (
+              <div className="text-xs text-primary bg-primary/5 border border-primary/20 rounded px-2 py-1.5 flex items-center gap-1.5">
+                <Crop size={11} />
+                Drag on the image to select a region to edit
               </div>
             )}
 
@@ -790,16 +968,62 @@ function SessionView({ sessionId, onBack }: SessionViewProps) {
           <div className="flex-1 overflow-auto p-6 flex items-center justify-center">
             {activeVariant ? (
               <div className="w-full max-w-sm space-y-4">
-                <div className="relative rounded-xl overflow-hidden shadow-lg border border-border bg-card">
-                  <img
-                    src={activeVariant.compositedImageUrl || activeVariant.rawImageUrl || ""}
-                    alt="Generated post"
-                    className="w-full aspect-square object-cover"
-                  />
-                  {activeVariant.headlineText && (
+                <div
+                  className={cn(
+                    "relative rounded-xl overflow-hidden shadow-lg border border-border bg-card",
+                    regionMode && "cursor-crosshair",
+                  )}
+                  onMouseDown={handleImgMouseDown}
+                  onMouseMove={handleImgMouseMove}
+                  onMouseUp={handleImgMouseUp}
+                  onMouseLeave={() => { if (regionMode) { setDragStart(null); setDragCurrent(null); } }}
+                >
+                  {activeVariant.videoUrl ? (
+                    <video
+                      src={`${API_BASE}${activeVariant.videoUrl}`}
+                      className="w-full aspect-square object-cover"
+                      controls
+                      autoPlay
+                      loop
+                      muted
+                      playsInline
+                    />
+                  ) : (
+                    <img
+                      src={activeVariant.compositedImageUrl || activeVariant.rawImageUrl || ""}
+                      alt="Generated post"
+                      className="w-full aspect-square object-cover"
+                      draggable={false}
+                    />
+                  )}
+                  {activeVariant.headlineText && !activeVariant.videoUrl && (
                     <div className="absolute inset-0 flex items-end p-4 bg-gradient-to-t from-black/60 to-transparent">
                       <p className="text-white font-bold text-lg leading-tight">{activeVariant.headlineText}</p>
                     </div>
+                  )}
+                  {/* Region drag selection box */}
+                  {regionMode && dragStart && dragCurrent && (
+                    <div
+                      className="absolute border-2 border-primary bg-primary/20 pointer-events-none"
+                      style={{
+                        left: `${Math.min(dragStart.x, dragCurrent.x) * 100}%`,
+                        top: `${Math.min(dragStart.y, dragCurrent.y) * 100}%`,
+                        width: `${Math.abs(dragCurrent.x - dragStart.x) * 100}%`,
+                        height: `${Math.abs(dragCurrent.y - dragStart.y) * 100}%`,
+                      }}
+                    />
+                  )}
+                  {/* Pending region indicator */}
+                  {pendingRegion && (
+                    <div
+                      className="absolute border-2 border-primary border-dashed bg-primary/10 pointer-events-none"
+                      style={{
+                        left: `${pendingRegion.x0 * 100}%`,
+                        top: `${pendingRegion.y0 * 100}%`,
+                        width: `${(pendingRegion.x1 - pendingRegion.x0) * 100}%`,
+                        height: `${(pendingRegion.y1 - pendingRegion.y0) * 100}%`,
+                      }}
+                    />
                   )}
                 </div>
 
@@ -885,22 +1109,222 @@ function SessionView({ sessionId, onBack }: SessionViewProps) {
   );
 }
 
-function TurnCard({ turn, allVariants, onPickTake }: {
+function FanOutCard({
+  platforms,
+  onSchedule,
+  onConvertVideo,
+  convertedVariants = {},
+}: {
+  platforms: FanOutPlatformCard[];
+  onSchedule: (schedules: Array<{variantId:string;platform:string;scheduledAt:string}>) => void;
+  onConvertVideo: (sourceVariantId: string) => void;
+  convertedVariants?: Record<string, string>;
+}) {
+  const [convertingIds, setConvertingIds] = useState<Set<string>>(new Set());
+
+  // requiresVideo cards (YouTube) become schedulable once converted —
+  // their approval entry is seeded lazily when the video variant ID arrives.
+  const [approvals, setApprovals] = useState<Record<string, {approved:boolean;scheduledAt:string}>>(() =>
+    Object.fromEntries(
+      platforms
+        .filter(p => !p.requiresVideo)
+        .map(p => [p.variantId, { approved: true, scheduledAt: p.suggestedAt }])
+    )
+  );
+
+  // When a YouTube card conversion completes, seed its approval entry so it
+  // becomes immediately schedulable (approved by default).
+  useEffect(() => {
+    setApprovals(prev => {
+      const next = { ...prev };
+      for (const [sourceId, videoId] of Object.entries(convertedVariants)) {
+        if (videoId && !next[videoId]) {
+          const card = platforms.find(p => p.variantId === sourceId);
+          next[videoId] = { approved: true, scheduledAt: card?.suggestedAt ?? new Date().toISOString() };
+        }
+      }
+      return next;
+    });
+  }, [convertedVariants, platforms]);
+
+  const toggleApprove = (variantId: string) =>
+    setApprovals(prev => ({ ...prev, [variantId]: { ...prev[variantId]!, approved: !prev[variantId]?.approved } }));
+
+  const setTime = (variantId: string, val: string) => {
+    try {
+      setApprovals(prev => ({ ...prev, [variantId]: { ...prev[variantId]!, scheduledAt: new Date(val).toISOString() } }));
+    } catch {}
+  };
+
+  const handleConvertVideo = (sourceVariantId: string) => {
+    setConvertingIds(prev => new Set([...prev, sourceVariantId]));
+    onConvertVideo(sourceVariantId);
+  };
+
+  // For scheduling: use video variantId when available, else original variantId
+  const scheduleVariantId = (p: FanOutPlatformCard) =>
+    (p.requiresVideo && convertedVariants[p.variantId]) ? convertedVariants[p.variantId] : p.variantId;
+
+  const approvedPlatforms = platforms.filter(p => {
+    const vid = scheduleVariantId(p);
+    return approvals[vid]?.approved;
+  });
+
+  const handleSchedule = () => {
+    const schedules = approvedPlatforms.map(p => {
+      const vid = scheduleVariantId(p);
+      const a = approvals[vid];
+      return {
+        variantId: vid,
+        platform: p.platform,
+        scheduledAt: a?.scheduledAt || p.suggestedAt,
+      };
+    });
+    if (schedules.length > 0) onSchedule(schedules);
+  };
+
+  return (
+    <div className="space-y-2 mt-1">
+      <div className="grid grid-cols-2 gap-1.5">
+        {platforms.map(p => {
+          const videoId = p.requiresVideo ? convertedVariants[p.variantId] : undefined;
+          const isConverted = Boolean(videoId);
+          const isConverting = convertingIds.has(p.variantId) && !isConverted;
+          const vid = scheduleVariantId(p);
+          const a = approvals[vid];
+          const dtLocal = a?.scheduledAt
+            ? new Date(a.scheduledAt).toISOString().replace("Z", "").slice(0, 16)
+            : "";
+
+          // YouTube card: three states —
+          //   1. not converted yet → "Convert to video" button
+          //   2. converting → spinner
+          //   3. converted → normal approve/schedule card (with video badge)
+          if (p.requiresVideo && !isConverted) {
+            return (
+              <div
+                key={p.variantId}
+                className="border border-dashed border-border rounded-lg overflow-hidden opacity-90"
+              >
+                <div className="relative">
+                  <img src={`${import.meta.env.VITE_API_URL || ""}${p.imageUrl}`} alt={p.platform} className="w-full aspect-square object-cover" />
+                  <div className="absolute inset-0 bg-black/55 flex flex-col items-center justify-center gap-1.5 p-2">
+                    <span className="text-[9px] font-bold bg-black/60 text-white px-1.5 py-0.5 rounded">
+                      {PLATFORM_LABELS[p.platform] || p.platform}
+                    </span>
+                    {isConverting ? (
+                      <div className="flex items-center gap-1 text-white/90">
+                        <Loader2 size={10} className="animate-spin" />
+                        <span className="text-[9px]">Converting…</span>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => handleConvertVideo(p.variantId)}
+                        className="flex items-center gap-1 bg-primary text-primary-foreground rounded px-2 py-0.5 text-[9px] font-semibold hover:bg-primary/90 transition-colors"
+                      >
+                        <Video size={8} />
+                        Convert to video
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <div className="px-1.5 pb-1.5 pt-1">
+                  <p className="text-[10px] text-muted-foreground line-clamp-2">{p.caption}</p>
+                </div>
+              </div>
+            );
+          }
+
+          return (
+            <div
+              key={vid}
+              className={cn(
+                "border rounded-lg overflow-hidden transition-colors cursor-pointer",
+                a?.approved ? "border-primary/60 bg-primary/5" : "border-border opacity-60",
+              )}
+              onClick={() => toggleApprove(vid)}
+            >
+              <div className="relative">
+                <img src={`${import.meta.env.VITE_API_URL || ""}${p.imageUrl}`} alt={p.platform} className="w-full aspect-square object-cover" />
+                <span className={cn(
+                  "absolute top-1 left-1 text-[9px] font-bold px-1 py-0.5 rounded",
+                  a?.approved ? "bg-primary text-primary-foreground" : "bg-black/50 text-white",
+                )}>
+                  {PLATFORM_LABELS[p.platform] || p.platform}
+                </span>
+                {isConverted && (
+                  <span className="absolute bottom-1 left-1 text-[8px] bg-green-600 text-white px-1 py-0.5 rounded flex items-center gap-0.5">
+                    <Video size={7} /> Video ready
+                  </span>
+                )}
+                <div className={cn(
+                  "absolute top-1 right-1 w-4 h-4 rounded-full border-2 flex items-center justify-center",
+                  a?.approved ? "bg-primary border-primary text-white" : "bg-transparent border-white/60",
+                )}>
+                  {a?.approved && <Check size={9} />}
+                </div>
+              </div>
+              <div className="px-1.5 pb-1.5 pt-1 space-y-1" onClick={e => e.stopPropagation()}>
+                <p className="text-[10px] text-muted-foreground line-clamp-2">{p.caption}</p>
+                {a?.approved && (
+                  <input
+                    type="datetime-local"
+                    value={dtLocal}
+                    onChange={e => setTime(vid, e.target.value)}
+                    className="text-[10px] w-full border border-border rounded px-1 py-0.5 bg-background"
+                  />
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {approvedPlatforms.length > 0 && (
+        <button
+          onClick={handleSchedule}
+          className="w-full text-xs py-1.5 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors flex items-center justify-center gap-1.5"
+        >
+          <Calendar size={11} />
+          Schedule {approvedPlatforms.length} post{approvedPlatforms.length !== 1 ? "s" : ""}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function TurnCard({ turn, allVariants, onPickTake, onSchedule, onConvertVideo, convertedVariants }: {
   turn: Turn;
   allVariants: Variant[];
   isActive: boolean;
   onPickTake: (variantId: string) => void;
+  onSchedule: (schedules: Array<{variantId:string;platform:string;scheduledAt:string}>) => void;
+  onConvertVideo: (sourceVariantId: string) => void;
+  convertedVariants: Record<string, string>;
 }) {
   const isUser = turn.role === "user";
   const isCompare = turn.action === "compare";
+  const isFanOut = turn.action === "fan_out";
+  const isSchedule = turn.action === "schedule";
+  const isVideo = turn.action === "convert_video" || turn.action === "edit_video";
   const variantIds = (turn.resultVariantIds || []) as string[];
   const variantMap = new Map(allVariants.map(v => [v.id, v]));
+
+  const metaPlatforms = turn.metadata?.platforms as FanOutPlatformCard[] | undefined;
+  const metaEntryIds = turn.metadata?.entryIds as string[] | undefined;
+  const metaRegion = turn.metadata?.region as {x0:number;y0:number;x1:number;y1:number} | undefined;
+  const metaVideoUrl = turn.metadata?.videoUrl as string | undefined;
+  const metaQaRetried = turn.metadata?.qaRetried as boolean | undefined;
 
   if (isUser) {
     return (
       <div className="flex items-start gap-2 justify-end">
         <div className="bg-primary/10 border border-primary/20 rounded-lg rounded-tr-none px-3 py-2 max-w-[300px]">
-          <p className="text-sm">{turn.instruction}</p>
+          <p className="text-sm">{turn.instruction || <span className="italic text-muted-foreground">no instruction</span>}</p>
+          {metaRegion && (
+            <p className="text-[10px] text-primary mt-0.5">
+              Region [{(metaRegion.x0 * 100).toFixed(0)}%, {(metaRegion.y0 * 100).toFixed(0)}%] to [{(metaRegion.x1 * 100).toFixed(0)}%, {(metaRegion.y1 * 100).toFixed(0)}%]
+            </p>
+          )}
         </div>
       </div>
     );
@@ -909,7 +1333,10 @@ function TurnCard({ turn, allVariants, onPickTake }: {
   return (
     <div className="flex items-start gap-2">
       <div className="w-7 h-7 rounded-full bg-primary/20 flex items-center justify-center shrink-0 mt-0.5">
-        <Bot size={14} className="text-primary" />
+        {isVideo ? <Video size={14} className="text-primary" /> :
+         isFanOut ? <Layers size={14} className="text-primary" /> :
+         isSchedule ? <Calendar size={14} className="text-primary" /> :
+         <Bot size={14} className="text-primary" />}
       </div>
       <div className="flex-1 min-w-0">
         <div className="bg-card border border-border rounded-lg rounded-tl-none p-3 space-y-2">
@@ -931,15 +1358,35 @@ function TurnCard({ turn, allVariants, onPickTake }: {
             <>
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-xs font-medium text-primary">{ACTION_LABELS[turn.action] || turn.action}</span>
-                {turn.action === "edit_image" && (
-                  <span className="text-xs text-muted-foreground">not a re-roll</span>
+                {(turn.action === "edit_image" || turn.action === "edit_region") && (
+                  <span className="text-xs text-muted-foreground">preserving edit</span>
+                )}
+                {metaQaRetried && (
+                  <span className="text-xs text-amber-600 dark:text-amber-400">QA corrected</span>
                 )}
                 {turn.costUsd && turn.costUsd > 0 && (
                   <span className="text-xs text-muted-foreground ml-auto">${turn.costUsd.toFixed(4)}</span>
                 )}
               </div>
 
-              {isCompare && variantIds.length > 1 ? (
+              {isFanOut && metaPlatforms && metaPlatforms.length > 0 ? (
+                <FanOutCard
+                  platforms={metaPlatforms}
+                  onSchedule={onSchedule}
+                  onConvertVideo={onConvertVideo}
+                  convertedVariants={convertedVariants}
+                />
+              ) : isSchedule && metaEntryIds ? (
+                <div className="flex items-center gap-2 text-xs text-green-600 dark:text-green-400">
+                  <Check size={12} />
+                  {metaEntryIds.length} post{metaEntryIds.length !== 1 ? "s" : ""} added to calendar
+                </div>
+              ) : isVideo && metaVideoUrl ? (
+                <div className="flex items-center gap-2 text-xs text-primary">
+                  <Play size={12} />
+                  Video ready — preview in the right pane
+                </div>
+              ) : isCompare && variantIds.length > 1 ? (
                 <div className="grid grid-cols-3 gap-1.5">
                   {variantIds.slice(0, 3).map((vid, i) => {
                     const v = variantMap.get(vid);
@@ -964,9 +1411,9 @@ function TurnCard({ turn, allVariants, onPickTake }: {
                     );
                   })}
                 </div>
-              ) : variantIds.length > 0 ? (
+              ) : variantIds.length > 0 && !isFanOut ? (
                 (() => {
-                  const vid = variantIds[0];
+                  const vid = variantIds[0]!;
                   const v = variantMap.get(vid);
                   const imgUrl = v?.compositedImageUrl || v?.rawImageUrl;
                   return imgUrl ? (

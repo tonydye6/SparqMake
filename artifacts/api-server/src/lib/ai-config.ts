@@ -21,7 +21,18 @@ export const COST_ESTIMATES = {
   CLAUDE_CAPTION_USD: Number(process.env.CLAUDE_CAPTION_COST_USD) || 0.01,
   IMAGEN_PER_IMAGE_USD: Number(process.env.IMAGEN_PER_IMAGE_COST_USD) || 0.06,
   GEMINI_TEXT_USD: Number(process.env.GEMINI_TEXT_COST_USD) || 0.002,
+  VIDEO_GENERATION_USD: Number(process.env.VIDEO_GENERATION_COST_USD) || 2.10,
+  VIDEO_COST_PER_SECOND_USD: Number(process.env.VIDEO_COST_PER_SECOND_USD) || 0.42,
 } as const;
+
+/**
+ * Estimate video clip duration in seconds from compressed buffer size.
+ * Uses ~500 KB/s as a conservative compressed video bitrate.
+ * Clamps to a minimum of 3s (shortest meaningful clip).
+ */
+export function estimateVideoDurationSeconds(bufferBytes: number): number {
+  return Math.max(3, Math.round(bufferBytes / 512_000));
+}
 
 export function estimateClaudeCost(): number {
   return COST_ESTIMATES.CLAUDE_CAPTION_USD;

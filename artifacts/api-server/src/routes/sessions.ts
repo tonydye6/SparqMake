@@ -33,7 +33,7 @@ import {
 } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
 import { sql, gte } from "drizzle-orm";
-import { estimateImagenCost, estimateClaudeCost, estimateGeminiTextCost } from "../lib/ai-config.js";
+import { estimateImagenCost, estimateClaudeCost, estimateGeminiTextCost, COST_ESTIMATES } from "../lib/ai-config.js";
 import { recordTasteSignal } from "../services/taste-signals.js";
 import { logger } from "../lib/logger.js";
 
@@ -49,11 +49,38 @@ const CreateSessionBody = z.object({
   selectedAssetIds: z.array(z.string()).optional(),
 });
 
+const RegionSchema = z.object({
+  x0: z.number().min(0).max(1),
+  y0: z.number().min(0).max(1),
+  x1: z.number().min(0).max(1),
+  y1: z.number().min(0).max(1),
+});
+
+const ScheduleItemSchema = z.object({
+  variantId: z.string().min(1),
+  platform: z.string().min(1),
+  scheduledAt: z.string().datetime(),
+});
+
 const CreateTurnBody = z.object({
-  action: z.enum(["draft", "edit_image", "caption", "compare"]),
-  instruction: z.string().min(1).max(2000),
+  action: z.enum([
+    "draft",
+    "edit_image",
+    "edit_region",
+    "caption",
+    "compare",
+    "convert_video",
+    "edit_video",
+    "fan_out",
+    "schedule",
+  ]),
+  instruction: z.string().min(0).max(2000).default(""),
   platform: z.string().optional(),
   compareCount: z.number().int().min(2).max(5).optional(),
+  region: RegionSchema.optional(),
+  schedules: z.array(ScheduleItemSchema).max(10).optional(),
+  // Optional: target a specific variant for convert_video (e.g. fan-out YouTube card)
+  sourceVariantId: z.string().min(1).max(100).optional(),
 });
 
 const PickTakeBody = z.object({
@@ -225,6 +252,9 @@ router.post(
           instruction: body.instruction,
           platform: body.platform,
           compareCount: body.compareCount,
+          region: body.region,
+          schedules: body.schedules,
+          sourceVariantId: body.sourceVariantId,
         },
         userId: actor.id,
         onProgress: (event) => {
@@ -366,11 +396,19 @@ function estimateTurnCost(action: string, compareCount?: number): number {
     case "draft":
       return estimateImagenCost(1) + estimateClaudeCost() + estimateGeminiTextCost();
     case "edit_image":
+    case "edit_region":
       return estimateImagenCost(1) + estimateClaudeCost();
     case "caption":
       return estimateClaudeCost();
     case "compare":
       return (compareCount || 3) * (estimateImagenCost(1) + estimateClaudeCost());
+    case "convert_video":
+    case "edit_video":
+      return COST_ESTIMATES.VIDEO_GENERATION_USD;
+    case "fan_out":
+      return estimateClaudeCost() + estimateGeminiTextCost();
+    case "schedule":
+      return 0;
     default:
       return estimateImagenCost(1);
   }
