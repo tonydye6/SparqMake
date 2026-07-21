@@ -114,6 +114,8 @@ function registerShutdownHandlers(server: Server): void {
 // C4: Mark any turns that were left in 'running' state (e.g. from a crashed
 // process) as 'error' at startup.  Without this, they block the session
 // turn-sequence check and can make the session appear permanently "busy".
+// Turns cancelled in real time (AbortSignal) are stored as 'cancelled' and are
+// deliberately NOT swept — the eq(status, 'running') filter exempts them.
 // D4: Emit ONE prominent warning at startup when GEMINI_API_KEY is absent so
 // admins can act before the first failed user session.  The actual 503 guard
 // lives in the sessions/:id/turns route.

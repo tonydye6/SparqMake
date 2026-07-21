@@ -53,7 +53,7 @@ interface Turn {
   role: "user" | "copilot";
   instruction: string | null;
   action: string;
-  status: "pending" | "running" | "done" | "error";
+  status: "pending" | "running" | "done" | "error" | "cancelled";
   resultVariantIds: string[];
   costUsd: number | null;
   durationMs: number | null;
@@ -688,9 +688,17 @@ function SessionView({ sessionId, onBack }: SessionViewProps) {
       await loadSession();
       dispatch({ type: "setComposer", text: "" });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      dispatch({ type: "setError", error: msg });
-      toast({ variant: "destructive", title: "Turn failed", description: msg });
+      // An aborted fetch (unmount / back-navigation) is not a failure — just
+      // stop the spinner quietly, no error toast.
+      const wasAborted =
+        abortCtrl.signal.aborted ||
+        (err instanceof DOMException && err.name === "AbortError") ||
+        (err instanceof Error && err.name === "AbortError");
+      if (!wasAborted) {
+        const msg = err instanceof Error ? err.message : String(err);
+        dispatch({ type: "setError", error: msg });
+        toast({ variant: "destructive", title: "Turn failed", description: msg });
+      }
     } finally {
       dispatch({ type: "setRunning", running: false });
     }
@@ -1402,6 +1410,13 @@ function TurnCard({ turn, allVariants, onPickTake, onSchedule, onConvertVideo, c
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <Loader2 size={12} className="animate-spin" />
               Working...
+            </div>
+          )}
+
+          {turn.status === "cancelled" && (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <AlertCircle size={12} />
+              Cancelled
             </div>
           )}
 

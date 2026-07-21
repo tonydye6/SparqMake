@@ -607,11 +607,22 @@ export async function executeTurn(params: {
     return refreshed;
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
-    logger.error({ err, sessionId, action: input.action }, "Turn execution failed");
+    // Distinguish a cancelled turn (client disconnect / SSE timeout fired the
+    // AbortSignal) from a real failure: mark it 'cancelled' immediately so the
+    // session is never stuck showing a spinner until the startup sweep runs.
+    const wasAborted =
+      input.signal?.aborted === true ||
+      (err instanceof Error && err.name === "AbortError");
+
+    if (wasAborted) {
+      logger.info({ sessionId, action: input.action }, "Turn cancelled by abort signal");
+    } else {
+      logger.error({ err, sessionId, action: input.action }, "Turn execution failed");
+    }
 
     await db.update(sessionTurnsTable).set({
-      status: "error",
-      error: errMsg,
+      status: wasAborted ? "cancelled" : "error",
+      error: wasAborted ? "Turn cancelled" : errMsg,
       updatedAt: new Date(),
     }).where(eq(sessionTurnsTable.id, copilotTurn.id));
 
@@ -1228,10 +1239,19 @@ async function applyQaPass(params: {
     onProgress({ type: "progress", step: "qa", message: "QA: correction applied", done: true });
     return { interactionId: corrected.interactionId, qaRetried: true, qaIssue: verdict.issue };
   } catch (err) {
+    // Same abort-vs-error distinction as executeTurn: a cancelled QA pass must
+    // not leave a 'running' or misleading 'error' row behind.
+    const qaAborted =
+      params.signal?.aborted === true ||
+      (err instanceof Error && err.name === "AbortError");
     if (qaTurn) {
       await db
         .update(sessionTurnsTable)
-        .set({ status: "error", error: String(err), updatedAt: new Date() })
+        .set({
+          status: qaAborted ? "cancelled" : "error",
+          error: qaAborted ? "Turn cancelled" : String(err),
+          updatedAt: new Date(),
+        })
         .where(eq(sessionTurnsTable.id, qaTurn.id));
     }
     logger.warn({ err }, "QA corrective edit failed — keeping original image");

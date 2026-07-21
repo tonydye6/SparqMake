@@ -229,7 +229,13 @@ router.post(
       turnAbort.abort();
       res.end();
     }, SSE_TIMEOUT_MS);
-    req.on("close", () => {
+    // NOTE: use res.on('close'), not req.on('close') — on modern Node the
+    // request's 'close' event fires when the request body is fully received,
+    // NOT when the client disconnects, so it never detects a mid-turn abort.
+    // The response 'close' event fires when the underlying connection closes;
+    // writableEnded distinguishes a premature disconnect from a normal finish.
+    res.on("close", () => {
+      if (res.writableEnded) return;
       clientDisconnected = true;
       clearTimeout(sseTimeout);
       // Abort the in-flight model call so the turn doesn't run to completion
