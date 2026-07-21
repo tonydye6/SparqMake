@@ -24,3 +24,11 @@ local tracking ref stays pinned at a weeks-old commit. Every downstream check
 tip and looks nonsensical. If a push dry-run says "non-fast-forward" but local
 ancestry says it should be clean, suspect a pinned tracking ref: `rm` the stale
 `.git/refs/remotes/github/*.lock`, re-fetch, and re-verify before concluding.
+
+**Merge trap (July 2026 sync):** merging remote-only GitHub commits can re-add
+code the local branch already superseded via refactor — e.g. a duplicate
+Express route referencing symbols (`UPLOAD_DIR`) that no longer exist. git's
+merge is textual, not semantic, and won't conflict on this. After any
+`git merge github/main`, run repo-wide typecheck before pushing; delete the
+redundant remote version when local abstraction (storage service) already
+covers the behavior.
