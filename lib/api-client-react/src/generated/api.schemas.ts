@@ -378,6 +378,7 @@ export interface Brand {
   colorAccent: string;
   colorBackground: string;
   voiceDescription: string;
+  voiceExamples?: string[] | null;
   bannedTerms: string[];
   trademarkRules: string;
   hashtagStrategy: BrandHashtagStrategy;
@@ -443,6 +444,7 @@ export interface CreateBrandInput {
   colorAccent: string;
   colorBackground: string;
   voiceDescription: string;
+  voiceExamples?: string[] | null;
   bannedTerms: string[];
   trademarkRules: string;
   hashtagStrategy: CreateBrandInputHashtagStrategy;

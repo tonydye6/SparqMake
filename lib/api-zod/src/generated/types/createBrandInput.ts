@@ -17,6 +17,7 @@ export interface CreateBrandInput {
   colorAccent: string;
   colorBackground: string;
   voiceDescription: string;
+  voiceExamples?: string[] | null;
   bannedTerms: string[];
   trademarkRules: string;
   hashtagStrategy: CreateBrandInputHashtagStrategy;
