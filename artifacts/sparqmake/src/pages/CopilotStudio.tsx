@@ -1050,9 +1050,13 @@ function SessionView({ sessionId, onBack, autoDraftBrief }: SessionViewProps) {
         </div>
 
         <div className="flex-1 flex flex-col min-w-0">
-          <div className="flex-1 overflow-auto p-6 flex items-center justify-center">
+          {/* NOTE: no `items-center` here — with a long caption the column grows
+              taller than the viewport, and flexbox centering pushes the overflow
+              above the scrollable area (image top becomes unreachable). `my-auto`
+              on the child centers it when short but top-aligns when it overflows. */}
+          <div className="flex-1 overflow-auto p-6 flex justify-center">
             {activeVariant ? (
-              <div className="w-full max-w-sm space-y-4">
+              <div className="w-full max-w-sm space-y-4 my-auto">
                 <div
                   className={cn(
                     "relative rounded-xl overflow-hidden shadow-lg border border-border bg-card",
