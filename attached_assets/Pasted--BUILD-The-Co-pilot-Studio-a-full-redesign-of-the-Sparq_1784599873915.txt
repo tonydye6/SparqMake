@@ -1,0 +1,148 @@
+# BUILD: The Co-pilot Studio — a full redesign of the SparqMake Creative Studio
+
+## Why we're doing this
+I tested the current Studio (StudioNext beat flow) and its two core loops are not good enough:
+1. IMAGE ITERATION: "Vary"/"Regenerate" re-roll blind. The model never sees the image I liked —
+   vary modes are just text directives appended to a fresh generation, so results drift and I
+   can't refine a take. There is no way to edit an image I already have.
+2. CAPTIONS: one Claude call writes all 5 platform captions BEFORE the image exists (image-blind),
+   with no voice examples and no way to AI-regenerate a single caption afterward. Textareas only.
+
+We are replacing the beat-walk UX (Home → Board → Finish → Fan-out) with a session-based
+"Co-pilot" studio built on Google's new Interactions API models, which hold a stateful thread
+per artifact and support targeted, PRESERVING edits. The studio becomes: a creative conversation
+on the left, the finished post (image + headline + caption) live on the right. Every generation,
+edit, caption rewrite, and fan-out is a turn in one session that never throws work away.
+
+IMPORTANT: Build this ALONGSIDE the current studio (new route), do not touch the live studio
+until the final phase. Same build-alongside-then-swap playbook we used for the last redesign.
+
+## TASK 0 — Model verification (do this FIRST, report before building anything)
+We are updating models to:
+- IMAGE rendering + editing: Nano Banana Pro (gemini-3-pro-image) via the Interactions API
+  (conversational multi-turn editing with previous_interaction_id, semantic masking / region
+  edits, up to 14 typed reference images: 6 object + 5 character-consistency + 3 style)
+- VIDEO generation + editing: Gemini Omni Flash (gemini-omni-flash-preview) via the same
+  Interactions API pattern (edit an existing video: restyle/objects/lighting while preserving
+  the rest; auto audio)
+- ART DIRECTION (design specs) + QUALITY REVIEW: Gemini 3.5 Flash
+- Captions/concepts stay on Claude (current pin) for now.
+
+These are preview-status models and the Replit AI proxy has rejected preview-dated model names
+before (UNSUPPORTED_MODEL). Verify each model id resolves through our Gemini integration. If the
+proxy rejects any of them, report exactly which, and whether direct Google Gemini API access is
+an option in this environment. Wire all ids through lib/ai-config.ts as env-overridable pins
+(add NANO_BANANA_MODEL / OMNI_VIDEO_MODEL / ART_DIRECTION_MODEL / QA_MODEL or equivalent).
+STOP and report findings from this task before starting Phase 1.
+
+## THE DESIGN
+
+### The Session screen (the one screen that matters) — new route /copilot
+Two-pane layout:
+- LEFT: the thread. User turns (plain language) and co-pilot turns. Every co-pilot turn shows
+  a compact "action card": what it did (e.g. "Targeted edit · not a re-roll", "used 6 brand
+  refs"), a thumbnail, and per-turn cost + duration. Composer at the bottom with quick-action
+  chips: Make it bolder · New take · Convert to video · Punchier caption · Make platform set.
+  Everything the chips do can also be typed.
+- RIGHT: the live post preview — always the finished composite (image, headline, caption block),
+  never a raw generation. Platform tabs appear once a platform set exists. Below it, a turn
+  HISTORY strip: every turn snapshots a variant; clicking an earlier thumbnail branches the
+  session from that state.
+- TOP: context bar with the session's standing context: brand · designer persona ("inspired
+  by") · style profile · intent/goal · reference summary · running session cost.
+
+### Home (route /copilot for now; becomes / in the final phase)
+Two jobs only: (1) start a session — brand/persona/style/logo pickers + brief textarea +
+the EXISTING intent-tagged concept cards; picking a card or submitting a brief starts a session.
+(2) a "Continue" rail — recent sessions with thumbnail, title, last-turn summary, status
+(draft / refining / shipped). Keep the existing "what's working" insights nudge.
+
+### Turn types (the universal verb)
+draft · edit_image · edit_region · caption · convert_video · edit_video · compare · fan_out ·
+approve · schedule. Details:
+- draft: first turn. Runs art direction (3.5 Flash) + image generation (Nano Banana Pro) with
+  the brand reference packet mapped to the typed slots (subject assets → character/object slots,
+  style-profile + persona samples → style slots), THEN generates captions for all platforms
+  AGAINST THE RENDERED IMAGE (multimodal — pass the image to the caption call). This ordering
+  fix (image first, captions after, captions see the image) is mandatory.
+- edit_image: THE core fix. Send the instruction WITH previous_interaction_id on the session's
+  image thread so Nano Banana Pro edits the artifact it already holds. Never re-roll unless the
+  user explicitly asks for a "new take". Persist the returned interaction id on the session.
+- edit_region: same, but the user drag-selected a region on the preview; send the normalized
+  region box + instruction (semantic mask edit). Build the drag-select overlay on the preview.
+- caption: rewrite ONE platform's caption (or all, if asked) against the CURRENT image, in the
+  brand voice, honoring banned terms/trademark rules/taste guidance. Return 2 alternates kept in
+  a caption panel with quick tunes (Punchier · Shorter · Add CTA). Add brand "voice examples"
+  (3–5 real example posts, new brands column) and include them few-shot in every caption call.
+- convert_video / edit_video: convert the current image to video via Omni Flash (image as seed),
+  then conversational video edit turns via its interaction thread. Keep the existing
+  audio (ElevenLabs) flow available on video variants.
+- compare: "give me 3 takes" or "compare persona X vs Y" renders options side-by-side IN the
+  thread as a choice turn; picking one records a taste signal (reuse the existing
+  take_selected/take_passed_over signal types) and makes it the active artifact.
+- fan_out: reuse the EXISTING fan-out engine (subject detection, clip prediction, reframe,
+  outpaint) to make the platform set — render it inline in the thread as a grid of per-platform
+  cards (image + per-platform image-aware caption + suggested schedule time from insights).
+  ADD YOUTUBE to the platform set (it's connectable + tracked but missing from fan-out today).
+- approve / schedule: inline on the set (bulk approve; per-card schedule chips using
+  smart-schedule suggested times; manual time editable). Publishing stays on the existing engine.
+- QUALITY REVIEW: after draft/edit_image/edit_region turns, run a QA pass on Gemini 3.5 Flash
+  (did the edit honor the instruction? brand rules respected?) with at most ONE automatic
+  corrective edit turn — extend the existing designed-mode checkQuality pattern.
+
+### Data model (ADDITIVE migrations only — this is critical)
+Sessions narrate the existing data model, they do not replace it. Every turn's output is
+snapshotted as a creative_variants row exactly like today (lineage via source_variant_id), so
+storage, fan-out, publishing, calendar, post-metrics, and taste keep working untouched.
+New tables:
+  studio_sessions: id, creative_id (1:1 — the creative keeps brand/persona/style/intent/refs),
+    status (drafting|refining|shipped|archived), image_interaction_id, video_interaction_id,
+    active_variant_id, created_by, timestamps.
+  session_turns: id, session_id, seq, role (user|copilot), instruction (text or gesture payload
+    JSON e.g. region box / platform picks), action (enum above), result_variant_ids jsonb,
+    interaction_id, cost_usd, status, error, timestamps.
+Register any new file-bearing columns in file-references.ts. Generate real drizzle migrations.
+
+### API surface (keep it small)
+POST /api/sessions (from brief or concept card) · GET /api/sessions/:id (session + turns +
+variants) · GET /api/sessions?brandId= (continue rail) · POST /api/sessions/:id/turns (the
+universal verb; SSE progress stream like the existing /generate). Apply generationLimiter and
+the existing budget-reservation pattern per turn, with cost estimation branching by action type
+(image edit vs video seconds vs caption call). Log cost_logs per turn. Record a taste signal for
+every refinement instruction (new signal type edit_instruction) — refinement language is the
+richest taste data we have; keep feeding the existing distillation loop.
+
+### Reuse map — DO NOT rebuild these, wire them in
+Personas, style profiles, weighted reference packet (packet-assembly), intent engine, concept
+cards, taste signals + distillation, insights/recommendations, fan-out reframe/focal/outpaint
+services, calendar + smart-schedule + publish engine + alerts, post-metrics, storage.ts (ALL
+file bytes go through it), roles/audit (writes=editor, destructive=admin, viewers read-only in
+the new UI too), Review Queue (leave it alone). The deterministic compositor remains available
+as the instant lane for overlay headline tweaks and exact brand fonts.
+
+## PHASING — with stop gates
+PHASE 1 (then STOP for my review): Task 0 report + session service + Interactions client +
+the Session screen with draft / edit_image / caption / compare turns + history strip + Home
+continue rail, at /copilot with a sidebar item "Co-pilot Studio (beta)". Current studio at /
+completely untouched. Acceptance script: start a session for Crown U ("Week 3 rivalry vs
+Ironclad U, playful trash talk") → drafted post with image-aware captions → "calm the background,
+make the crown pop" produces a PRESERVING edit of the same image (visibly the same composition,
+verified side by side) → "X caption punchier, lose the hashtags" rewrites only X against the
+final image → history shows T1/T2/T3 and branching works.
+PHASE 2 (then STOP): edit_region drag-select, fan_out/approve/schedule turns (+ YouTube),
+convert_video + edit_video via Omni Flash, QA corrective pass.
+PHASE 3: ContentPlan deep-links open pre-seeded sessions (the /?campaign= params are currently
+dead — wire them to /copilot), voice-examples field in Brand, calendar reschedule, then swap
+/copilot to / and retire the beat UI (keep old takes viewable).
+
+## GUARDRAILS
+- Additive migrations only; typecheck must stay green; add vitest coverage for the session
+  service, turn router, and cost branching.
+- Product copy: NO em dashes anywhere. Use a middot, comma, or colon.
+- Don't remove or modify the existing generation/vary/fan-out endpoints in Phases 1–2.
+- Every generation-adjacent endpoint gets generationLimiter + budget reservation + cost_logs.
+- Audit privileged mutations as elsewhere. Respect viewer read-only in all new UI.
+- If Nano Banana Pro / Omni Flash are unavailable through the proxy, do NOT silently substitute
+  models — report and wait for my call.
+Report at each phase gate with what you built, what you verified (including the acceptance
+script results with screenshots), and any deviations from this spec with reasons.
