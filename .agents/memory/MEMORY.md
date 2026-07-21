@@ -24,3 +24,4 @@
 - [Migration slot collision](migration-slot-collision.md) — parallel tasks sharing a drizzle index: renumber ours to +1, merge snapshot, manually journal locally-applied SQL (42P07 fix).
 - [Co-pilot Studio as default route](copilot-default-route.md) — /copilot swapped to /; old StudioNext lives at /studio; /copilot redirects to /.
 - [SSE disconnect detection](sse-disconnect-detection.md) — req 'close' fires on body-received, not disconnect; use res.on('close') + writableEnded guard or aborts never fire.
+- [Co-pilot integration tests](copilot-integration-tests.md) — `*.integration.test.ts` use the real dev DB with mocked model boundaries; seed/cleanup pattern + ai-config mock drift trap.

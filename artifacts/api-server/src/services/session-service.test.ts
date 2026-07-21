@@ -99,6 +99,10 @@ vi.mock("../services/taste-signals.js", () => ({
 }));
 
 vi.mock("../lib/ai-config.js", () => ({
+  AI_MODELS: {
+    CLAUDE_SONNET: "claude-sonnet-test",
+    GEMINI_FLASH_IMAGE: "gemini-flash-image-test",
+  },
   COPILOT_MODELS: {
     NANO_BANANA_MODEL: "gemini-test",
     CAPTION_MODEL: "claude-test",
@@ -277,8 +281,8 @@ describe("branchSession", () => {
   it("restores activeVariantId and imageInteractionId from producing turn", async () => {
     setSelectRows("studio_sessions", [{ id: "sess-1", imageInteractionId: "latest-iact" }]);
     setSelectRows("session_turns", [
-      { id: "t1", role: "copilot", status: "done", resultVariantIds: ["var-1"], interactionId: "iact-t1" },
-      { id: "t2", role: "copilot", status: "done", resultVariantIds: ["var-2"], interactionId: "iact-t2" },
+      { id: "t1", seq: 2, role: "copilot", action: "draft", status: "done", resultVariantIds: ["var-1"], interactionId: "iact-t1" },
+      { id: "t2", seq: 4, role: "copilot", action: "edit_image", status: "done", resultVariantIds: ["var-2"], interactionId: "iact-t2" },
     ]);
 
     const result = await branchSession({ sessionId: "sess-1", variantId: "var-2" });
@@ -314,8 +318,8 @@ describe("branchSession", () => {
     setSelectRows("studio_sessions", [{ id: "sess-3", imageInteractionId: "old" }]);
     setSelectRows("session_turns", [
       // user turn also has the variantId — should be ignored since we filter role=copilot
-      { id: "t-user", role: "user", status: "done", resultVariantIds: ["v-target"], interactionId: "user-iact" },
-      { id: "t-copilot", role: "copilot", status: "done", resultVariantIds: ["v-target"], interactionId: "copilot-iact" },
+      { id: "t-user", seq: 1, role: "user", action: "draft", status: "done", resultVariantIds: ["v-target"], interactionId: "user-iact" },
+      { id: "t-copilot", seq: 2, role: "copilot", action: "draft", status: "done", resultVariantIds: ["v-target"], interactionId: "copilot-iact" },
     ]);
 
     const result = await branchSession({ sessionId: "sess-3", variantId: "v-target" });
@@ -325,7 +329,7 @@ describe("branchSession", () => {
   it("overwrites the imageInteractionId even when it already matches the latest", async () => {
     setSelectRows("studio_sessions", [{ id: "sess-4", imageInteractionId: "iact-t1" }]);
     setSelectRows("session_turns", [
-      { id: "t1", role: "copilot", status: "done", resultVariantIds: ["v1"], interactionId: "iact-t1" },
+      { id: "t1", seq: 2, role: "copilot", action: "draft", status: "done", resultVariantIds: ["v1"], interactionId: "iact-t1" },
     ]);
 
     const result = await branchSession({ sessionId: "sess-4", variantId: "v1" });

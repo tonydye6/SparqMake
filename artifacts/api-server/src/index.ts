@@ -17,8 +17,7 @@ import {
 } from "./services/metrics-scheduler";
 import { logStorageStartupStatus } from "./services/storage";
 import { syncAdminEmails } from "./services/admin-sync";
-import { db, sessionTurnsTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { sweepStaleTurns } from "./services/stale-turn-sweep";
 
 const rawPort = process.env["PORT"];
 
@@ -125,21 +124,6 @@ function warnMissingGeminiKey(): void {
       "GEMINI_API_KEY is not set — Co-pilot Studio (draft, edit, video, fan-out, " +
       "caption, compare) will return 503 for every turn. Set the secret and restart.",
     );
-  }
-}
-
-async function sweepStaleTurns(): Promise<void> {
-  try {
-    const result = await db
-      .update(sessionTurnsTable)
-      .set({ status: "error", metadata: { error: "Turn interrupted by server restart" } })
-      .where(eq(sessionTurnsTable.status, "running"))
-      .returning({ id: sessionTurnsTable.id });
-    if (result.length > 0) {
-      logger.warn({ count: result.length }, "Marked stale 'running' turns as error on startup");
-    }
-  } catch (err) {
-    logger.error({ err }, "Failed to sweep stale running turns — sessions may appear busy");
   }
 }
 
