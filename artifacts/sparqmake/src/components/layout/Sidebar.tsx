@@ -79,8 +79,8 @@ export function Sidebar({ mobileOpen, onMobileClose }: SidebarProps) {
   }, []);
 
   const NAV_ITEMS = [
-    { href: "/", label: "Creative Studio", icon: Sparkles },
-    { href: "/copilot", label: "Co-pilot Studio (beta)", icon: MessageSquareText },
+    { href: "/", label: "Studio", icon: MessageSquareText },
+    { href: "/studio", label: "Creative History", icon: Sparkles },
     { href: "/brand", label: "Brand", icon: Palette },
     { href: "/assets", label: "Asset Library", icon: Library, badge: pendingAssetCount || undefined },
     { href: "/calendar", label: "Calendar", icon: CalendarIcon, badge: calendarCount || undefined },

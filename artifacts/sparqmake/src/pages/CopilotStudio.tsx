@@ -1440,7 +1440,93 @@ function TurnCard({ turn, allVariants, onPickTake, onSchedule, onConvertVideo, c
 // ---- Root page -------------------------------------------------------------
 
 export default function CopilotStudio() {
+  const { toast } = useToast();
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [seeding, setSeeding] = useState(false);
+
+  // Read URL params once on mount. ?campaign=<creativeId> opens a pre-seeded
+  // session from a plan-item creative. ?session=<id> jumps directly to a session.
+  // ?platform=<name> carries the primary platform from a ContentPlan item.
+  const { campaignId, urlSessionId, urlPlatform } = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    return {
+      campaignId: params.get("campaign"),
+      urlSessionId: params.get("session"),
+      urlPlatform: params.get("platform"),
+    };
+  })[0];
+
+  // Direct session link — jump straight to the session view.
+  useEffect(() => {
+    if (urlSessionId && !sessionId && !seeding) {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("session");
+      window.history.replaceState({}, "", url.toString());
+      setSessionId(urlSessionId);
+    }
+  }, [urlSessionId, sessionId, seeding]);
+
+  // Deep-link from ContentPlan: fetch the creative's brief + brand, then
+  // auto-start a Co-pilot session pre-seeded with that context.
+  useEffect(() => {
+    if (!campaignId || sessionId || seeding) return;
+    setSeeding(true);
+    void (async () => {
+      try {
+        const cResp = await apiFetch(`${API_BASE}/api/creatives/${campaignId}`);
+        if (!cResp.ok) throw new Error("Creative not found");
+        const creative = await cResp.json() as {
+          brandId: string;
+          briefText: string | null;
+          intent: string | null;
+        };
+
+        const baseBrief = creative.briefText?.trim() || "New content";
+        const briefText = urlPlatform
+          ? `${baseBrief}\nTarget platform: ${urlPlatform}`
+          : baseBrief;
+        const sResp = await apiFetch(`${API_BASE}/api/sessions`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            brandId: creative.brandId,
+            briefText,
+            intent: creative.intent || undefined,
+          }),
+        });
+        if (!sResp.ok) {
+          const e = await sResp.json().catch(() => ({})) as { error?: string };
+          throw new Error(e.error || "Could not start session");
+        }
+        const session = await sResp.json() as { id: string };
+
+        const url = new URL(window.location.href);
+        url.searchParams.delete("campaign");
+        url.searchParams.delete("platform");
+        window.history.replaceState({}, "", url.toString());
+        setSessionId(session.id);
+      } catch (err) {
+        toast({
+          variant: "destructive",
+          title: "Could not open plan item",
+          description: err instanceof Error ? err.message : "Please try again.",
+        });
+      } finally {
+        setSeeding(false);
+      }
+    })();
+  }, [campaignId, sessionId, seeding, toast]);
+
+  if (seeding) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 size={24} className="animate-spin text-primary" />
+          <p className="text-sm text-muted-foreground">Opening your plan item...</p>
+        </div>
+      </div>
+    );
+  }
 
   if (sessionId) {
     return <SessionView sessionId={sessionId} onBack={() => setSessionId(null)} />;

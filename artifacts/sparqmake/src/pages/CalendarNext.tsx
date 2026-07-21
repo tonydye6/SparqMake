@@ -6,7 +6,10 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Send, RotateCw, Loader2, Eye, Heart, MessageCircle, Share2 } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Send, RotateCw, Loader2, Eye, Heart, MessageCircle, Share2, CalendarClock } from "lucide-react";
 import { PublishHealthBanner } from "@/components/PublishHealthBanner";
 import { FaInstagram, FaXTwitter, FaTiktok, FaLinkedin, FaYoutube } from "react-icons/fa6";
 import type { IconType } from "react-icons";
@@ -57,12 +60,23 @@ function fmtCount(n: number): string {
   return String(n);
 }
 
+// Format a Date to the local datetime-local input value string (YYYY-MM-DDTHH:MM).
+function toDatetimeLocalValue(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 export default function CalendarNext() {
   const { toast } = useToast();
   const [entries, setEntries] = useState<CalEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [metrics, setMetrics] = useState<Record<string, EntryMetrics>>({});
+
+  // Reschedule dialog state
+  const [rescheduleEntry, setRescheduleEntry] = useState<CalEntry | null>(null);
+  const [rescheduleValue, setRescheduleValue] = useState("");
+  const [rescheduling, setRescheduling] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -115,6 +129,35 @@ export default function CalendarNext() {
       toast({ variant: "destructive", title: "Action failed", description: err instanceof Error ? err.message : "Please try again." });
     } finally {
       setBusyId(null);
+    }
+  }
+
+  function openReschedule(entry: CalEntry) {
+    setRescheduleEntry(entry);
+    setRescheduleValue(toDatetimeLocalValue(new Date(entry.scheduledAt)));
+  }
+
+  async function confirmReschedule() {
+    if (!rescheduleEntry || !rescheduleValue) return;
+    setRescheduling(true);
+    try {
+      const newTime = new Date(rescheduleValue).toISOString();
+      const resp = await apiFetch(`${API_BASE}/api/calendar-entries/${rescheduleEntry.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scheduledAt: newTime }),
+      });
+      if (!resp.ok) {
+        const e = await resp.json().catch(() => ({})) as { error?: string };
+        throw new Error(e.error || `Failed (${resp.status})`);
+      }
+      toast({ title: "Rescheduled" });
+      setRescheduleEntry(null);
+      await load();
+    } catch (err) {
+      toast({ variant: "destructive", title: "Reschedule failed", description: err instanceof Error ? err.message : "Please try again." });
+    } finally {
+      setRescheduling(false);
     }
   }
 
@@ -186,24 +229,38 @@ export default function CalendarNext() {
                             </div>
                           )}
                         </div>
-                        {(e.publishStatus === "scheduled" || e.publishStatus === "failed") && (
-                          <Button
-                            size="sm"
-                            variant={e.publishStatus === "failed" ? "outline" : "default"}
-                            className="h-7 px-2 text-xs"
-                            disabled={busyId === e.id}
-                            onClick={() => act(e.id, e.publishStatus === "failed" ? "retry" : "publish")}
-                          >
-                            {busyId === e.id ? (
-                              <Loader2 size={12} className="mr-1 animate-spin" />
-                            ) : e.publishStatus === "failed" ? (
-                              <RotateCw size={12} className="mr-1" />
-                            ) : (
-                              <Send size={12} className="mr-1" />
-                            )}
-                            {e.publishStatus === "failed" ? "Retry" : "Publish now"}
-                          </Button>
-                        )}
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {(e.publishStatus === "scheduled" || e.publishStatus === "failed") && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
+                              disabled={busyId === e.id}
+                              onClick={() => openReschedule(e)}
+                            >
+                              <CalendarClock size={13} className="mr-1" />
+                              Reschedule
+                            </Button>
+                          )}
+                          {(e.publishStatus === "scheduled" || e.publishStatus === "failed") && (
+                            <Button
+                              size="sm"
+                              variant={e.publishStatus === "failed" ? "outline" : "default"}
+                              className="h-7 px-2 text-xs"
+                              disabled={busyId === e.id}
+                              onClick={() => act(e.id, e.publishStatus === "failed" ? "retry" : "publish")}
+                            >
+                              {busyId === e.id ? (
+                                <Loader2 size={12} className="mr-1 animate-spin" />
+                              ) : e.publishStatus === "failed" ? (
+                                <RotateCw size={12} className="mr-1" />
+                              ) : (
+                                <Send size={12} className="mr-1" />
+                              )}
+                              {e.publishStatus === "failed" ? "Retry" : "Publish now"}
+                            </Button>
+                          )}
+                        </div>
                       </Card>
                     );
                   })}
@@ -213,6 +270,34 @@ export default function CalendarNext() {
           )}
         </div>
       </div>
+
+      {/* Reschedule dialog */}
+      <Dialog open={Boolean(rescheduleEntry)} onOpenChange={(open) => { if (!open) setRescheduleEntry(null); }}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Reschedule post</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="reschedule-dt">New date and time</Label>
+              <Input
+                id="reschedule-dt"
+                type="datetime-local"
+                value={rescheduleValue}
+                onChange={(e) => setRescheduleValue(e.target.value)}
+                min={toDatetimeLocalValue(new Date())}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setRescheduleEntry(null)} disabled={rescheduling}>Cancel</Button>
+            <Button onClick={() => void confirmReschedule()} disabled={rescheduling || !rescheduleValue}>
+              {rescheduling && <Loader2 size={14} className="mr-1.5 animate-spin" />}
+              Confirm
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

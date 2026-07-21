@@ -22,3 +22,4 @@
 - [Designed-graphic cost model](designed-mode-costs.md) — designed render_mode bills 1 cutout + 2 text calls per take, not 1 image/platform; every budget-reservation and cost-log site must branch on it in lockstep.
 - [CJS bundle dirname & assets](cjs-bundle-dirname.md) — esbuild CJS bundle makes import.meta.url undefined (startup crash) and drops runtime assets; prefer import.meta.url, fall back to __dirname, copy assets in build.ts, verify with `node dist/index.cjs`.
 - [Migration slot collision](migration-slot-collision.md) — parallel tasks sharing a drizzle index: renumber ours to +1, merge snapshot, manually journal locally-applied SQL (42P07 fix).
+- [Co-pilot Studio as default route](copilot-default-route.md) — /copilot swapped to /; old StudioNext lives at /studio; /copilot redirects to /.

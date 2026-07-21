@@ -68,6 +68,11 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+function CopilotRedirect() {
+  const search = window.location.search;
+  return <Redirect to={`/${search}`} />;
+}
+
 function FirstRunGuard({ children }: { children: React.ReactNode }) {
   const [brands, setBrands] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -118,13 +123,16 @@ function Router() {
           <SetupWizard />
         </Route>
         <Route path="/copilot">
+          <CopilotRedirect />
+        </Route>
+        <Route path="/studio">
           <FirstRunGuard>
-            <AppLayout><CopilotStudio /></AppLayout>
+            <AppLayout><StudioNext historyMode /></AppLayout>
           </FirstRunGuard>
         </Route>
         <Route path="/">
           <FirstRunGuard>
-            <AppLayout><StudioNext /></AppLayout>
+            <AppLayout><CopilotStudio /></AppLayout>
           </FirstRunGuard>
         </Route>
         <Route path="/brand">

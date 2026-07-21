@@ -315,15 +315,93 @@ function canReachBeat(beat: Beat, state: StudioState): boolean {
   }
 }
 
-export default function StudioNext() {
+interface HistoryCreative {
+  id: string;
+  name: string | null;
+  briefText: string | null;
+  brandId: string;
+  createdAt: string;
+}
+
+function HistoryPicker({ dispatch }: { dispatch: Dispatch<StudioAction> }) {
+  const [creatives, setCreatives] = useState<HistoryCreative[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    void apiFetch(`${API_BASE}/api/creatives?limit=40`)
+      .then((r) => (r.ok ? r.json() : { data: [] }))
+      .then((data: { data?: HistoryCreative[] }) => {
+        const list = Array.isArray(data.data) ? data.data : [];
+        setCreatives(list.slice().reverse());
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }, []);
+
+  function openCreative(c: HistoryCreative) {
+    dispatch({ type: "setBrand", brandId: c.brandId });
+    dispatch({ type: "setBrief", briefText: c.briefText || "" });
+    dispatch({ type: "setCreative", creativeId: c.id });
+    dispatch({ type: "goto", beat: "board" });
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (creatives.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full gap-2 text-muted-foreground">
+        <p className="text-sm">No past creatives found.</p>
+        <p className="text-xs">Use Co-pilot Studio to create your first piece of content.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-6 max-w-2xl">
+      <p className="text-sm text-muted-foreground mb-4">
+        Select a past creative to view its takes or publish it.
+      </p>
+      <div className="flex flex-col gap-2">
+        {creatives.map((c) => (
+          <button
+            key={c.id}
+            onClick={() => openCreative(c)}
+            className="text-left p-4 rounded-lg border border-border bg-card hover:bg-accent/10 hover:border-primary/40 transition-colors"
+          >
+            <div className="flex items-start justify-between gap-2">
+              <span className="font-medium text-sm text-foreground line-clamp-1">
+                {c.name || "(Untitled)"}
+              </span>
+              <span className="text-xs text-muted-foreground shrink-0">
+                {new Date(c.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+              </span>
+            </div>
+            {c.briefText && (
+              <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{c.briefText}</p>
+            )}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export default function StudioNext({ historyMode = false }: { historyMode?: boolean }) {
   const [state, dispatch] = useReducer(reducer, initialState);
-  const activeIndex = BEATS.findIndex((b) => b.id === state.beat);
+  const visibleBeats = historyMode ? BEATS.filter((b) => b.id !== "home") : BEATS;
+  const activeIndex = visibleBeats.findIndex((b) => b.id === state.beat);
 
   return (
     <div className="flex flex-col h-full">
       {/* Beat stepper */}
       <div className="h-16 border-b border-border flex items-center gap-2 px-6 shrink-0">
-        {BEATS.map((b, i) => {
+        {visibleBeats.map((b, i) => {
           const active = b.id === state.beat;
           const done = i < activeIndex;
           const reachable = active || canReachBeat(b.id, state);
@@ -355,11 +433,13 @@ export default function StudioNext() {
       {/* Beat body */}
       <div className="flex-1 overflow-auto">
         {state.beat === "home" && (
-          <BeatHome
-            state={state}
-            dispatch={dispatch}
-            onAdvance={() => dispatch({ type: "goto", beat: "board" })}
-          />
+          historyMode
+            ? <HistoryPicker dispatch={dispatch} />
+            : <BeatHome
+                state={state}
+                dispatch={dispatch}
+                onAdvance={() => dispatch({ type: "goto", beat: "board" })}
+              />
         )}
         {state.beat === "board" && (
           <BeatBoard

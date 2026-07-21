@@ -196,7 +196,7 @@ export default function ContentPlan() {
   const handleCreateCreative = async (id: string) => {
     try {
       const data = await createCreativeFromPlanItem(id);
-      toast({ title: "Creative created", description: `Creative "${data.creative.name}" is ready in Creative Studio` });
+      toast({ title: "Creative created", description: `Creative "${data.creative.name}" is ready in Co-pilot Studio` });
       fetchItems();
       const platform = data.planItem?.primaryPlatform ? `&platform=${encodeURIComponent(data.planItem.primaryPlatform)}` : "";
       setLocation(`/?campaign=${data.creative.id}${platform}`);
@@ -614,7 +614,7 @@ export default function ContentPlan() {
                             className="p-0 h-auto text-primary"
                             onClick={() => setLocation(`/?campaign=${item.linkedCreativeId}`)}
                           >
-                            View in Creative Studio →
+                            Open in Studio →
                           </Button>
                         </p>
                       </div>

@@ -55,6 +55,7 @@ interface BrandSpec {
   colorAccent: string;
   colorBackground: string;
   voiceDescription: string;
+  voiceExamples?: string[];
   bannedTerms: string[];
   trademarkRules: string;
   characterStyleRules: string;
@@ -352,6 +353,51 @@ export default function BrandNext() {
                 <Field label="Voice & tone" hint="How this brand sounds. Drives captions across platforms.">
                   <Textarea value={draft.voiceDescription} onChange={(e) => set("voiceDescription", e.target.value)} className="min-h-28 resize-none" />
                 </Field>
+                <div className="space-y-2">
+                  <Label>Voice examples</Label>
+                  <p className="text-xs text-muted-foreground">3 to 5 real example posts. The caption model uses these few-shot to match the brand's tone.</p>
+                  <div className="space-y-2">
+                    {(draft.voiceExamples || []).map((ex, i) => (
+                      <div key={i} className="flex gap-2 items-start">
+                        <Textarea
+                          value={ex}
+                          onChange={(e) => {
+                            const updated = [...(draft.voiceExamples || [])];
+                            updated[i] = e.target.value;
+                            set("voiceExamples", updated);
+                          }}
+                          placeholder={`Example post ${i + 1}`}
+                          rows={2}
+                          className="resize-none flex-1 text-sm"
+                        />
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="mt-1 text-muted-foreground hover:text-destructive"
+                          onClick={() => {
+                            const updated = (draft.voiceExamples || []).filter((_, j) => j !== i);
+                            set("voiceExamples", updated);
+                          }}
+                        >
+                          <X size={14} />
+                        </Button>
+                      </div>
+                    ))}
+                    {(draft.voiceExamples || []).length < 5 && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="gap-1.5 text-xs"
+                        onClick={() => set("voiceExamples", [...(draft.voiceExamples || []), ""])}
+                      >
+                        <Plus size={13} />
+                        Add example
+                      </Button>
+                    )}
+                  </div>
+                </div>
                 <Field label="Never use" hint="Terms generation must avoid.">
                   <ChipList items={draft.bannedTerms} onChange={(items) => set("bannedTerms", items)} placeholder="Add a banned term" />
                 </Field>
