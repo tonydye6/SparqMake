@@ -9,6 +9,11 @@
  *   subject assets   -> character/object slots  (role: "character" | "object")
  *   style samples    -> style slots              (role: "style")
  *   persona samples  -> style slots              (role: "style")
+ *
+ * API shape note (SDK 2.12.0+):
+ *   Reference images must be passed inside `input` as an array of content blocks
+ *   ({ type: "text", text } or { type: "image", data, mime_type }).
+ *   The top-level `media` parameter is no longer accepted and returns 400.
  */
 
 import { ai } from "@workspace/integrations-gemini-ai";
@@ -33,6 +38,48 @@ interface RawInteractionResponse {
   status?: string;
   output_image?: { data?: string; mime_type?: string };
   output_video?: { data?: string; mime_type?: string };
+}
+
+type ContentBlock =
+  | { type: "text"; text: string }
+  | { type: "image"; data: string; mime_type: string };
+
+/**
+ * Build the `input` content block array for an image-generation interaction.
+ *
+ * The first block is always the text prompt. Any reference image slots are
+ * appended as image content blocks. Slot role and description context is
+ * embedded in the text prompt so the model understands the reference purpose.
+ */
+function buildImageInput(prompt: string, slots: ImageSlot[]): ContentBlock[] | string {
+  if (slots.length === 0) {
+    return prompt;
+  }
+
+  const slotDescriptions = slots
+    .map((s, i) => {
+      const label = s.slot === "character"
+        ? "Subject/character reference"
+        : s.slot === "object"
+          ? "Object reference"
+          : "Style reference";
+      const desc = s.description ? ` — ${s.description}` : "";
+      return `[Image ${i + 1}: ${label}${desc}]`;
+    })
+    .join(" ");
+
+  const textBlock: ContentBlock = {
+    type: "text",
+    text: `${prompt}\n\nReference images provided: ${slotDescriptions}`,
+  };
+
+  const imageBlocks: ContentBlock[] = slots.map((s) => ({
+    type: "image",
+    data: s.imageBuffer.toString("base64"),
+    mime_type: s.mimeType || "image/png",
+  }));
+
+  return [textBlock, ...imageBlocks];
 }
 
 /**
@@ -66,23 +113,28 @@ export async function runVideoInteraction(params: {
 }): Promise<InteractionVideoResult> {
   const { prompt, imageBuffer, imageMimeType, previousInteractionId, aspectRatio = "1:1" } = params;
 
+  let inputValue: ContentBlock[] | string;
+  if (imageBuffer) {
+    inputValue = [
+      { type: "text", text: prompt },
+      {
+        type: "image",
+        data: imageBuffer.toString("base64"),
+        mime_type: imageMimeType || "image/png",
+      },
+    ];
+  } else {
+    inputValue = prompt;
+  }
+
   const requestBody: Record<string, unknown> = {
     model: COPILOT_MODELS.OMNI_VIDEO_MODEL,
-    input: prompt,
+    input: inputValue,
     response_format: {
       type: "video",
       aspect_ratio: aspectRatio as "16:9" | "9:16" | "1:1",
     },
   };
-
-  if (imageBuffer) {
-    requestBody.media = [{
-      data: imageBuffer.toString("base64"),
-      mime_type: imageMimeType || "image/png",
-      slot: "image_1",
-      description: "Seed image for video generation",
-    }];
-  }
 
   if (previousInteractionId) {
     requestBody.previous_interaction_id = previousInteractionId;
@@ -133,25 +185,16 @@ export async function runImageInteraction(params: {
 }): Promise<InteractionImageResult> {
   const { prompt, slots = [], previousInteractionId, aspectRatio = "1:1" } = params;
 
-  const media = slots.map((s, i) => ({
-    data: s.imageBuffer.toString("base64"),
-    mime_type: s.mimeType || "image/png",
-    slot: `${s.slot}_${i + 1}`,
-    description: s.description,
-  }));
+  const inputValue = buildImageInput(prompt, slots);
 
   const requestBody: Record<string, unknown> = {
     model: COPILOT_MODELS.NANO_BANANA_MODEL,
-    input: prompt,
+    input: inputValue,
     response_format: {
       type: "image",
       aspect_ratio: aspectRatio,
     },
   };
-
-  if (media.length > 0) {
-    requestBody.media = media;
-  }
 
   if (previousInteractionId) {
     requestBody.previous_interaction_id = previousInteractionId;
@@ -161,7 +204,7 @@ export async function runImageInteraction(params: {
     {
       model: COPILOT_MODELS.NANO_BANANA_MODEL,
       hasPreviousInteraction: Boolean(previousInteractionId),
-      slotCount: media.length,
+      slotCount: slots.length,
       aspectRatio,
     },
     "Running image interaction",
