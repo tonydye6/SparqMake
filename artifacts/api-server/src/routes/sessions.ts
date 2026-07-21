@@ -35,6 +35,7 @@ import { estimateImagenCost, estimateClaudeCost, estimateGeminiTextCost, COST_ES
 import { reserveBudget, budgetExceededBody } from "../lib/budget.js";
 import { recordTasteSignal } from "../services/taste-signals.js";
 import { logger } from "../lib/logger.js";
+import { PLATFORM_CONFIGS } from "../services/imagen.js";
 
 const router: IRouter = Router();
 
@@ -62,11 +63,10 @@ const ScheduleItemSchema = z.object({
   scheduledAt: z.string().datetime(),
 });
 
-// D3: Enumerate valid platform keys so an empty string or unknown value is
-// rejected 400 instead of silently flowing through to the model.
-const VALID_PLATFORM_KEYS = [
-  "instagram_feed", "instagram_story", "twitter", "linkedin", "tiktok", "youtube",
-] as const;
+// D3: Valid platform keys are derived from PLATFORM_CONFIGS (the source of
+// truth in services/imagen.ts) so adding a platform there automatically makes
+// it valid here; empty strings and unknown values are still rejected 400.
+const VALID_PLATFORM_KEYS = Object.keys(PLATFORM_CONFIGS) as [string, ...string[]];
 
 const CreateTurnBody = z.object({
   action: z.enum([
@@ -397,9 +397,9 @@ router.post(
   },
 );
 
-// B3: Count of platform slots used by fan_out (must match PLATFORM_CONFIGS keys)
-// to compute worst-case outpaint allowance without importing PLATFORM_CONFIGS here.
-const FAN_OUT_PLATFORM_COUNT = 6;
+// B3: Count of platform slots used by fan_out, derived from PLATFORM_CONFIGS
+// so worst-case outpaint allowance tracks the real platform set.
+const FAN_OUT_PLATFORM_COUNT = Object.keys(PLATFORM_CONFIGS).length;
 
 // B4: Fixed video duration used for reservation (D2 pinned duration = 6s).
 const VIDEO_RESERVATION_DURATION_S = 6;
