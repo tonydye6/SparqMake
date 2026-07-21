@@ -47,6 +47,7 @@ const CreateSessionBody = z.object({
   styleProfileId: z.string().optional(),
   personaId: z.string().optional(),
   selectedAssetIds: z.array(z.string()).optional(),
+  existingCreativeId: z.string().optional(),
 });
 
 const RegionSchema = z.object({
@@ -113,6 +114,15 @@ router.post(
 
       res.status(201).json(session);
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg === "Creative not found") {
+        res.status(404).json({ error: msg });
+        return;
+      }
+      if (msg === "Creative does not belong to this brand") {
+        res.status(400).json({ error: msg });
+        return;
+      }
       logger.error({ err }, "Failed to create session");
       res.status(500).json({ error: "Failed to create session" });
     }

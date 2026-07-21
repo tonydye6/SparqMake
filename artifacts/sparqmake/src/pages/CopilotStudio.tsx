@@ -1492,6 +1492,7 @@ export default function CopilotStudio() {
             brandId: creative.brandId,
             briefText,
             intent: creative.intent || undefined,
+            existingCreativeId: campaignId,
           }),
         });
         if (!sResp.ok) {

@@ -352,8 +352,34 @@ export async function createSession(params: {
   styleProfileId?: string;
   personaId?: string;
   selectedAssetIds?: string[];
+  existingCreativeId?: string;
 }): Promise<StudioSession> {
-  const { brandId, briefText, createdBy, conceptId, intent, styleProfileId, personaId } = params;
+  const { brandId, briefText, createdBy, conceptId, intent, styleProfileId, personaId, existingCreativeId } = params;
+
+  if (existingCreativeId) {
+    const [existing] = await db.select().from(creativesTable)
+      .where(eq(creativesTable.id, existingCreativeId));
+    if (!existing) throw new Error("Creative not found");
+    if (existing.brandId !== brandId) throw new Error("Creative does not belong to this brand");
+
+    // Reuse an existing session for this creative (repeat opens of the same
+    // plan item should land in the same session, not stack new ones).
+    const [priorSession] = await db.select().from(studioSessionsTable)
+      .where(eq(studioSessionsTable.creativeId, existing.id))
+      .orderBy(desc(studioSessionsTable.updatedAt))
+      .limit(1);
+    if (priorSession) return priorSession;
+
+    const [session] = await db.insert(studioSessionsTable).values({
+      creativeId: existing.id,
+      brandId,
+      status: "drafting",
+      createdBy,
+      sessionTitle: briefText.slice(0, 80) || existing.name.slice(0, 80),
+    }).returning();
+
+    return session;
+  }
 
   const [creative] = await db.insert(creativesTable).values({
     brandId,
