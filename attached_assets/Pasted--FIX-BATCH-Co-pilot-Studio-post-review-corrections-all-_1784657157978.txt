@@ -1,0 +1,383 @@
+# FIX BATCH: Co-pilot Studio — post-review corrections (all verified defects)
+
+An independent max-effort code review of the Co-pilot Studio build (commits d62c116..725e337)
+verified 28 defects. This directive fixes all of them. Every item below was CONFIRMED against
+the code at d2403f2 with file/line evidence — do not re-litigate whether they are real; fix
+them exactly as specified. Work in the phase order given (A is flow-critical; the app is live
+as the default route with these bugs). Keep changes tight: fix what is named, do not refactor
+beyond what a fix requires, additive migrations only.
+
+DO NOT "FIX" (verified correct / unreachable — leave alone):
+- Migration 0022's DO/EXCEPTION guard catching duplicate_table: that IS the correct SQLSTATE
+  (42P07) for re-adding a UNIQUE constraint. Leave the guard as written.
+- The /pick endpoint's per-take interaction restore: correct as-is.
+- Fan-out card images rendering from turn metadata: working as designed.
+
+════════ PHASE A — FLOW-CRITICAL (the app is visibly broken without these) ════════
+
+A1. Session view is blind: variants always parse to []
+- File: artifacts/sparqmake/src/pages/CopilotStudio.tsx ~line 546 (loadSession)
+- Bug: GET /api/creatives/:id/variants returns a BARE ARRAY, but the code reads
+  `vData.variants || vData.data || []`, so allVariants is always empty: the main preview,
+  history-rail thumbnails, and turn thumbnails never show images.
+- Fix: parse defensively: `const variants = Array.isArray(vData) ? vData : (vData.variants
+  || vData.data || [])`. Keep everything downstream unchanged.
+- Verify: open an existing session with prior turns: preview shows the active image, history
+  tiles show thumbnails, compare grids show take images.
+
+A2. Reference images + video seed never reach the model (nonexistent `media` field)
+- File: artifacts/api-server/src/services/interactions-client.ts (runImageInteraction ~136-153,
+  runVideoInteraction ~72-101)
+- Bug: reference slots and the video seed are sent as a top-level `media: [...]` on the
+  interactions.create request. CreateModelInteraction has NO media field (the `as
+  Parameters<...>[0]` cast hides this); the API reads model input ONLY from `input`. Result:
+  brand/persona reference conditioning and image-to-video seeding are silent no-ops.
+- Fix: build `input` as a Content array per @google/genai types: text part(s) plus one
+  image part per reference: `input: [{ type: "text", text: prompt }, { type: "image",
+  data: <base64>, mime_type: <mime> }, ...]`. Same for the video seed image. Remove the
+  `media` field and remove the blanket `as Parameters<...>[0]` cast (type the request
+  properly so future drift is caught by tsc).
+- Verify: (1) unit test asserting the built request has no `media` key and that input
+  contains N image parts; (2) live check: generate a draft with a distinctive subject
+  reference (e.g. the Crown U mascot asset) and confirm the output visibly contains the
+  referenced subject; convert an image to video and confirm the clip is derived from that
+  image (not an unrelated scene).
+
+A3. Migration metadata drift will break the next `drizzle-kit generate`
+- Files: lib/db/drizzle/meta/_journal.json (idx 22), lib/db/drizzle/meta/ (no 0022 snapshot),
+  0021_snapshot.json (lacks the unique constraint)
+- Bug: 0022 was hand-written: no 0022_snapshot.json exists, 0021's snapshot does not contain
+  studio_sessions_creative_id_unique, and 0022's journal `when` (1753142400000) PREDATES
+  0021's (1784600820379). The next generate will diff against the 0021 snapshot and emit an
+  unguarded duplicate ADD CONSTRAINT (and may error on the missing snapshot); the backwards
+  timestamp can also cause watermark-based applies to skip 0022.
+- Fix (remediation, not deletion — 0022 is already applied in environments):
+  1) Run `pnpm --filter @workspace/db run generate`: let drizzle emit migration 0023 from the
+     schema diff (it will contain ADD CONSTRAINT studio_sessions_creative_id_unique) AND the
+     correct 0023 snapshot.
+  2) Hand-edit 0023's SQL to wrap the ADD CONSTRAINT in the same idempotent DO $$ ...
+     EXCEPTION WHEN duplicate_table THEN NULL guard used in 0022, so it no-ops where 0022
+     already ran and self-heals any environment where the backwards timestamp skipped 0022.
+  3) Fix idx-22's `when` in _journal.json to a value between 0021's and 0023's timestamps so
+     journal ordering is monotonic.
+  4) Apply migrations in dev and confirm both fresh-DB and already-applied-DB paths succeed.
+- Verify: `drizzle-kit generate` runs clean afterward with NO new diff; migrate exits 0 on a
+  database that already has the constraint AND on a fresh database.
+
+A4. Composer keyword regex hijacks image edits
+- File: artifacts/sparqmake/src/pages/CopilotStudio.tsx ~line 668 (handleSend)
+- Bug: `/caption|headline|copy|text|punchier|shorter|hashtag/i.test(text)` routes any message
+  containing those substrings ("change the text on the jersey", "copy the logo", even
+  "texture") to a caption turn, so the image edit never happens.
+- Fix: remove keyword routing entirely. Free composer text defaults to edit_image whenever an
+  image exists (draft otherwise). Caption turns are triggered ONLY by explicit UI: the caption
+  panel, the caption quick-chips, and the per-platform "Caption for:" controls (all of which
+  already pass action="caption" explicitly).
+- Verify: with an image present, sending "change the text on the jersey to SALE" runs an
+  edit_image turn that alters the image; the caption panel still rewrites captions.
+
+A5. Branching from non-image turns kills the edit chain
+- File: artifacts/api-server/src/services/session-service.ts ~335-343 (branchSession)
+- Bug: `imageInteractionId: sourceTurn?.interactionId ?? null` sets NULL when branching to
+  fan_out / convert_video / edit_video / schedule turns (they store no image interaction id),
+  and the history rail exposes those turns. Next edit_image then throws "No previous image
+  interaction to edit."
+- Fix: never null the chain on branch. Restore the interaction id from the nearest prior
+  copilot turn (seq <= source turn) whose interactionId is non-null AND whose action is an
+  image-producing one (draft / edit_image / edit_region / compare / caption passthrough).
+  Mirror the /pick guard: only write imageInteractionId when a non-null id was found.
+- Verify: draft → fan_out → click the fan-out history tile → run an edit_image turn: it
+  succeeds and edits the drafted image.
+
+A6. YouTube captions: empty on create, no-op on rewrite, wiped by sibling rewrites
+- Files: artifacts/api-server/src/services/claude.ts ~7 (CaptionResult),
+  session-service.ts ~174 (default platform list), ~224-230 (result literal), ~765-774
+  (executeCaption merge), ~254-276 (saveTurnVariants)
+- Bug: CaptionResult and every literal are 5-key while PLATFORM_CONFIGS has 6 (youtube).
+  saveTurnVariants iterates PLATFORM_CONFIGS → youtube rows get empty caption/headline;
+  executeCaption's 5-key rebuild makes youtube rewrites a no-op AND drops existing.youtube
+  when rewriting any other platform. The FE explicitly offers YouTube in the caption selector.
+- Fix: derive ALL platform key lists from a single source: `Object.keys(PLATFORM_CONFIGS)`.
+  Make CaptionResult `Record<PlatformKey, {caption; headline}>` keyed off PLATFORM_CONFIGS,
+  update both builders and the merge to iterate that list (never hand-written key literals).
+- Verify: unit test: draft captions include a non-empty youtube entry; caption turn targeting
+  youtube updates it; rewriting twitter leaves youtube intact.
+
+════════ PHASE B — MONEY / BUDGET INTEGRITY ════════
+
+B1. Unify the daily-budget reservation (lock-key race + duplicated logic)
+- Files: artifacts/api-server/src/routes/sessions.ts ~174-220; generate.ts (reserveBudget
+  ~1131-1195); video.ts ~52
+- Bug: sessions.ts re-implements reservation with BUDGET_LOCK_KEY=100002 while generate.ts and
+  video.ts use 100001 over the same cost_logs SUM: the paths do not mutually serialize, so a
+  concurrent turn + /generate can jointly exceed dailyCostThreshold. The sessions 429 body also
+  omits the `message` field the shared helper returns.
+- Fix: export reserveBudget()/budgetExceededBody() from a shared module (e.g.
+  lib/budget.ts inside api-server) with the SINGLE lock key 100001; delete the copy in
+  sessions.ts and call the shared helper everywhere (generate.ts, video.ts, sessions.ts).
+- Verify: grep shows exactly one pg_advisory_xact_lock call site/constant; sessions 429
+  response includes `message`.
+
+B2. Reservation settlement must be awaited and atomic
+- File: sessions.ts ~264-279
+- Bug: the reservation row delete is fire-and-forget in `finally`
+  (`db.delete(...).catch(log)`, never awaited) while the real cost row is written earlier
+  inside executeTurn: a failed delete or a restart leaves a phantom reservation that the
+  day-spend SUM counts → wrongful 429s for the rest of the day.
+- Fix: settle like generate.ts does: pass the reservationId into the turn pipeline and, in the
+  SAME transaction that writes the real cost_logs row (session-service executeTurn ~467),
+  delete the reservation. On the error path, await the delete before rethrowing.
+- Verify: kill the process mid-turn in dev: no budget_reservation row remains after the
+  transaction boundary test; unit test covers reserve→settle and reserve→error→release.
+
+B3. Reserve what turns can actually spend (QA + outpaint allowances)
+- Files: sessions.ts estimateTurnCost ~394-415; session-service.ts applyQaPass ~1034-1080,
+  executeFanOut ~1481-1650
+- Bug: the QA corrective pass spends an extra estimateImagenCost(1) and fan-out spends
+  estimateImagenCost(perOutpaintedPlatform), neither reserved: real spend slips past the gate.
+- Fix: draft/edit_image/edit_region reservations include + estimateImagenCost(1) QA allowance;
+  fan_out reservation includes estimateClaudeCost() + estimateImagenCost(selectedPlatformCount)
+  as worst-case outpaint allowance. Also delete the duplicated per-action cost formulas:
+  export a single estimateActionCost(action, params) from session-service and use it for BOTH
+  the reservation and the charged costUsd so they cannot drift.
+- Verify: unit test asserts reservation >= charged cost for draft-with-QA and a fan-out where
+  every platform outpaints.
+
+B4. One video pricing model
+- Files: ai-config.ts ~24-35; session-service.ts ~1324-1325, ~1403-1404; video.ts ~208-215;
+  video-generation.ts estimateVideoCost ~113-115
+- Bug: three inconsistent formulas: flat 2.10 reservation, byte-heuristic 0.42/s charge, and
+  legacy Veo 0.35/s×6s still logged for Omni output in video.ts.
+- Fix: single helper: estimated duration from the requested duration (see D2: we now request
+  a fixed duration) with the byte heuristic only as fallback; price = duration ×
+  VIDEO_COST_PER_SECOND_USD; use it for reservation AND charge in both the copilot and legacy
+  video paths; delete estimateVideoCost's stale 0.35 constant.
+- Verify: cost_logs rows for a copilot video and a legacy video show the same formula; unit
+  test pins reservation == charge for a fixed-duration clip.
+
+════════ PHASE C — SCHEDULING & SESSION-STATE CORRECTNESS ════════
+
+C1. Timezone-safe schedule editing
+- Files: CopilotStudio.tsx FanOutCard ~1155, ~1195-1196; CalendarNext.tsx toDatetimeLocalValue
+  ~64-67 (the correct pattern)
+- Bug: display renders UTC wall-clock (`toISOString().replace("Z","").slice(0,16)`) but
+  setTime parses the input as LOCAL: every manual adjustment shifts the stored time by the
+  user's UTC offset.
+- Fix: export toDatetimeLocalValue (and its inverse parse) to a shared util (e.g.
+  @/lib/datetime.ts), use it in FanOutCard for display; keep `new Date(val).toISOString()`
+  for parse (local-in/local-out, matching CalendarNext).
+- Verify: set browser TZ to America/Los_Angeles in a test: displayed value equals the local
+  wall-clock of scheduledAt, and editing minutes only changes minutes.
+
+C2. Clamp the fan-out schedule spread
+- File: session-service.ts ~1535-1554
+- Bug: hour = bestHour + platformIndex (0..5) with no clamp; setHours(24+) rolls posts into
+  the next day (reachable: insights suggest hour 22 for "night").
+- Fix: keep ordering but stay in-day: `const h = Math.min(bestHour + idx, 23)`; when clamped,
+  add `idx * 10` minutes to preserve distinct, ordered slots.
+- Verify: unit test with bestHour=22 and 6 platforms: all slots are the same calendar day,
+  strictly increasing.
+
+C3. convert_video must not steal the active variant
+- File: session-service.ts executeTurn ~452-458 (contradicts comment ~1244-1247)
+- Bug: executeTurn always sets activeVariantId = result.variantIds[0]; a per-card
+  convert_video (sourceVariantId set) hijacks the main preview and the base for later turns.
+- Fix: let each action result declare `takesFocus: boolean`; convert_video/edit_video with an
+  explicit input.sourceVariantId return takesFocus=false (session.activeVariantId unchanged);
+  everything else behaves as today.
+- Verify: convert a fan-out YouTube card: the main preview still shows the working image; the
+  video appears on the card/thread.
+
+C4. Atomic turn commit + no permanently-stuck rows
+- File: session-service.ts executeTurn ~403-473
+- Bug: (a) turn done-update, session update, and cost insert are three separate awaits: a
+  crash between them leaves a done turn whose output the session never adopted (next edit
+  continues from the stale interaction id) and unrecorded spend; (b) user-role turn rows are
+  inserted status 'pending' and never updated: permanently pending.
+- Fix: (a) wrap the three writes in ONE db.transaction (include the B2 reservation delete);
+  (b) insert user turns with status 'done' (they are facts, not processes); (c) add a startup
+  sweep: copilot turns stuck in 'running' older than 15 minutes are marked 'error' with
+  error='interrupted' (registered alongside the existing startup jobs in index.ts).
+- Verify: unit test: simulated failure inside the transaction rolls back turn+session+cost
+  together; a seeded stale 'running' turn is swept to 'error' on boot.
+
+C5. Deep-linked sessions must attach to the plan's creative
+- Files: session-service.ts createSession ~346-380; sessions.ts CreateSessionBody ~42-50;
+  CopilotStudio.tsx ~1476-1496
+- Bug: createSession ALWAYS inserts a new creative (no creativeId param) and the deep-link
+  flow sends only {brandId, briefText, intent}: the ContentPlan item's linked creative is
+  orphaned and all work/publishing attaches to the wrong creative.
+- Fix: CreateSessionBody accepts optional creativeId; when present, createSession reuses that
+  creative instead of inserting, and (leveraging the 0022 unique constraint) if a session
+  already exists for it, RETURN the existing session (get-or-create). Deep-link flow passes
+  the campaign's creative id.
+- Verify: ContentPlan → open in studio → generate → the plan item's linkedCreative gains the
+  variants; reopening the same plan item resumes the SAME session.
+
+C6. Region gesture must be visible in the thread
+- Files: session-service.ts ~403-416; CopilotStudio.tsx ~1314-1327
+- Bug: the FE renders the region badge from turn.metadata.region on USER turns, but user turns
+  are stored with metadata null (region only in write-only instructionPayload): the badge
+  never renders.
+- Fix: persist `metadata: { region: input.region }` on the user turn when a region is present
+  (keep instructionPayload as-is for now).
+- Verify: run an edit_region turn: the user bubble shows the region percentages.
+
+C7. Session thumbnails must track the session
+- File: session-service.ts ~453
+- Bug: only draft/convert_video/edit_video return thumbnailUrl; edits, compare picks, and
+  fan-out leave the continue-rail thumbnail stale forever.
+- Fix: after any turn that changes activeVariantId (and in the /pick endpoint), set
+  session.thumbnailUrl from the new active variant's composited/raw URL.
+- Verify: draft, then edit the image: the Home continue-rail tile shows the edited image.
+
+════════ PHASE D — INTERACTIONS CLIENT & VIDEO HARDENING ════════
+
+D1. Timeouts + cancellation end-to-end
+- Files: interactions-client.ts ~101, ~170; sessions.ts ~224-279; video-generation.ts ~59-79;
+  CopilotStudio.tsx runTurn ~604-650
+- Bug: no timeout/AbortSignal on any interactions.create (SDK supports
+  options.timeout and fetchOptions.signal); the route's SSE timeout/close never aborts
+  executeTurn; the FE never aborts its fetch on unmount. Hung calls = turns stuck 'running',
+  phantom reservations, and abandoned turns that keep billing.
+- Fix: (a) interactions-client accepts an optional AbortSignal + applies timeouts (image 180s,
+  video 300s) via the SDK options; (b) sessions.ts creates an AbortController, aborts it on
+  req 'close' AND on the SSE timeout, and threads the signal through executeTurn into every
+  model call (mark the turn 'error'/aborted on abort, settle the reservation per B2);
+  (c) video-generation.ts passes the signal via fetchOptions.signal (restoring the
+  cancellation the Veo path had); (d) the FE creates an AbortController per runTurn, aborts on
+  unmount/back, and ignores dispatches after abort.
+- Verify: start a draft, navigate Back immediately: server logs show the turn aborted, turn
+  status='error', no reservation row remains; a mocked never-resolving model call times out at
+  the configured bound.
+
+D2. Restore video constraints the rewrite dropped
+- File: video-generation.ts ~55-79 (+ interactions-client video path)
+- Bug: the Veo→Omni rewrite lost durationSeconds (now prose "5-8 seconds") and the
+  personGeneration:"dont_allow" hard block (now prose "Do not show people.").
+- Fix: request `response_format.duration: "6s"` (the SDK supports duration on
+  VideoResponseFormat) in both the legacy service and the copilot video path; keep the
+  no-people prompt sentence AND add the strictest applicable safety_settings; document in a
+  code comment that Interactions has no personGeneration equivalent (accepted residual risk).
+- Verify: generated clips are ~6s; the request body contains duration.
+
+D3. Robust SSE parsing + inline delivery + input validation edges
+- Files: CopilotStudio.tsx ~603-643; interactions-client.ts ~73-75, ~105/174, ~146;
+  sessions.ts CreateTurnBody ~78; session-service.ts ~1285-1287
+- Bug: (a) FE SSE parser pairs `event: error` with its data line via lines.indexOf()+1 and an
+  unguarded JSON.parse: cross-chunk error events are swallowed as success; (b) response
+  extraction reads only output_image/output_video `.data` (no delivery requested, no `.uri`
+  fallback); (c) `platform: z.string().optional()` accepts "", and the `(platform &&
+  cfg?.aspectRatio) ?? fallback` mixed operators let "" through as the aspect ratio;
+  (d) PLATFORM_CONFIGS.linkedin "1.91:1" would reach the video cast if ever passed.
+- Fix: (a) implement a proper SSE event parser: accumulate until blank line, parse
+  event+data as a unit, guard all JSON.parse; (b) request delivery:"inline" explicitly and add
+  a uri-fetch fallback when data is absent; (c) make platform `z.enum(PLATFORM_KEYS)
+  .optional()` and fix the expression to a plain ternary; (d) map video aspect ratios through
+  a whitelist (nearest of 16:9 / 9:16 / 1:1) before response_format.
+- Verify: unit tests: chunk-split error event surfaces as a thrown turn error; platform:""
+  is rejected 400; linkedin-sourced video request carries 16:9.
+
+D4. Fail fast when the direct key is missing
+- Files: interactions-client.ts ~14; lib/integrations-gemini-ai/src/client.ts
+- Bug: the client silently falls back to the Replit proxy when GEMINI_API_KEY is unset, and
+  the proxy serves NONE of the pinned models: every copilot turn (and, post-Task-#209, every
+  legacy generation) would fail with confusing UNSUPPORTED_MODEL errors.
+- Fix: at api-server startup, if GEMINI_API_KEY is absent log ONE prominent warning naming the
+  affected features; sessions endpoints return 503 with "AI model access is not configured"
+  instead of attempting proxy calls. Do NOT silently substitute models.
+- Verify: boot without GEMINI_API_KEY: clean 503 + warning; boot with it: normal.
+
+════════ PHASE E — GUARDRAILS, CAPTION QUALITY, CONFIG HYGIENE ════════
+
+E1. Unify caption generation (kills the guardrail bypass)
+- Files: session-service.ts buildImageAwareCaption ~152-230 and buildFanOutCaptions ~1422-1479
+- Bug: buildFanOutCaptions is a near-duplicate that injects ONLY voiceDescription: fan-out
+  captions bypass bannedTerms, trademarkRules, and voiceExamples. tasteGuidance is missing
+  from BOTH copilot caption paths (legacy claude.ts has it).
+- Fix: delete buildFanOutCaptions; fan_out calls buildImageAwareCaption (it already supports
+  the all-platforms case, and A6 makes it PLATFORM_CONFIGS-driven). Add tasteGuidance and
+  voiceExamples into buildImageAwareCaption's system prompt, and add voiceExamples few-shot
+  into legacy claude.ts generateCaptions so all three surfaces honor the same brand contract.
+- Verify: unit test: a brand with bannedTerms produces fan-out caption prompts containing the
+  NEVER-USE block; grep shows one caption builder.
+
+E2. Viewer read-only in the Co-pilot UI
+- File: CopilotStudio.tsx (whole page)
+- Bug: no useCanWrite gating: viewers see fully interactive controls that 403.
+- Fix: `const canWrite = useCanWrite()`; hide (not just disable) the composer, quick chips,
+  Start session, region editing, approve/schedule, and convert buttons for viewers; sessions
+  render read-only (thread + preview + history).
+- Verify: extend the existing role test pattern (AssetLibrary.roles.test.tsx) with a
+  CopilotStudio viewer test.
+
+E3. Model pin hygiene
+- Files: session-service.ts ~205, ~801, ~1444, ~1643; ai-config.ts COPILOT_MODELS
+- Bug: four hardcoded "claude-sonnet-4-6" literals bypass AI_MODELS.CLAUDE_SONNET / env
+  rollover; COPILOT_MODELS duplicates AI_MODELS defaults under separate env knobs, so
+  overriding one registry silently diverges the two pipelines.
+- Fix: replace literals with AI_MODELS.CLAUDE_SONNET (the two `modelUsed:` metadata fields
+  should reference the same constant); derive COPILOT_MODELS defaults from AI_MODELS
+  (e.g. NANO_BANANA_MODEL: process.env.NANO_BANANA_MODEL || AI_MODELS.GEMINI_FLASH_IMAGE) so
+  there is one default source and the specific knobs remain optional overrides.
+- Verify: grep for "claude-sonnet-4-6" outside ai-config.ts returns nothing.
+
+E4. voiceExamples must survive codegen (their follow-up #226)
+- Files: lib/api-spec/openapi.yaml; lib/api-zod/src/generated/api.ts (hand-patched 83/114/135)
+- Bug: voiceExamples was hand-added to a GENERATED file (orval clean:true); the next codegen
+  run drops it and the Brand editor silently loses the field.
+- Fix: add voiceExamples (array of strings, nullable) to the Brand schema + update body in
+  openapi.yaml, run `pnpm --filter @workspace/api-spec run codegen`, and confirm the generated
+  output retains it (mind the known api-zod multipart re-export landmine).
+- Verify: run codegen twice: diff is empty and voiceExamples persists; brand save round-trips
+  the field.
+
+E5. Product copy: remove em dashes
+- File: CopilotStudio.tsx ~914 ("Region selected — describe the edit:"), ~1387 ("Video ready —
+  preview in the right pane"), ~1059 (instruction string "${tune} — rewrite the caption")
+- Fix: replace with middot/colon/comma per the copy rule; sweep the file for any others.
+- Verify: grep for "—" in JSX/string literals across changed FE files returns only code
+  comments.
+
+════════ PHASE F — PERFORMANCE (small, safe wins; do after correctness) ════════
+
+F1. getSessionWithTurns: replace the per-turn variant lookup (N+1) with one
+    inArray(...) query + in-memory grouping (session-service.ts ~286-311), and add
+    `.limit(...)`/pagination (most-recent 100 turns) to the turns fetch.
+F2. Additive migration 0024: index studio_sessions (brand_id, updated_at DESC) to serve the
+    continue-rail query (sessions.ts ~136), which sorts by updatedAt.
+F3. saveTurnVariants: one batched insert `.values([...])` instead of a serial loop (~253-276).
+F4. executeCompare: run takes concurrently (Promise.all; they are independent,
+    previousInteractionId:null) (~856+).
+F5. applyQaPass: accept the in-memory image buffer from the caller instead of re-reading
+    from storage and re-encoding (~929, ~987).
+F6. Frontend: after a completed SSE turn, append the turn/variant from the stream payload
+    instead of a full loadSession refetch (keep a manual refresh path). Optional if time-boxed;
+    F1 makes the reload cheap.
+
+════════ EXPLICITLY OUT OF SCOPE (do not do in this batch) ════════
+- No consolidation of the duplicated SSE scaffold / packet-loader / platform-icon maps beyond
+  what the fixes above require (tracked as cleanup debt, separate task).
+- No changes to the legacy /generate, /vary, /takes, /fan-out routes beyond B1/B4 shared
+  helpers.
+- No model changes: pins stay as configured (Task #209 decided models; this batch only fixes
+  wiring/config hygiene around them).
+
+════════ FINAL REGRESSION GATE (run all; report results with screenshots) ════════
+1) `pnpm run typecheck` exits 0; full `vitest run` green including ALL new tests above.
+2) Migration gate: `drizzle-kit generate` produces no unexpected diff; migrate exits 0 on the
+   dev DB; the 0023 guard no-ops where 0022 applied.
+3) Acceptance flow (Crown U): brief "Week 3 rivalry vs Ironclad U, playful trash talk" →
+   draft renders IN THE PREVIEW with visible reference-derived subject → "calm the background,
+   make the crown pop" edits the SAME image (side-by-side proof) → "change the text on the
+   jersey to 24-21" runs an edit_region/edit_image (NOT a caption turn) → YouTube caption
+   rewrite works and other platforms keep theirs → compare 3 takes, pick take 2, edit it,
+   confirm the edit chains from take 2 → branch to the draft from history and confirm edits
+   still work → fan_out: all 6 platforms incl. YouTube have non-empty captions, banned terms
+   absent, schedule times all same-day and editable without shifting → convert the YouTube
+   card to video (clip visibly derived from the image, ~6s) while the main preview keeps the
+   image → abandon one turn mid-generation via Back and show it lands as status 'error' with
+   no lingering budget reservation.
+4) Boot-without-GEMINI_API_KEY check (D4) in a scratch env, then restore.
+Report per phase: what changed, test evidence, and any deviation from this spec with reasons.
+Do not mark the batch complete with any acceptance step unverified.
