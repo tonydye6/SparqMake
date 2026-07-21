@@ -5,16 +5,17 @@ export const AI_MODELS = {
   VEO_VIDEO: process.env.VEO_MODEL || "gemini-omni-flash-preview",
 } as const;
 
-// Co-pilot Studio model pins — env-overridable, no existing generation paths use these yet.
-// All three Gemini targets require direct GEMINI_API_KEY (proxy does not support them).
+// Co-pilot Studio model pins — env-overridable; defaults derive from AI_MODELS so there
+// is one source of truth for each model family.
+// All Gemini targets require direct GEMINI_API_KEY (proxy does not support them).
 // NANO_BANANA_MODEL / OMNI_VIDEO_MODEL: must be called via the Interactions API
-// (directClient.interactions.create), NOT ai.models.generateContent.
+// (ai.interactions.create), NOT ai.models.generateContent.
 // ART_DIRECTION_MODEL / QA_MODEL: standard generateContent is fine.
 export const COPILOT_MODELS = {
-  NANO_BANANA_MODEL: process.env.NANO_BANANA_MODEL || "gemini-3-pro-image",
-  OMNI_VIDEO_MODEL: process.env.OMNI_VIDEO_MODEL || "gemini-omni-flash-preview",
-  ART_DIRECTION_MODEL: process.env.ART_DIRECTION_MODEL || "gemini-3.5-flash",
-  QA_MODEL: process.env.QA_MODEL || "gemini-3.5-flash",
+  NANO_BANANA_MODEL: process.env.NANO_BANANA_MODEL || AI_MODELS.GEMINI_FLASH_IMAGE,
+  OMNI_VIDEO_MODEL: process.env.OMNI_VIDEO_MODEL || AI_MODELS.VEO_VIDEO,
+  ART_DIRECTION_MODEL: process.env.ART_DIRECTION_MODEL || AI_MODELS.GEMINI_FLASH_TEXT,
+  QA_MODEL: process.env.QA_MODEL || AI_MODELS.GEMINI_FLASH_TEXT,
 } as const;
 
 export const COST_ESTIMATES = {

@@ -7,6 +7,7 @@
  */
 
 import { useState, useCallback, useEffect, useRef, useReducer } from "react";
+import { useCanWrite } from "@/hooks/useAuth";
 import {
   Sparkles, Bot, ArrowRight, RotateCcw, MessageSquare,
   Loader2, Clock, ChevronRight, Image as ImageIcon, DollarSign,
@@ -106,6 +107,7 @@ interface HomeViewProps {
 
 function HomeView({ onSessionCreated }: HomeViewProps) {
   const { toast } = useToast();
+  const canWrite = useCanWrite();
   const { data: brands, isLoading: brandsLoading } = useGetBrands();
   const { personas } = useDesignerPersonas();
   const [brandId, setBrandId] = useState<string | null>(null);
@@ -267,66 +269,74 @@ function HomeView({ onSessionCreated }: HomeViewProps) {
           </div>
         </div>
 
-        <div className="space-y-3">
-          <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Brief</label>
-          <div className="flex gap-2">
-            <Textarea
-              value={brief}
-              onChange={e => setBrief(e.target.value)}
-              placeholder="Week 3 rivalry vs Ironclad U, playful trash talk..."
-              rows={3}
-              className="resize-none flex-1"
-              onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void startSession(); }}
-            />
-            <Button
-              disabled={creating || !brandId}
-              onClick={() => void startSession()}
-              className="self-end"
-            >
-              {creating ? <Loader2 size={16} className="animate-spin" /> : <ArrowRight size={16} />}
-              Start
-            </Button>
-          </div>
-        </div>
-
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Or pick a concept</label>
-            {brandId && (
-              <button
-                onClick={() => void loadConcepts(brandId)}
-                disabled={loadingConcepts}
-                className="text-xs text-primary hover:underline flex items-center gap-1"
-              >
-                <RotateCcw size={12} className={loadingConcepts ? "animate-spin" : ""} />
-                Refresh
-              </button>
-            )}
-          </div>
-
-          {loadingConcepts ? (
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              {[0, 1, 2].map(i => <Skeleton key={i} className="h-24 rounded-lg" />)}
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              {concepts.map(c => (
-                <button
-                  key={c.id}
-                  onClick={() => void startSession(c)}
+        {canWrite ? (
+          <>
+            <div className="space-y-3">
+              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Brief</label>
+              <div className="flex gap-2">
+                <Textarea
+                  value={brief}
+                  onChange={e => setBrief(e.target.value)}
+                  placeholder="Week 3 rivalry vs Ironclad U, playful trash talk..."
+                  rows={3}
+                  className="resize-none flex-1"
+                  onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void startSession(); }}
+                />
+                <Button
                   disabled={creating || !brandId}
-                  className="text-left p-4 border border-border rounded-lg hover:border-primary/60 hover:bg-primary/5 transition-colors group"
+                  onClick={() => void startSession()}
+                  className="self-end"
                 >
-                  <div className="text-sm font-medium mb-1 group-hover:text-primary transition-colors">{c.title}</div>
-                  <div className="text-xs text-muted-foreground line-clamp-2">{c.angle}</div>
-                  {c.intentLabel && (
-                    <Badge variant="secondary" className="mt-2 text-xs">{c.intentLabel}</Badge>
-                  )}
-                </button>
-              ))}
+                  {creating ? <Loader2 size={16} className="animate-spin" /> : <ArrowRight size={16} />}
+                  Start
+                </Button>
+              </div>
             </div>
-          )}
-        </div>
+
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Or pick a concept</label>
+                {brandId && (
+                  <button
+                    onClick={() => void loadConcepts(brandId)}
+                    disabled={loadingConcepts}
+                    className="text-xs text-primary hover:underline flex items-center gap-1"
+                  >
+                    <RotateCcw size={12} className={loadingConcepts ? "animate-spin" : ""} />
+                    Refresh
+                  </button>
+                )}
+              </div>
+
+              {loadingConcepts ? (
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  {[0, 1, 2].map(i => <Skeleton key={i} className="h-24 rounded-lg" />)}
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  {concepts.map(c => (
+                    <button
+                      key={c.id}
+                      onClick={() => void startSession(c)}
+                      disabled={creating || !brandId}
+                      className="text-left p-4 border border-border rounded-lg hover:border-primary/60 hover:bg-primary/5 transition-colors group"
+                    >
+                      <div className="text-sm font-medium mb-1 group-hover:text-primary transition-colors">{c.title}</div>
+                      <div className="text-xs text-muted-foreground line-clamp-2">{c.angle}</div>
+                      {c.intentLabel && (
+                        <Badge variant="secondary" className="mt-2 text-xs">{c.intentLabel}</Badge>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </>
+        ) : (
+          <div className="rounded-lg border border-border bg-muted/40 px-4 py-5 text-sm text-muted-foreground">
+            You have view-only access to this brand. Contact an editor or admin to start new Co-pilot sessions.
+          </div>
+        )}
 
         {(recentSessions.length > 0 || loadingRecent) && (
           <div className="space-y-3 border-t border-border pt-8">
@@ -503,6 +513,8 @@ const PLATFORM_OPTIONS = [
 
 function SessionView({ sessionId, onBack }: SessionViewProps) {
   const { toast } = useToast();
+  // E2: Viewers (role = "viewer") may browse sessions but cannot submit turns.
+  const canWrite = useCanWrite();
   // Platform target for caption turns — "all" means rewrite every platform
   const [captionTargetPlatform, setCaptionTargetPlatform] = useState<string>("all");
   // Region selection state
@@ -542,8 +554,9 @@ function SessionView({ sessionId, onBack }: SessionViewProps) {
       if (variantIds.length > 0) {
         const vResp = await apiFetch(`${API_BASE}/api/creatives/${session.creativeId}/variants`);
         if (vResp.ok) {
-          const vData = await vResp.json() as { variants?: Variant[]; data?: Variant[] };
-          variants = vData.variants || vData.data || [];
+          // A1: Endpoint returns a bare array, not a wrapper object.
+          const vData = await vResp.json() as Variant[] | { variants?: Variant[]; data?: Variant[] };
+          variants = Array.isArray(vData) ? vData : (vData.variants || vData.data || []);
         }
       }
 
@@ -561,6 +574,18 @@ function SessionView({ sessionId, onBack }: SessionViewProps) {
     }
   }, [state.turns, state.progressMessages]);
 
+  // D1: Track the in-flight AbortController so we can cancel the SSE fetch on
+  // component unmount or when the user navigates Back during an active turn.
+  const turnAbortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    return () => {
+      // On unmount, abort any in-flight turn fetch so the server also aborts
+      // its in-flight model call (via the req 'close' handler in sessions.ts).
+      turnAbortRef.current?.abort();
+    };
+  }, []);
+
   const runTurn = useCallback(async (
     action: string,
     instruction: string,
@@ -574,10 +599,16 @@ function SessionView({ sessionId, onBack }: SessionViewProps) {
     dispatch({ type: "clearProgress" });
     dispatch({ type: "setError", error: null });
 
+    // D1: Create a per-turn AbortController so this specific fetch can be
+    // cancelled on unmount or back-navigation.
+    const abortCtrl = new AbortController();
+    turnAbortRef.current = abortCtrl;
+
     try {
       const resp = await apiFetch(`${API_BASE}/api/sessions/${sessionId}/turns`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: abortCtrl.signal,
         body: JSON.stringify({
           action,
           instruction,
@@ -598,49 +629,61 @@ function SessionView({ sessionId, onBack }: SessionViewProps) {
       if (!reader) throw new Error("No SSE stream");
 
       const decoder = new TextDecoder();
-      let buffer = "";
+      // D3: Proper SSE event-frame parser — accumulates until blank line so
+      // event+data pairs spanning chunk boundaries are never mis-parsed.
+      // `eventBuf` collects lines in the current frame; a blank line flushes it.
+      let rawBuf = "";
+      const eventBuf: string[] = [];
+
+      const flushEvent = (lines: string[]) => {
+        const eventType = lines.find(l => l.startsWith("event: "))?.slice(7).trim();
+        const dataLine = lines.find(l => l.startsWith("data: "));
+        if (!dataLine) return;
+        let data: Record<string, unknown>;
+        try { data = JSON.parse(dataLine.slice(6)) as Record<string, unknown>; }
+        catch { return; }
+
+        if (eventType === "error") {
+          throw new Error((data.message as string | undefined) || "Turn failed");
+        }
+        if (data.message) dispatch({ type: "addProgress", message: data.message as string });
+        if (data.alternates) {
+          dispatch({
+            type: "setCaptionAlternates",
+            alternates: data.alternates as Array<{ caption: string; headline: string }>,
+            platform: platform || null,
+          });
+        }
+        // When a convert_video turn was triggered from a fan-out YouTube card,
+        // the result carries sourceVariantId + the new video variantIds[0].
+        if (data.sourceVariantId && Array.isArray(data.variantIds) && data.variantIds[0]) {
+          dispatch({
+            type: "setFanOutVideoVariant",
+            sourceId: data.sourceVariantId as string,
+            videoId: data.variantIds[0] as string,
+          });
+        }
+      };
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
+        rawBuf += decoder.decode(value, { stream: true });
+        const lines = rawBuf.split("\n");
+        rawBuf = lines.pop() ?? "";
 
         for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            try {
-              const data = JSON.parse(line.slice(6)) as Record<string, unknown>;
-              if (data.message) dispatch({ type: "addProgress", message: data.message as string });
-              if (data.alternates) {
-                dispatch({
-                  type: "setCaptionAlternates",
-                  alternates: data.alternates as Array<{ caption: string; headline: string }>,
-                  platform: platform || null,
-                });
-              }
-              // When a convert_video turn was triggered from a fan-out YouTube card,
-              // the result carries sourceVariantId + the new video variantIds[0].
-              // Update the fanOutVideoVariants map so FanOutCard can switch to
-              // the video-backed variantId for scheduling.
-              if (data.sourceVariantId && Array.isArray(data.variantIds) && data.variantIds[0]) {
-                dispatch({
-                  type: "setFanOutVideoVariant",
-                  sourceId: data.sourceVariantId as string,
-                  videoId: data.variantIds[0] as string,
-                });
-              }
-            } catch {}
-          }
-          if (line.startsWith("event: error")) {
-            const dataLine = lines[lines.indexOf(line) + 1];
-            if (dataLine?.startsWith("data: ")) {
-              const errData = JSON.parse(dataLine.slice(6)) as { message?: string };
-              throw new Error(errData.message || "Turn failed");
-            }
+          if (line === "") {
+            // Blank line = end of event frame; flush accumulated lines
+            if (eventBuf.length > 0) flushEvent([...eventBuf]);
+            eventBuf.length = 0;
+          } else {
+            eventBuf.push(line);
           }
         }
       }
+      // Flush any trailing frame (stream closed without trailing blank line)
+      if (eventBuf.length > 0) flushEvent(eventBuf);
 
       await loadSession();
       dispatch({ type: "setComposer", text: "" });
@@ -658,6 +701,10 @@ function SessionView({ sessionId, onBack }: SessionViewProps) {
     void runTurn("draft", state.composerText);
   }, [state.composerText, runTurn]);
 
+  // A4: Removed keyword-regex routing — caption intent is too easy to false-positive
+  // on ordinary edit instructions ("make the text cleaner", "shorter headline").
+  // Users have explicit caption chips + platform selector for caption-only turns;
+  // the composer defaults to edit_image when an image interaction exists.
   const handleSend = useCallback(() => {
     if (!state.composerText.trim() || state.running) return;
     const text = state.composerText.trim();
@@ -665,15 +712,9 @@ function SessionView({ sessionId, onBack }: SessionViewProps) {
     if (!hasPrev) {
       void runTurn("draft", text);
     } else {
-      const isCaption = /caption|headline|copy|text|punchier|shorter|hashtag/i.test(text);
-      if (isCaption) {
-        const platform = captionTargetPlatform === "all" ? undefined : captionTargetPlatform;
-        void runTurn("caption", text, platform);
-      } else {
-        void runTurn("edit_image", text);
-      }
+      void runTurn("edit_image", text);
     }
-  }, [state.composerText, state.running, state.session, captionTargetPlatform, runTurn]);
+  }, [state.composerText, state.running, state.session, runTurn]);
 
   const handleRegionEdit = useCallback(() => {
     if (!regionInstruction.trim() || !pendingRegion) return;
@@ -816,9 +857,9 @@ function SessionView({ sessionId, onBack }: SessionViewProps) {
                 turn={turn}
                 allVariants={state.allVariants}
                 isActive={session?.activeVariantId !== null}
-                onPickTake={(variantId) => void pickCompareTake(turn.id, variantId)}
-                onSchedule={(schedules) => void runTurn("schedule", "", undefined, undefined, schedules)}
-                onConvertVideo={(sourceVariantId) => void runTurn(
+                onPickTake={(variantId) => canWrite && void pickCompareTake(turn.id, variantId)}
+                onSchedule={(schedules) => canWrite && void runTurn("schedule", "", undefined, undefined, schedules)}
+                onConvertVideo={(sourceVariantId) => canWrite && void runTurn(
                   "convert_video",
                   "Convert this image into a dynamic short video clip with natural movement and ambient animation",
                   "youtube",
@@ -843,118 +884,128 @@ function SessionView({ sessionId, onBack }: SessionViewProps) {
           </div>
 
           <div className="border-t border-border p-3 space-y-2">
-            <div className="flex flex-wrap gap-1.5">
-              {CHIPS.map(chip => {
-                const disabled = state.running || (chip.requiresImage && !state.session?.imageInteractionId);
-                return (
-                  <button
-                    key={chip.label}
-                    onClick={() => void runTurn(chip.action, chip.instruction)}
-                    disabled={disabled}
-                    className="text-xs px-2.5 py-1 rounded-full border border-border hover:bg-primary/10 hover:border-primary/40 transition-colors disabled:opacity-40"
-                  >
-                    {chip.action === "convert_video" && <Video size={10} className="inline mr-1" />}
-                    {chip.action === "fan_out" && <Layers size={10} className="inline mr-1" />}
-                    {chip.label}
-                  </button>
-                );
-              })}
-              {state.session?.imageInteractionId && (
-                <button
-                  onClick={() => { setRegionMode(m => !m); setPendingRegion(null); }}
-                  disabled={state.running}
-                  className={cn(
-                    "text-xs px-2.5 py-1 rounded-full border transition-colors disabled:opacity-40",
-                    regionMode ? "border-primary bg-primary/10 text-primary" : "border-border hover:bg-primary/10 hover:border-primary/40",
-                  )}
-                >
-                  <Crop size={10} className="inline mr-1" />
-                  Edit region
-                </button>
-              )}
-              {state.session?.videoInteractionId && (
-                <button
-                  onClick={() => void runTurn("edit_video", state.composerText || "Refine the video")}
-                  disabled={state.running || !state.session?.videoInteractionId}
-                  className="text-xs px-2.5 py-1 rounded-full border border-border hover:bg-primary/10 hover:border-primary/40 transition-colors disabled:opacity-40"
-                >
-                  <Video size={10} className="inline mr-1" />
-                  Edit video
-                </button>
-              )}
-            </div>
-
-            {/* Platform selector: shown once a draft exists so caption turns can target one platform */}
-            {state.session?.imageInteractionId && (
-              <div className="flex items-center gap-1.5 flex-wrap">
-                <span className="text-xs text-muted-foreground shrink-0">Caption for:</span>
-                {PLATFORM_OPTIONS.map(opt => (
-                  <button
-                    key={opt.value}
-                    onClick={() => setCaptionTargetPlatform(opt.value)}
-                    disabled={state.running}
-                    className={cn(
-                      "text-xs px-2 py-0.5 rounded-full border transition-colors disabled:opacity-40",
-                      captionTargetPlatform === opt.value
-                        ? "border-primary bg-primary/10 text-primary"
-                        : "border-border hover:border-primary/40",
-                    )}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
+            {/* E2: Viewers see a read-only notice; all interactive controls are hidden (not just disabled). */}
+            {!canWrite ? (
+              <div className="text-xs text-muted-foreground bg-muted/50 border border-border rounded px-2.5 py-1.5 flex items-center gap-1.5">
+                <AlertCircle size={11} />
+                View-only — editors and admins can make changes
               </div>
-            )}
-
-            {pendingRegion && (
-              <div className="bg-primary/5 border border-primary/20 rounded-lg px-3 py-2 space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium text-primary flex items-center gap-1">
-                    <Crop size={11} />
-                    Region selected — describe the edit:
-                  </span>
-                  <button onClick={() => { setPendingRegion(null); setRegionInstruction(""); }} className="text-muted-foreground hover:text-foreground">
-                    <X size={12} />
-                  </button>
+            ) : (
+              <>
+                <div className="flex flex-wrap gap-1.5">
+                  {CHIPS.map(chip => {
+                    const disabled = state.running || (chip.requiresImage && !state.session?.imageInteractionId);
+                    return (
+                      <button
+                        key={chip.label}
+                        onClick={() => void runTurn(chip.action, chip.instruction)}
+                        disabled={disabled}
+                        className="text-xs px-2.5 py-1 rounded-full border border-border hover:bg-primary/10 hover:border-primary/40 transition-colors disabled:opacity-40"
+                      >
+                        {chip.action === "convert_video" && <Video size={10} className="inline mr-1" />}
+                        {chip.action === "fan_out" && <Layers size={10} className="inline mr-1" />}
+                        {chip.label}
+                      </button>
+                    );
+                  })}
+                  {state.session?.imageInteractionId && (
+                    <button
+                      onClick={() => { setRegionMode(m => !m); setPendingRegion(null); }}
+                      disabled={state.running}
+                      className={cn(
+                        "text-xs px-2.5 py-1 rounded-full border transition-colors disabled:opacity-40",
+                        regionMode ? "border-primary bg-primary/10 text-primary" : "border-border hover:bg-primary/10 hover:border-primary/40",
+                      )}
+                    >
+                      <Crop size={10} className="inline mr-1" />
+                      Edit region
+                    </button>
+                  )}
+                  {state.session?.videoInteractionId && (
+                    <button
+                      onClick={() => void runTurn("edit_video", state.composerText || "Refine the video")}
+                      disabled={state.running || !state.session?.videoInteractionId}
+                      className="text-xs px-2.5 py-1 rounded-full border border-border hover:bg-primary/10 hover:border-primary/40 transition-colors disabled:opacity-40"
+                    >
+                      <Video size={10} className="inline mr-1" />
+                      Edit video
+                    </button>
+                  )}
                 </div>
+
+                {/* Platform selector: shown once a draft exists so caption turns can target one platform */}
+                {state.session?.imageInteractionId && (
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-xs text-muted-foreground shrink-0">Caption for:</span>
+                    {PLATFORM_OPTIONS.map(opt => (
+                      <button
+                        key={opt.value}
+                        onClick={() => setCaptionTargetPlatform(opt.value)}
+                        disabled={state.running}
+                        className={cn(
+                          "text-xs px-2 py-0.5 rounded-full border transition-colors disabled:opacity-40",
+                          captionTargetPlatform === opt.value
+                            ? "border-primary bg-primary/10 text-primary"
+                            : "border-border hover:border-primary/40",
+                        )}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {pendingRegion && (
+                  <div className="bg-primary/5 border border-primary/20 rounded-lg px-3 py-2 space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-medium text-primary flex items-center gap-1">
+                        <Crop size={11} />
+                        Region selected: describe the edit
+                      </span>
+                      <button onClick={() => { setPendingRegion(null); setRegionInstruction(""); }} className="text-muted-foreground hover:text-foreground">
+                        <X size={12} />
+                      </button>
+                    </div>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        placeholder="e.g. add a soft glow, change to sunset sky..."
+                        className="flex-1 text-xs border border-border rounded px-2 py-1 bg-background"
+                        value={regionInstruction}
+                        onChange={e => setRegionInstruction(e.target.value)}
+                        onKeyDown={e => { if (e.key === "Enter") handleRegionEdit(); }}
+                        autoFocus
+                      />
+                      <Button size="sm" onClick={handleRegionEdit} disabled={!regionInstruction.trim() || state.running}>
+                        Apply
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {regionMode && !pendingRegion && (
+                  <div className="text-xs text-primary bg-primary/5 border border-primary/20 rounded px-2 py-1.5 flex items-center gap-1.5">
+                    <Crop size={11} />
+                    Drag on the image to select a region to edit
+                  </div>
+                )}
+
                 <div className="flex gap-2">
-                  <input
-                    type="text"
-                    placeholder="e.g. add a soft glow, change to sunset sky..."
-                    className="flex-1 text-xs border border-border rounded px-2 py-1 bg-background"
-                    value={regionInstruction}
-                    onChange={e => setRegionInstruction(e.target.value)}
-                    onKeyDown={e => { if (e.key === "Enter") handleRegionEdit(); }}
-                    autoFocus
+                  <Textarea
+                    value={state.composerText}
+                    onChange={e => dispatch({ type: "setComposer", text: e.target.value })}
+                    placeholder={session?.imageInteractionId ? "Calm the background, make the crown pop..." : "Brief a draft to start..."}
+                    rows={2}
+                    className="resize-none text-sm"
+                    disabled={state.running}
+                    onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleSend(); }}
                   />
-                  <Button size="sm" onClick={handleRegionEdit} disabled={!regionInstruction.trim() || state.running}>
-                    Apply
+                  <Button size="icon" onClick={handleSend} disabled={state.running || !state.composerText.trim()} className="self-end">
+                    {state.running ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
                   </Button>
                 </div>
-              </div>
+              </>
             )}
-
-            {regionMode && !pendingRegion && (
-              <div className="text-xs text-primary bg-primary/5 border border-primary/20 rounded px-2 py-1.5 flex items-center gap-1.5">
-                <Crop size={11} />
-                Drag on the image to select a region to edit
-              </div>
-            )}
-
-            <div className="flex gap-2">
-              <Textarea
-                value={state.composerText}
-                onChange={e => dispatch({ type: "setComposer", text: e.target.value })}
-                placeholder={session?.imageInteractionId ? "Calm the background, make the crown pop..." : "Brief a draft to start..."}
-                rows={2}
-                className="resize-none text-sm"
-                disabled={state.running}
-                onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleSend(); }}
-              />
-              <Button size="icon" onClick={handleSend} disabled={state.running || !state.composerText.trim()} className="self-end">
-                {state.running ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
-              </Button>
-            </div>
             {state.error && (
               <div className="flex items-center gap-2 text-xs text-destructive bg-destructive/10 px-3 py-2 rounded-md">
                 <AlertCircle size={12} />
@@ -1056,7 +1107,7 @@ function SessionView({ sessionId, onBack }: SessionViewProps) {
                   {(["Punchier", "Shorter", "Add CTA"] as const).map(tune => (
                     <button
                       key={tune}
-                      onClick={() => void runTurn("caption", `${tune} — rewrite the caption`)}
+                      onClick={() => void runTurn("caption", `${tune}: rewrite the caption`)}
                       disabled={state.running}
                       className="text-xs px-2.5 py-1 rounded-full border border-dashed border-border hover:bg-primary/10 hover:border-primary/40 transition-colors disabled:opacity-40"
                     >
@@ -1192,8 +1243,15 @@ function FanOutCard({
           const isConverting = convertingIds.has(p.variantId) && !isConverted;
           const vid = scheduleVariantId(p);
           const a = approvals[vid];
+          // C1: Build a local datetime string without UTC→local drift.
+          // toISOString() converts to UTC before slicing, which shifts the
+          // displayed time in users' non-UTC timezones.
           const dtLocal = a?.scheduledAt
-            ? new Date(a.scheduledAt).toISOString().replace("Z", "").slice(0, 16)
+            ? (() => {
+                const d = new Date(a.scheduledAt);
+                const pad = (n: number) => String(n).padStart(2, "0");
+                return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+              })()
             : "";
 
           // YouTube card: three states —
@@ -1384,7 +1442,7 @@ function TurnCard({ turn, allVariants, onPickTake, onSchedule, onConvertVideo, c
               ) : isVideo && metaVideoUrl ? (
                 <div className="flex items-center gap-2 text-xs text-primary">
                   <Play size={12} />
-                  Video ready — preview in the right pane
+                  Video ready - preview in the right pane
                 </div>
               ) : isCompare && variantIds.length > 1 ? (
                 <div className="grid grid-cols-3 gap-1.5">
@@ -1441,6 +1499,7 @@ function TurnCard({ turn, allVariants, onPickTake, onSchedule, onConvertVideo, c
 
 export default function CopilotStudio() {
   const { toast } = useToast();
+  const canWrite = useCanWrite();
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [seeding, setSeeding] = useState(false);
 
@@ -1474,6 +1533,9 @@ export default function CopilotStudio() {
   // the loading spinner instead of landing them on the Studio home.
   const seedAttemptedRef = useRef(false);
   useEffect(() => {
+    // E2: Viewers cannot create sessions — skip auto-start entirely so they
+    // don't hit an avoidable 403 from the editor-gated POST /api/sessions.
+    if (!canWrite) return;
     if (!campaignId || urlSessionId || sessionId || seeding || seedAttemptedRef.current) return;
     seedAttemptedRef.current = true;
     setSeeding(true);

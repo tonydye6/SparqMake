@@ -17,6 +17,8 @@ import {
 } from "./services/metrics-scheduler";
 import { logStorageStartupStatus } from "./services/storage";
 import { syncAdminEmails } from "./services/admin-sync";
+import { db, sessionTurnsTable } from "@workspace/db";
+import { eq } from "drizzle-orm";
 
 const rawPort = process.env["PORT"];
 
@@ -109,17 +111,51 @@ function registerShutdownHandlers(server: Server): void {
   process.on("SIGINT", shutdown);
 }
 
+// C4: Mark any turns that were left in 'running' state (e.g. from a crashed
+// process) as 'error' at startup.  Without this, they block the session
+// turn-sequence check and can make the session appear permanently "busy".
+// D4: Emit ONE prominent warning at startup when GEMINI_API_KEY is absent so
+// admins can act before the first failed user session.  The actual 503 guard
+// lives in the sessions/:id/turns route.
+function warnMissingGeminiKey(): void {
+  if (!process.env["GEMINI_API_KEY"]) {
+    logger.warn(
+      "GEMINI_API_KEY is not set — Co-pilot Studio (draft, edit, video, fan-out, " +
+      "caption, compare) will return 503 for every turn. Set the secret and restart.",
+    );
+  }
+}
+
+async function sweepStaleTurns(): Promise<void> {
+  try {
+    const result = await db
+      .update(sessionTurnsTable)
+      .set({ status: "error", metadata: { error: "Turn interrupted by server restart" } })
+      .where(eq(sessionTurnsTable.status, "running"))
+      .returning({ id: sessionTurnsTable.id });
+    if (result.length > 0) {
+      logger.warn({ count: result.length }, "Marked stale 'running' turns as error on startup");
+    }
+  } catch (err) {
+    logger.error({ err }, "Failed to sweep stale running turns — sessions may appear busy");
+  }
+}
+
 seedDatabase()
   .then(async () => {
+    warnMissingGeminiKey();
     await cleanupDevBypassUser();
     await syncAdminEmails();
+    await sweepStaleTurns();
     const server = startServer(false);
     registerShutdownHandlers(server);
   })
   .catch(async (err) => {
     logger.error(err, "Failed to seed database");
+    warnMissingGeminiKey();
     await cleanupDevBypassUser();
     await syncAdminEmails();
+    await sweepStaleTurns();
     const server = startServer(true);
     registerShutdownHandlers(server);
   });

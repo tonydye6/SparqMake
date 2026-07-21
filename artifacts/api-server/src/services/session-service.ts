@@ -20,7 +20,7 @@ import { getIntentInsights } from "./performance-insights.js";
 import { writeBuffer, resolveUrl, readBuffer, contentTypeFor } from "./storage.js";
 import { buildGenerationPacket, normalizeBalance, MAX_IMAGE_REFERENCES, type ReferenceBalance } from "./packet-assembly.js";
 import { recordTasteSignal } from "./taste-signals.js";
-import { COPILOT_MODELS, COST_ESTIMATES, estimateImagenCost, estimateClaudeCost, estimateGeminiTextCost, estimateVideoDurationSeconds } from "../lib/ai-config.js";
+import { AI_MODELS, COPILOT_MODELS, COST_ESTIMATES, estimateImagenCost, estimateClaudeCost, estimateGeminiTextCost, estimateVideoDurationSeconds } from "../lib/ai-config.js";
 import { logger } from "../lib/logger.js";
 import { anthropic } from "@workspace/integrations-anthropic-ai";
 import { ai as geminiAi } from "@workspace/integrations-gemini-ai";
@@ -52,6 +52,9 @@ export interface TurnInput {
   // Optional: target a specific variant for convert_video (e.g. a fan-out YouTube card)
   // instead of the session's current activeVariantId.
   sourceVariantId?: string;
+  // D1: AbortSignal threaded from the HTTP route so client disconnect / SSE timeout
+  // propagates into model calls, preventing zombie turns that keep billing.
+  signal?: AbortSignal;
 }
 
 export interface FanOutPlatformCard {
@@ -171,7 +174,9 @@ async function buildImageAwareCaption(params: {
     ? `\nBRAND VOICE EXAMPLES (few-shot; match this tone and energy):\n${voiceExamples.map((ex, i) => `${i + 1}. "${ex}"`).join("\n")}\n`
     : "";
 
-  const platformList = platform ? [platform] : ["instagram_feed", "instagram_story", "twitter", "linkedin", "tiktok"];
+  // Derive platform list from the single source of truth — adding new platforms
+  // to PLATFORM_CONFIGS automatically includes them here without touching this function.
+  const platformList = platform ? [platform] : Object.keys(PLATFORM_CONFIGS);
   const platformLimits = platformList.map(p => {
     const limit = (platformRules?.[p] as { char_limit?: number } | undefined)?.char_limit;
     return `- ${p}: ${limit || 2200} chars max`;
@@ -201,11 +206,20 @@ Each headline: punchy, platform-appropriate, 3-8 words. No em dashes.`;
 
   const imageData = imageBuffer.toString("base64");
 
+  const tasteGuidanceSection = brand.tasteGuidance
+    ? `\nTEAM TASTE GUIDANCE (learned from past approvals/rejections):\n${brand.tasteGuidance}\n`
+    : "";
+
+  const fullSystem = system.replace(
+    "IMPORTANT: Captions must be written AGAINST",
+    `${tasteGuidanceSection}IMPORTANT: Captions must be written AGAINST`,
+  );
+
   const response = await anthropic.messages.create({
-    model: "claude-sonnet-4-6",
+    model: AI_MODELS.CLAUDE_SONNET,
     max_tokens: 2048,
     temperature: 0.7,
-    system,
+    system: fullSystem,
     messages: [{
       role: "user",
       content: [
@@ -221,13 +235,14 @@ Each headline: punchy, platform-appropriate, 3-8 words. No em dashes.`;
   const parsed = extractJSON<Record<string, unknown>>(textBlock.text);
   const defaults = { caption: "", headline: "" };
 
-  const captions: CaptionResult = {
-    instagram_feed: { ...defaults, ...(parsed.instagram_feed as object | undefined) },
-    instagram_story: { ...defaults, ...(parsed.instagram_story as object | undefined) },
-    twitter: { ...defaults, ...(parsed.twitter as object | undefined) },
-    linkedin: { ...defaults, ...(parsed.linkedin as object | undefined) },
-    tiktok: { ...defaults, ...(parsed.tiktok as object | undefined) },
-  };
+  // Build CaptionResult keyed from PLATFORM_CONFIGS so youtube and any future
+  // platforms are included without hand-maintaining this object shape.
+  const captions = Object.fromEntries(
+    Object.keys(PLATFORM_CONFIGS).map(p => [
+      p,
+      { ...defaults, ...(parsed[p] as object | undefined) },
+    ]),
+  ) as unknown as CaptionResult;
 
   const rawAlternates = parsed.alternates;
   const alternates = Array.isArray(rawAlternates)
@@ -252,16 +267,15 @@ async function saveTurnVariants(params: {
 }): Promise<string[]> {
   const { creativeId, imageBuffer, imageMimeType, captions, sourceVariantId, label } = params;
   const platforms = Object.keys(PLATFORM_CONFIGS);
-  const variantIds: string[] = [];
 
   const imageFilename = `copilot-${crypto.randomUUID()}.png`;
   await writeBuffer("generated", imageFilename, imageBuffer);
   const rawImageUrl = `/api/files/generated/${imageFilename}`;
 
-  for (const platform of platforms) {
-    const captionKey = platform as keyof CaptionResult;
-    const cap = captions[captionKey] || { caption: "", headline: "" };
-    const [variant] = await db.insert(creativeVariantsTable).values({
+  // F3: Single batched insert instead of N serial round-trips (one per platform).
+  const rows = platforms.map(platform => {
+    const cap = (captions as unknown as Record<string, { caption: string; headline: string }>)[platform] || { caption: "", headline: "" };
+    return {
       creativeId,
       platform,
       aspectRatio: PLATFORM_CONFIGS[platform]?.aspectRatio || "1:1",
@@ -269,11 +283,13 @@ async function saveTurnVariants(params: {
       compositedImageUrl: rawImageUrl,
       caption: cap.caption,
       headlineText: cap.headline,
-      status: "generated",
+      status: "generated" as const,
       sourceVariantId: sourceVariantId || null,
-    }).returning({ id: creativeVariantsTable.id });
-    if (variant) variantIds.push(variant.id);
-  }
+    };
+  });
+
+  const inserted = await db.insert(creativeVariantsTable).values(rows).returning({ id: creativeVariantsTable.id });
+  const variantIds = inserted.map(r => r.id);
 
   return variantIds;
 }
@@ -287,25 +303,36 @@ export async function getSessionWithTurns(sessionId: string): Promise<SessionWit
   const [session] = await db.select().from(studioSessionsTable).where(eq(studioSessionsTable.id, sessionId));
   if (!session) return null;
 
-  const turns = await db.select().from(sessionTurnsTable)
+  // F1: Cap at 100 most-recent turns to bound payload size. Fetch desc then
+  // reverse in JS so the thread renders in chronological order.
+  const turnsDesc = await db.select().from(sessionTurnsTable)
     .where(eq(sessionTurnsTable.sessionId, sessionId))
-    .orderBy(sessionTurnsTable.seq);
+    .orderBy(desc(sessionTurnsTable.seq))
+    .limit(100);
+  const turns = turnsDesc.reverse();
 
-  const enriched = await Promise.all(turns.map(async (turn) => {
-    const variantIds = (turn.resultVariantIds || []) as string[];
-    if (variantIds.length === 0) return turn;
-    const variants = await db.select({
+  // F1: Single inArray query for all variant IDs instead of N per-turn round-trips.
+  const allVariantIds = turns.flatMap(t => (t.resultVariantIds || []) as string[]);
+  const variantsByIdMap = new Map<string, { compositedImageUrl: string | null; rawImageUrl: string | null }>();
+
+  if (allVariantIds.length > 0) {
+    const { inArray } = await import("drizzle-orm");
+    const allVariants = await db.select({
       id: creativeVariantsTable.id,
-      platform: creativeVariantsTable.platform,
       compositedImageUrl: creativeVariantsTable.compositedImageUrl,
       rawImageUrl: creativeVariantsTable.rawImageUrl,
-      caption: creativeVariantsTable.caption,
-      headlineText: creativeVariantsTable.headlineText,
-    }).from(creativeVariantsTable).where(
-      eq(creativeVariantsTable.id, variantIds[0])
-    );
-    return { ...turn, variantUrls: variants.map(v => v.compositedImageUrl || v.rawImageUrl || "") };
-  }));
+    }).from(creativeVariantsTable).where(inArray(creativeVariantsTable.id, allVariantIds));
+    for (const v of allVariants) variantsByIdMap.set(v.id, v);
+  }
+
+  const enriched = turns.map(turn => {
+    const variantIds = (turn.resultVariantIds || []) as string[];
+    if (variantIds.length === 0) return turn;
+    const firstVariantId = variantIds[0];
+    const v = firstVariantId ? variantsByIdMap.get(firstVariantId) : undefined;
+    const variantUrls = v ? [v.compositedImageUrl || v.rawImageUrl || ""] : [];
+    return { ...turn, variantUrls };
+  });
 
   return { session, turns: enriched };
 }
@@ -332,7 +359,23 @@ export async function branchSession(params: {
     t.role === "copilot" && ((t.resultVariantIds || []) as string[]).includes(variantId)
   );
 
-  const restoredInteractionId = sourceTurn?.interactionId ?? null;
+  // A5: Walk backwards from sourceTurn to find the nearest prior image-producing
+  // turn with a non-null interactionId.  This restores the full edit chain so
+  // subsequent edit_image turns continue from the right historical state.
+  const IMAGE_PRODUCING_ACTIONS = new Set(["draft", "edit_image", "edit_region", "compare", "caption"]);
+  const sourceSeq = sourceTurn?.seq ?? Infinity;
+
+  const priorImageTurn = turns
+    .filter(t =>
+      t.role === "copilot" &&
+      t.seq <= sourceSeq &&
+      t.interactionId != null &&
+      IMAGE_PRODUCING_ACTIONS.has(t.action ?? ""),
+    )
+    .sort((a, b) => a.seq - b.seq)
+    .at(-1) ?? null;
+
+  const restoredInteractionId = priorImageTurn?.interactionId ?? null;
 
   await db.update(studioSessionsTable).set({
     activeVariantId: variantId,
@@ -410,6 +453,9 @@ export async function executeTurn(params: {
   input: TurnInput;
   userId: string;
   onProgress: ProgressCallback;
+  // B2: When set, the reservation row is deleted inside the same transaction
+  // as the real cost_logs insert so no phantom row can survive a mid-flight crash.
+  reservationId?: string;
 }): Promise<SessionTurn> {
   const { sessionId, input, userId, onProgress } = params;
 
@@ -426,19 +472,22 @@ export async function executeTurn(params: {
 
   const nextSeq = (lastTurn?.seq ?? 0) + 1;
 
+  // C4: User turns are facts — insert immediately as 'done' (they have no async work to track).
+  // C6: Persist region metadata so TurnCard can render the region annotation badge.
   const [userTurn] = await db.insert(sessionTurnsTable).values({
     sessionId,
     seq: nextSeq,
     role: "user",
     instruction: input.instruction,
     action: input.action,
-    status: "pending",
+    status: "done",
     instructionPayload: {
       platform: input.platform,
       compareCount: input.compareCount,
       region: input.region,
       schedules: input.schedules,
     },
+    metadata: input.region ? { region: input.region } : null,
   }).returning();
 
   const copilotSeq = nextSeq + 1;
@@ -465,39 +514,69 @@ export async function executeTurn(params: {
     const durationMs = Date.now() - startMs;
     const now = new Date();
 
-    await db.update(sessionTurnsTable).set({
-      status: "done",
-      resultVariantIds: result.variantIds,
-      interactionId: result.interactionId || null,
-      costUsd: result.costUsd,
-      durationMs,
-      metadata: result.metadata || null,
-      updatedAt: now,
-    }).where(eq(sessionTurnsTable.id, copilotTurn.id));
+    // C3: takesFocus=false means the turn added a variant (e.g. fan-out YouTube
+    // video card conversion) without changing the session's primary creative focus.
+    const shouldUpdateFocus = result.takesFocus !== false;
+    const activeVariantId = shouldUpdateFocus
+      ? (result.variantIds[0] || session.activeVariantId)
+      : session.activeVariantId;
 
-    const activeVariantId = result.variantIds[0] || session.activeVariantId;
-    const thumbnailUrl = result.thumbnailUrl || session.thumbnailUrl;
-
-    await db.update(studioSessionsTable).set({
-      imageInteractionId: result.interactionId || session.imageInteractionId,
-      videoInteractionId: result.videoInteractionId || session.videoInteractionId,
-      activeVariantId,
-      thumbnailUrl,
-      lastTurnSummary: result.summary,
-      status: "refining",
-      totalCostUsd: sql<number>`${studioSessionsTable.totalCostUsd} + ${result.costUsd || 0}`,
-      updatedAt: now,
-    }).where(eq(studioSessionsTable.id, sessionId));
-
-    if (result.costUsd && result.costUsd > 0) {
-      await db.insert(costLogsTable).values({
-        creativeId: creative.id,
-        service: "copilot",
-        operation: input.action,
-        model: result.modelUsed || COPILOT_MODELS.NANO_BANANA_MODEL,
-        costUsd: result.costUsd,
-      });
+    // C7: Derive thumbnailUrl from the new active variant when the action doesn't
+    // supply one (edit_image, caption, etc. don't set thumbnailUrl on ActionResult).
+    let thumbnailUrl = result.thumbnailUrl || session.thumbnailUrl;
+    if (shouldUpdateFocus && result.variantIds.length > 0 && !result.thumbnailUrl) {
+      const [newActiveVariant] = await db
+        .select({
+          compositedImageUrl: creativeVariantsTable.compositedImageUrl,
+          rawImageUrl: creativeVariantsTable.rawImageUrl,
+        })
+        .from(creativeVariantsTable)
+        .where(eq(creativeVariantsTable.id, result.variantIds[0]!));
+      if (newActiveVariant) {
+        thumbnailUrl = newActiveVariant.compositedImageUrl || newActiveVariant.rawImageUrl || thumbnailUrl;
+      }
     }
+
+    // C4: Wrap all completion writes in a single transaction so a mid-flight crash
+    // cannot leave the turn marked 'done' without the session state update (or vice versa).
+    await db.transaction(async (tx) => {
+      await tx.update(sessionTurnsTable).set({
+        status: "done",
+        resultVariantIds: result.variantIds,
+        interactionId: result.interactionId || null,
+        costUsd: result.costUsd,
+        durationMs,
+        metadata: result.metadata || null,
+        updatedAt: now,
+      }).where(eq(sessionTurnsTable.id, copilotTurn.id));
+
+      await tx.update(studioSessionsTable).set({
+        imageInteractionId: result.interactionId || session.imageInteractionId,
+        videoInteractionId: result.videoInteractionId || session.videoInteractionId,
+        activeVariantId,
+        thumbnailUrl,
+        lastTurnSummary: result.summary,
+        status: "refining",
+        totalCostUsd: sql<number>`${studioSessionsTable.totalCostUsd} + ${result.costUsd || 0}`,
+        updatedAt: now,
+      }).where(eq(studioSessionsTable.id, sessionId));
+
+      if (result.costUsd && result.costUsd > 0) {
+        await tx.insert(costLogsTable).values({
+          creativeId: creative.id,
+          service: "copilot",
+          operation: input.action,
+          model: result.modelUsed || COPILOT_MODELS.NANO_BANANA_MODEL,
+          costUsd: result.costUsd,
+        });
+      }
+
+      // B2: Delete the budget reservation row atomically with the real cost insert
+      // so no phantom row remains if the process crashes between the two writes.
+      if (params.reservationId) {
+        await tx.delete(costLogsTable).where(eq(costLogsTable.id, params.reservationId));
+      }
+    });
 
     if (input.action === "edit_image" || input.action === "edit_region" || input.action === "caption") {
       void recordTasteSignal({
@@ -536,6 +615,16 @@ export async function executeTurn(params: {
       updatedAt: new Date(),
     }).where(eq(sessionTurnsTable.id, copilotTurn.id));
 
+    // B2: On error, eagerly release the reservation so the budget gate is
+    // not permanently blocked by a failed turn.
+    if (params.reservationId) {
+      await db.delete(costLogsTable)
+        .where(eq(costLogsTable.id, params.reservationId))
+        .catch((e: unknown) => {
+          logger.error({ err: e, reservationId: params.reservationId }, "Failed to release budget reservation on turn error");
+        });
+    }
+
     onProgress({ type: "error", message: errMsg });
     throw err;
   }
@@ -550,6 +639,10 @@ interface ActionResult {
   thumbnailUrl?: string;
   metadata?: Record<string, unknown>;
   modelUsed?: string;
+  // C3: When false, executeTurn does NOT advance the session's activeVariantId.
+  // Use for actions that produce a side-output (e.g. per-card YouTube video
+  // conversion from a fan-out card) without changing the primary creative focus.
+  takesFocus?: boolean;
 }
 
 async function executeActionCore(params: {
@@ -560,6 +653,9 @@ async function executeActionCore(params: {
   onProgress: ProgressCallback;
 }): Promise<ActionResult> {
   const { session, creative, input, onProgress } = params;
+  // D1: Check abort before dispatching to the action — avoids starting model
+  // calls after the client already disconnected.
+  if (input.signal?.aborted) throw new Error("Turn cancelled before action dispatch");
 
   switch (input.action) {
     case "draft": return executeDraftWithQa({ session, creative, input, onProgress });
@@ -625,6 +721,7 @@ async function executeDraft(params: {
     slots: allSlots,
     previousInteractionId: null,
     aspectRatio: "1:1",
+    signal: input.signal,
   });
 
   onProgress({ type: "progress", step: "image", message: "Image generated", done: true });
@@ -688,6 +785,7 @@ async function executeEditImage(params: {
     slots: [],
     previousInteractionId: session.imageInteractionId,
     aspectRatio: "1:1",
+    signal: input.signal,
   });
 
   onProgress({ type: "progress", step: "image", message: "Edit applied", done: true });
@@ -786,15 +884,15 @@ async function executeCaption(params: {
       if (p) existing[p] = { caption: s.caption || "", headline: s.headlineText || "" };
     }
 
-    // Merge: start from existing captions, then apply the newly generated platform on top
+    // Merge: start from existing captions, then apply the newly generated platform on top.
+    // Derive the full key set from PLATFORM_CONFIGS so youtube is always included.
     const defaults = { caption: "", headline: "" };
-    captions = {
-      instagram_feed: existing.instagram_feed || defaults,
-      instagram_story: existing.instagram_story || defaults,
-      twitter: existing.twitter || defaults,
-      linkedin: existing.linkedin || defaults,
-      tiktok: existing.tiktok || defaults,
-    };
+    captions = Object.fromEntries(
+      Object.keys(PLATFORM_CONFIGS).map(p => [
+        p,
+        (existing as Record<string, { caption: string; headline: string }>)[p] || defaults,
+      ]),
+    ) as unknown as CaptionResult;
     const targetPlatform = input.platform as keyof CaptionResult;
     const generatedForTarget = newCaptions[targetPlatform];
     if (generatedForTarget) captions[targetPlatform] = generatedForTarget;
@@ -824,7 +922,7 @@ async function executeCaption(params: {
       platform: input.platform,
       alternates,
     },
-    modelUsed: "claude-sonnet-4-6",
+    modelUsed: AI_MODELS.CLAUDE_SONNET,
   };
 }
 
@@ -868,45 +966,54 @@ async function executeCompare(params: {
     intent: creative.intent,
   });
 
+  // F4: Generate all N takes concurrently — each call is independent so there
+  // is no ordering dependency.  The UI receives the takes in a deterministic
+  // order (0→N-1) because Promise.all preserves input order.
+  onProgress({ type: "progress", step: "compare", message: `Generating ${count} takes concurrently...` });
+  const takeResults = await Promise.all(
+    Array.from({ length: count }, (_, i) =>
+      runImageInteraction({
+        prompt: `${artDirection}\n\nVARIATION ${i + 1}: Fresh composition, same brief.`,
+        slots: allSlots,
+        previousInteractionId: null,
+        aspectRatio: "1:1",
+        signal: input.signal,
+      }),
+    ),
+  );
+
+  // Caption generation and variant saves are also batched.
+  const takeOutputs = await Promise.all(
+    takeResults.map(async (result, i) => {
+      const { captions } = await buildImageAwareCaption({
+        brandId: creative.brandId,
+        briefText: input.instruction || creative.briefText || "",
+        imageBuffer: result.imageBuffer,
+        imageMimeType: result.mimeType,
+        intent: creative.intent,
+      });
+
+      const variantIds = await saveTurnVariants({
+        creativeId: creative.id,
+        sessionId: session.id,
+        imageBuffer: result.imageBuffer,
+        imageMimeType: result.mimeType,
+        captions,
+        sourceVariantId: session.activeVariantId || undefined,
+        label: `compare-${i + 1}`,
+      });
+
+      return { result, variantIds };
+    }),
+  );
+
   // One canonical (first-platform) variant ID per take — UI renders these as the N take thumbnails.
-  // All per-platform variants for the take are stored in creative_variants for downstream use but
-  // only the canonical representative is returned in the turn's resultVariantIds for the pick UI.
   const canonicalTakeIds: string[] = [];
-  // Full per-take breakdown stored in metadata for downstream use.
   const perTakeVariantIds: string[][] = [];
-  // Per-take interaction IDs — restored when user picks a compare take so
-  // subsequent edit_image turns continue from the chosen take's edit chain.
   const perTakeInteractionIds: string[] = [];
   let totalCost = 0;
 
-  for (let i = 0; i < count; i++) {
-    onProgress({ type: "progress", step: "compare", message: `Generating take ${i + 1} of ${count}...` });
-    const result = await runImageInteraction({
-      prompt: `${artDirection}\n\nVARIATION ${i + 1}: Fresh composition, same brief.`,
-      slots: allSlots,
-      previousInteractionId: null,
-      aspectRatio: "1:1",
-    });
-
-    const { captions } = await buildImageAwareCaption({
-      brandId: creative.brandId,
-      briefText: input.instruction || creative.briefText || "",
-      imageBuffer: result.imageBuffer,
-      imageMimeType: result.mimeType,
-      intent: creative.intent,
-    });
-
-    const variantIds = await saveTurnVariants({
-      creativeId: creative.id,
-      sessionId: session.id,
-      imageBuffer: result.imageBuffer,
-      imageMimeType: result.mimeType,
-      captions,
-      sourceVariantId: session.activeVariantId || undefined,
-      label: `compare-${i + 1}`,
-    });
-
-    // variantIds[0] is the first platform (instagram_feed) — canonical representative
+  for (const { result, variantIds } of takeOutputs) {
     if (variantIds[0]) canonicalTakeIds.push(variantIds[0]);
     perTakeVariantIds.push(variantIds);
     perTakeInteractionIds.push(result.interactionId);
@@ -994,6 +1101,13 @@ async function applyQaPass(params: {
   creativeId: string;
   brandId: string;
   onProgress: ProgressCallback;
+  // F5: Callers that already hold the in-memory image buffer (executeDraft,
+  // executeEditImage, executeEditRegion) can pass it here to skip the
+  // re-read from storage — one fewer round-trip per QA pass.
+  imageBuffer?: Buffer;
+  // D1: Optional abort signal — if set, QA corrective image calls are also
+  // cancelled when the client disconnects (same as the parent turn).
+  signal?: AbortSignal;
 }): Promise<{ interactionId?: string; qaRetried: boolean; qaIssue?: string }> {
   const { variantIds, instruction, interactionId, sessionId, parentAction, creativeId, brandId, onProgress } = params;
 
@@ -1001,17 +1115,21 @@ async function applyQaPass(params: {
     return { interactionId, qaRetried: false };
   }
 
-  const [primaryVariant] = await db
-    .select()
-    .from(creativeVariantsTable)
-    .where(eq(creativeVariantsTable.id, variantIds[0]!));
+  // F5: Use the caller-supplied buffer if available, otherwise read from storage.
+  let imageBuffer = params.imageBuffer;
+  if (!imageBuffer) {
+    const [primaryVariant] = await db
+      .select()
+      .from(creativeVariantsTable)
+      .where(eq(creativeVariantsTable.id, variantIds[0]!));
 
-  if (!primaryVariant?.rawImageUrl) return { interactionId, qaRetried: false };
+    if (!primaryVariant?.rawImageUrl) return { interactionId, qaRetried: false };
 
-  const loc = resolveUrl(primaryVariant.rawImageUrl);
-  if (!loc) return { interactionId, qaRetried: false };
-  const imageBuffer = await readBuffer(loc);
-  if (!imageBuffer) return { interactionId, qaRetried: false };
+    const loc = resolveUrl(primaryVariant.rawImageUrl);
+    if (!loc) return { interactionId, qaRetried: false };
+    imageBuffer = await readBuffer(loc) ?? undefined;
+    if (!imageBuffer) return { interactionId, qaRetried: false };
+  }
 
   // Build brand-rule context for QA verification so the model checks both
   // instruction adherence and brand-compliance in a single pass.
@@ -1067,6 +1185,8 @@ async function applyQaPass(params: {
       slots: [],
       previousInteractionId: interactionId,
       aspectRatio: "1:1",
+      // D1: If the client disconnected, the QA corrective call is also cancelled.
+      signal: params.signal,
     });
 
     const correctedFilename = `copilot-qa-${crypto.randomUUID()}.png`;
@@ -1135,6 +1255,9 @@ async function executeDraftWithQa(params: {
     creativeId: params.creative.id,
     brandId: params.creative.brandId,
     onProgress: params.onProgress,
+    signal: params.input.signal,
+    // F5: executeDraft stored imageBuffer in thumbnailUrl path but the original
+    // buffer is not returned by ActionResult — QA re-reads from storage for draft.
   });
   return {
     ...result,
@@ -1159,6 +1282,7 @@ async function executeEditImageWithQa(params: {
     creativeId: params.creative.id,
     brandId: params.creative.brandId,
     onProgress: params.onProgress,
+    signal: params.input.signal,
   });
   return {
     ...result,
@@ -1206,6 +1330,7 @@ async function executeEditRegion(params: {
     slots: [],
     previousInteractionId: session.imageInteractionId,
     aspectRatio: "1:1",
+    signal: input.signal,
   });
 
   onProgress({ type: "progress", step: "image", message: "Region edit applied", done: true });
@@ -1241,6 +1366,7 @@ async function executeEditRegion(params: {
     creativeId: creative.id,
     brandId: creative.brandId,
     onProgress,
+    signal: input.signal,
   });
 
   const costUsd = estimateImagenCost(1) + estimateClaudeCost();
@@ -1318,6 +1444,7 @@ async function executeConvertVideo(params: {
     imageMimeType: contentTypeFor(loc.filename) || "image/png",
     previousInteractionId: null,
     aspectRatio,
+    signal: input.signal,
   });
 
   onProgress({ type: "progress", step: "video", message: "Video generated", done: true });
@@ -1360,6 +1487,9 @@ async function executeConvertVideo(params: {
     // when this conversion was triggered from a YouTube fan-out card button.
     metadata: { videoUrl, aspectRatio, durationSeconds, costUsd, sourceVariantId: targetVariantId },
     modelUsed: COPILOT_MODELS.OMNI_VIDEO_MODEL,
+    // C3: Fan-out card conversions don't change the session's primary creative
+    // focus — the YouTube video is a side-output, not a new main variant.
+    takesFocus: input.sourceVariantId ? false : undefined,
   };
 }
 
@@ -1396,6 +1526,7 @@ async function executeEditVideo(params: {
 
   const videoResult = await runVideoInteraction({
     prompt: input.instruction,
+    signal: input.signal,
     imageBuffer: null,
     previousInteractionId: session.videoInteractionId,
     aspectRatio: inheritedAspectRatio,
@@ -1445,64 +1576,9 @@ async function executeEditVideo(params: {
 // ============================================================================
 
 
-async function buildFanOutCaptions(params: {
-  brandId: string;
-  briefText: string;
-  imageBuffer: Buffer;
-  imageMimeType: string;
-  intent?: string | null;
-}): Promise<Record<string, { caption: string; headline: string }>> {
-  const { brandId, briefText, imageBuffer, imageMimeType, intent } = params;
-  const [brand] = await db.select().from(brandsTable).where(eq(brandsTable.id, brandId));
-  if (!brand) return {};
-
-  const platforms = Object.keys(PLATFORM_CONFIGS);
-  const platformList = platforms.map(p => `"${p}": { "caption": "...", "headline": "..." }`).join(",\n  ");
-  const intentLine = intent ? `Post intent: ${intent}\n` : "";
-  const briefLine = briefText ? `Brief: ${briefText}\n` : "";
-  const userText =
-    `${intentLine}${briefLine}Look at the image and write platform-specific captions.\n` +
-    `Return ONLY valid JSON:\n{\n  ${platformList}\n}\n\n` +
-    `Headline: punchy, platform-appropriate, 3-8 words, no em dashes. ` +
-    `YouTube headline should work as a video title.`;
-
-  const response = await anthropic.messages.create({
-    model: "claude-sonnet-4-6",
-    max_tokens: 2048,
-    temperature: 0.7,
-    system:
-      `You are a social media copywriter for ${brand.name}. Voice: ${brand.voiceDescription ?? "professional and engaging"}. ` +
-      `Write image-aware captions for all requested platforms. Return only raw JSON.`,
-    messages: [{
-      role: "user",
-      content: [
-        {
-          type: "image",
-          source: {
-            type: "base64",
-            media_type: (imageMimeType as "image/png" | "image/jpeg" | "image/gif" | "image/webp"),
-            data: imageBuffer.toString("base64"),
-          },
-        },
-        { type: "text", text: userText },
-      ],
-    }],
-  });
-
-  const textBlock = response.content.find(b => b.type === "text");
-  if (!textBlock || textBlock.type !== "text") return {};
-
-  const parsed = extractJSON<Record<string, unknown>>(textBlock.text);
-  const result: Record<string, { caption: string; headline: string }> = {};
-  for (const p of platforms) {
-    const raw = parsed[p] as { caption?: unknown; headline?: unknown } | undefined;
-    result[p] = {
-      caption: typeof raw?.caption === "string" ? raw.caption : "",
-      headline: typeof raw?.headline === "string" ? raw.headline : "",
-    };
-  }
-  return result;
-}
+// E1: buildFanOutCaptions removed — fan_out now uses the canonical
+// buildImageAwareCaption (with full brand contract) instead of the deleted
+// duplicate.  See executeFanOut below.
 
 async function executeFanOut(params: {
   session: StudioSession;
@@ -1539,13 +1615,16 @@ async function executeFanOut(params: {
 
   onProgress({ type: "progress", step: "fan_out", message: "Generating image-aware captions for all platforms..." });
 
-  const fanOutCaptions = await buildFanOutCaptions({
+  // E1: Use the canonical buildImageAwareCaption (with full brand contract: voice, taste,
+  // voiceExamples, bannedTerms) instead of the deleted standalone buildFanOutCaptions.
+  const { captions: fanOutCaptionResult } = await buildImageAwareCaption({
     brandId: creative.brandId,
     briefText: input.instruction || creative.briefText || "",
     imageBuffer,
     imageMimeType: contentTypeFor(loc.filename) || "image/png",
     intent: creative.intent,
   });
+  const fanOutCaptions = fanOutCaptionResult as unknown as Record<string, { caption: string; headline: string }>;
 
   // Fetch performance insights once; used for insights-backed schedule times
   // per platform instead of hardcoded hour slots.
@@ -1560,19 +1639,25 @@ async function executeFanOut(params: {
   // Falls back to 10am when there is no historical data.
   const bestHour = intentInsights?.bestTimes?.[0]?.suggestedHour ?? 10;
 
-  // Spread platforms across adjacent slots (+1h each) so they don't all fire
-  // at exactly the same moment, mirroring the existing publish-scheduler idiom.
+  // C2: Spread platforms across adjacent slots (+1h each) but clamp to hour 23
+  // to avoid rolling midnight.  When clamped, add idx×10 minutes so ordering
+  // is still distinct and no two platforms land on an identical timestamp.
   const platformOrder = Object.keys(PLATFORM_CONFIGS);
-  const insightHour = (platform: string): number =>
-    bestHour + platformOrder.indexOf(platform);
+  const insightSlot = (platform: string): { hour: number; minutes: number } => {
+    const idx = platformOrder.indexOf(platform);
+    const rawHour = bestHour + idx;
+    const clamped = rawHour > 23;
+    const hour = Math.min(rawHour, 23);
+    const minutes = clamped ? (idx * 10) % 60 : 0;
+    return { hour, minutes };
+  };
 
   const now = new Date();
 
-  // Compute the next occurrence of a given hour (today if still in the future,
-  // otherwise tomorrow).
-  const nextSlot = (hour: number): Date => {
+  const nextSlot = (platform: string): Date => {
+    const { hour, minutes } = insightSlot(platform);
     const d = new Date(now);
-    d.setHours(hour, 0, 0, 0);
+    d.setHours(hour, minutes, 0, 0);
     if (d.getTime() <= now.getTime() + 60 * 60 * 1000) {
       d.setDate(d.getDate() + 1);
     }
@@ -1642,7 +1727,7 @@ async function executeFanOut(params: {
         headline: cap.headline,
         // Insights-backed schedule time: uses historical engagement data
         // from performance-insights.ts rather than hardcoded hour slots.
-        suggestedAt: nextSlot(insightHour(platformKey)).toISOString(),
+        suggestedAt: nextSlot(platformKey).toISOString(),
         // YouTube is a video platform — the thumbnail reframe is stored so the
         // card appears in the inline grid, but the user must run convert_video
         // before scheduling.  Card renders a "Generate video first" CTA.
@@ -1666,7 +1751,7 @@ async function executeFanOut(params: {
     costUsd,
     summary: `Platform set: ${platformCards.length} platforms ready`,
     metadata: { platforms: platformCards },
-    modelUsed: "claude-sonnet-4-6",
+    modelUsed: AI_MODELS.CLAUDE_SONNET,
   };
 }
 

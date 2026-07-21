@@ -10,6 +10,7 @@ export interface CaptionResult {
   twitter: { caption: string; headline: string };
   linkedin: { caption: string; headline: string };
   tiktok: { caption: string; headline: string };
+  youtube: { caption: string; headline: string };
 }
 
 function buildSystemPrompt(ctx: AssembledContext): string {
@@ -17,6 +18,7 @@ function buildSystemPrompt(ctx: AssembledContext): string {
   const hashtagStrategy = brand.hashtagStrategy as Record<string, { always_include?: string[]; [k: string]: unknown }> | null;
   const platformRules = brand.platformRules as Record<string, { char_limit?: number }> | null;
   const bannedTerms = brand.bannedTerms as string[] | null;
+  const voiceExamples = (brand as typeof brand & { voiceExamples?: string[] | null }).voiceExamples;
 
   let prompt = `You are generating social media captions and headline overlay text for ${brand.name}, a product by Sparq Games.
 
@@ -35,6 +37,11 @@ VOICE: ${brand.voiceDescription}
   }
 
   prompt += `TRADEMARK RULES:\n${brand.trademarkRules}\n\n`;
+
+  // Few-shot brand voice examples so output matches the team's established tone.
+  if (voiceExamples && voiceExamples.length > 0) {
+    prompt += `BRAND VOICE EXAMPLES (few-shot; match this tone and energy):\n${voiceExamples.map((ex: string, i: number) => `${i + 1}. "${ex}"`).join("\n")}\n\n`;
+  }
 
   if (hashtagStrategy) {
     prompt += `HASHTAG STRATEGY:\n`;
@@ -96,7 +103,7 @@ function buildUserMessage(ctx: AssembledContext): string {
     message += "\n";
   }
 
-  message += `Generate captions AND headline overlay text for the following platforms: Instagram feed, Instagram story, Twitter/X, LinkedIn, TikTok.
+  message += `Generate captions AND headline overlay text for the following platforms: Instagram feed, Instagram story, Twitter/X, LinkedIn, TikTok, YouTube.
 
 Return ONLY valid JSON in this exact format:
 {
@@ -104,10 +111,11 @@ Return ONLY valid JSON in this exact format:
   "instagram_story": { "caption": "...", "headline": "..." },
   "twitter": { "caption": "...", "headline": "..." },
   "linkedin": { "caption": "...", "headline": "..." },
-  "tiktok": { "caption": "...", "headline": "..." }
+  "tiktok": { "caption": "...", "headline": "..." },
+  "youtube": { "caption": "...", "headline": "..." }
 }
 
-Each headline should be punchy and different per platform (shorter for Story, more professional for LinkedIn, trendy and hook-driven for TikTok).
+Each headline should be punchy and different per platform (shorter for Story, more professional for LinkedIn, trendy and hook-driven for TikTok, descriptive title for YouTube).
 Captions must respect each platform's character limit (TikTok: 2200 chars).
 Select hashtags from the provided sets — do not invent new ones unless no relevant set exists.`;
 
@@ -143,6 +151,7 @@ export async function generateCaptions(ctx: AssembledContext): Promise<CaptionRe
     twitter: { ...defaults, ...parsed.twitter },
     linkedin: { ...defaults, ...parsed.linkedin },
     tiktok: { ...defaults, ...parsed.tiktok },
+    youtube: { ...defaults, ...parsed.youtube },
   };
 }
 

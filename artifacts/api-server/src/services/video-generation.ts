@@ -1,6 +1,6 @@
 import { ai } from "@workspace/integrations-gemini-ai";
 import type { AssembledContext } from "./context-assembly.js";
-import { AI_MODELS } from "../lib/ai-config.js";
+import { AI_MODELS, COST_ESTIMATES } from "../lib/ai-config.js";
 
 export const VIDEO_CONFIGS: Record<string, { aspectRatio: string; label: string }> = {
   landscape: { aspectRatio: "16:9", label: "Landscape (16:9)" },
@@ -56,20 +56,51 @@ export async function generateVideo(
   if (!config) throw new Error(`Unknown orientation: ${orientation}`);
 
   const prompt = buildVideoPrompt(ctx);
-  const fullPrompt = `${prompt}\n\nGenerate this as a ${config.aspectRatio} aspect ratio video clip, 5-8 seconds long, for social media. Do not show people.`;
+  // Sentence-level no-people constraint preserved from Veo path (Interactions API has
+  // no personGeneration equivalent — accepted residual risk; documented here).
+  const fullPrompt = `${prompt}\n\nGenerate a 6-second social media video clip. Do not show people.`;
 
-  const interaction = (await ai.interactions.create({
+  // D1: Wire signal + 300s timeout into the model call using Promise.race so
+  // a hung Interactions request is cancelled/timed-out during execution, not
+  // detected post-hoc only after the response arrives.
+  if (signal?.aborted) throw new Error("Video generation cancelled: client disconnected before start");
+
+  const createPromise = ai.interactions.create({
     model: AI_MODELS.VEO_VIDEO,
     input: fullPrompt,
     response_format: {
       type: "video",
       aspect_ratio: config.aspectRatio as "16:9" | "9:16",
-    },
-  } as Parameters<typeof ai.interactions.create>[0])) as InteractionVideoResponse;
+      duration: "6s",
+    } as Record<string, unknown>,
+    safety_settings: [
+      { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_LOW_AND_ABOVE" },
+      { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_LOW_AND_ABOVE" },
+      { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_LOW_AND_ABOVE" },
+      { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_LOW_AND_ABOVE" },
+    ] as unknown as Parameters<typeof ai.interactions.create>[0]["safety_settings"],
+  } as unknown as Parameters<typeof ai.interactions.create>[0]);
 
-  if (signal?.aborted) {
-    throw new Error("Video generation cancelled: client disconnected");
+  const abortPromise = new Promise<never>((_, reject) => {
+    signal?.addEventListener("abort", () => {
+      reject(new Error("Video generation cancelled: client disconnected"));
+    }, { once: true });
+  });
+
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutHandle = setTimeout(() => {
+      reject(new Error("Video generation timed out after 300s"));
+    }, 300_000);
+  });
+
+  let rawInteraction: unknown;
+  try {
+    rawInteraction = await Promise.race([createPromise, abortPromise, timeoutPromise]);
+  } finally {
+    clearTimeout(timeoutHandle);
   }
+  const interaction = rawInteraction as InteractionVideoResponse;
 
   const videoData = interaction.output_video?.data;
   if (!videoData) {
@@ -111,5 +142,5 @@ export async function generateAllVideos(
 }
 
 export function estimateVideoCost(count: number, durationSec: number = 6): number {
-  return count * durationSec * 0.35;
+  return count * durationSec * COST_ESTIMATES.VIDEO_COST_PER_SECOND_USD;
 }

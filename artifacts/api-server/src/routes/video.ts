@@ -1,7 +1,8 @@
 import { str } from "../lib/http-params.js";
 import { Router, type IRouter, type Request, type Response } from "express";
-import { eq, gte, sql } from "drizzle-orm";
-import { db, creativesTable, creativeVariantsTable, costLogsTable, appSettingsTable } from "@workspace/db";
+import { eq } from "drizzle-orm";
+import { db, creativesTable, creativeVariantsTable, costLogsTable } from "@workspace/db";
+import { reserveBudget, budgetExceededBody } from "../lib/budget.js";
 import { assembleContext, type SelectedAssetRef } from "../services/context-assembly.js";
 import { generateVideo, estimateVideoCost, VIDEO_CONFIGS } from "../services/video-generation.js";
 import { generateMusic, generateSFX, estimateElevenLabsCost } from "../services/elevenlabs.js";
@@ -31,46 +32,13 @@ function clampDuration(v: unknown): number {
   return Math.max(1, Math.min(22, Math.round(n)));
 }
 
-// Reserve daily-budget headroom for an ElevenLabs call (advisory-locked, same
-// scheme and lock key as the /generate routes). Returns the reservation row id
-// to settle later, or an `ok:false` result the caller turns into a 429.
+// Reserve daily-budget headroom for an ElevenLabs call. Delegates to the
+// shared reserveBudget helper so the same advisory lock key and cost_logs SUM
+// are used across /generate, /video, and the copilot sessions route.
 async function reserveAudioBudget(
   creativeId: string,
 ): Promise<{ ok: true; reservationId: string | null } | { ok: false; todaySpend: number; threshold: number }> {
-  const [thresholdRow] = await db.select().from(appSettingsTable).where(eq(appSettingsTable.key, "dailyCostThreshold"));
-  const budgetThreshold = thresholdRow ? parseFloat(thresholdRow.value) : null;
-  if (budgetThreshold === null || isNaN(budgetThreshold) || budgetThreshold <= 0) {
-    return { ok: true, reservationId: null };
-  }
-
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
-  const estimatedCost = estimateElevenLabsCost();
-  const reservationId = crypto.randomUUID();
-
-  const result = await db.transaction(async (tx) => {
-    const BUDGET_LOCK_KEY = 100001;
-    await tx.execute(sql`SELECT pg_advisory_xact_lock(${BUDGET_LOCK_KEY})`);
-    const [todayResult] = await tx.select({
-      totalCost: sql<number>`COALESCE(SUM(${costLogsTable.costUsd}), 0)`,
-    }).from(costLogsTable).where(gte(costLogsTable.createdAt, todayStart));
-    const currentSpend = Number(todayResult?.totalCost || 0);
-    if (currentSpend + estimatedCost > budgetThreshold) {
-      return { exceeded: true as const, todaySpend: currentSpend };
-    }
-    await tx.insert(costLogsTable).values({
-      id: reservationId,
-      creativeId,
-      service: "system",
-      operation: "budget_reservation",
-      model: null,
-      costUsd: estimatedCost,
-    });
-    return { exceeded: false as const, todaySpend: currentSpend };
-  });
-
-  if (result.exceeded) return { ok: false, todaySpend: result.todaySpend, threshold: budgetThreshold };
-  return { ok: true, reservationId };
+  return reserveBudget(creativeId, estimateElevenLabsCost());
 }
 
 const router: IRouter = Router();

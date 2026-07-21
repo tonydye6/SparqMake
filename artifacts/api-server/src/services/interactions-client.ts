@@ -36,8 +36,11 @@ export interface InteractionImageResult {
 interface RawInteractionResponse {
   id?: string;
   status?: string;
-  output_image?: { data?: string; mime_type?: string };
-  output_video?: { data?: string; mime_type?: string };
+  // D3: Include `uri` on both output shapes; when inline delivery is requested
+  // the model should populate `data`, but the uri fallback handles cases where
+  // the model sends a download link instead of base64.
+  output_image?: { data?: string; mime_type?: string; uri?: string };
+  output_video?: { data?: string; mime_type?: string; uri?: string };
 }
 
 type ContentBlock =
@@ -104,14 +107,62 @@ export interface InteractionVideoResult {
  * - Subsequent calls (previousInteractionId set): targeted preserving edit on
  *   the video the model already holds.
  */
+// D1: Image interactions should abort after 180s; video after 300s.
+// Using Promise.race so this works regardless of SDK internal signal support.
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs / 1000}s`)), timeoutMs);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const IMAGE_TIMEOUT_MS = 180_000;
+const VIDEO_TIMEOUT_MS = 300_000;
+
+// D3: Normalize any input aspect ratio to the nearest supported video value.
+// Ratios: 16:9 ≈ 1.78 (landscape), 9:16 ≈ 0.56 (portrait), 1:1 = 1.0 (square).
+// Thresholds: >1.2 → 16:9; <0.7 → 9:16; otherwise 1:1.
+// This prevents invalid ratios like "1.91:1" (LinkedIn) from reaching the model.
+function normalizeVideoAspectRatio(ratio: string): "16:9" | "9:16" | "1:1" {
+  const parts = ratio.split(":").map(Number);
+  if (parts.length !== 2 || !Number.isFinite(parts[0]) || !Number.isFinite(parts[1]) || parts[1] === 0) {
+    return "1:1";
+  }
+  const r = parts[0]! / parts[1]!;
+  if (r >= 1.2) return "16:9";
+  if (r <= 0.7) return "9:16";
+  return "1:1";
+}
+
+// D2: Strictest applicable safety settings for Interactions video.
+// personGeneration has no equivalent in the Interactions API (accepted residual
+// risk per spec); we mitigate with SEXUALLY_EXPLICIT BLOCK_LOW_AND_ABOVE and
+// prompt instruction "Do not show people."
+const VIDEO_SAFETY_SETTINGS = [
+  { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_ONLY_HIGH" },
+  { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_ONLY_HIGH" },
+  { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_LOW_AND_ABOVE" },
+  { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_ONLY_HIGH" },
+];
+
 export async function runVideoInteraction(params: {
   prompt: string;
   imageBuffer?: Buffer | null;
   imageMimeType?: string;
   previousInteractionId?: string | null;
   aspectRatio?: string;
+  signal?: AbortSignal;
 }): Promise<InteractionVideoResult> {
-  const { prompt, imageBuffer, imageMimeType, previousInteractionId, aspectRatio = "1:1" } = params;
+  const { prompt, imageBuffer, imageMimeType, previousInteractionId, aspectRatio = "1:1", signal } = params;
+  if (signal?.aborted) throw new Error("Video interaction cancelled before start");
+
+  // D3: Normalize aspect ratio to nearest supported video value before the request.
+  const normalizedAspectRatio = normalizeVideoAspectRatio(aspectRatio);
 
   let inputValue: ContentBlock[] | string;
   if (imageBuffer) {
@@ -132,8 +183,15 @@ export async function runVideoInteraction(params: {
     input: inputValue,
     response_format: {
       type: "video",
-      aspect_ratio: aspectRatio as "16:9" | "9:16" | "1:1",
+      // D3: Whitelisted aspect ratio — no raw platform values reach the model.
+      aspect_ratio: normalizedAspectRatio,
+      // D2: Fixed 6s duration per spec; consistent with B4 cost reservation.
+      duration: "6s",
     },
+    // D3: Request inline base64 delivery to avoid needing to fetch a URI.
+    delivery: "inline",
+    // D2: Safety settings — strictest applicable for video generation.
+    safety_settings: VIDEO_SAFETY_SETTINGS,
   };
 
   if (previousInteractionId) {
@@ -145,17 +203,41 @@ export async function runVideoInteraction(params: {
       model: COPILOT_MODELS.OMNI_VIDEO_MODEL,
       hasPreviousInteraction: Boolean(previousInteractionId),
       hasImageSeed: Boolean(imageBuffer),
-      aspectRatio,
+      aspectRatio: normalizedAspectRatio,
+      originalAspectRatio: aspectRatio,
     },
     "Running video interaction",
   );
 
-  const response = (await ai.interactions.create(
+  // D1: Thread AbortSignal and apply timeout.
+  const createPromise = ai.interactions.create(
     requestBody as Parameters<typeof ai.interactions.create>[0],
+  );
+  const abortPromise = new Promise<never>((_, reject) => {
+    signal?.addEventListener("abort", () => {
+      reject(new Error("Video interaction aborted by client disconnect"));
+    }, { once: true });
+  });
+  const response = (await withTimeout(
+    Promise.race([createPromise, abortPromise]),
+    VIDEO_TIMEOUT_MS,
+    "Video interaction",
   )) as RawInteractionResponse;
 
-  const videoData = response.output_video?.data;
-  if (!videoData) {
+  // D3: Prefer inline base64 data; fall back to URI fetch when the model sends
+  // a download link instead (e.g. when inline delivery is unavailable).
+  let videoBuffer: Buffer;
+  const videoOutput = response.output_video;
+  if (videoOutput?.data) {
+    videoBuffer = Buffer.from(videoOutput.data, "base64");
+  } else if (videoOutput?.uri) {
+    logger.debug({ uri: videoOutput.uri }, "Video interaction: falling back to URI fetch");
+    const fetchResp = await fetch(videoOutput.uri);
+    if (!fetchResp.ok) {
+      throw new Error(`Video URI fetch failed with status ${fetchResp.status}`);
+    }
+    videoBuffer = Buffer.from(await fetchResp.arrayBuffer());
+  } else {
     const status = response.status || "unknown";
     throw new Error(
       `Omni Flash returned no video data (status: ${status}). ` +
@@ -172,8 +254,8 @@ export async function runVideoInteraction(params: {
 
   return {
     interactionId,
-    videoBuffer: Buffer.from(videoData, "base64"),
-    mimeType: response.output_video?.mime_type || "video/mp4",
+    videoBuffer,
+    mimeType: videoOutput?.mime_type || "video/mp4",
   };
 }
 
@@ -182,8 +264,10 @@ export async function runImageInteraction(params: {
   slots?: ImageSlot[];
   previousInteractionId?: string | null;
   aspectRatio?: string;
+  signal?: AbortSignal;
 }): Promise<InteractionImageResult> {
-  const { prompt, slots = [], previousInteractionId, aspectRatio = "1:1" } = params;
+  const { prompt, slots = [], previousInteractionId, aspectRatio = "1:1", signal } = params;
+  if (signal?.aborted) throw new Error("Image interaction cancelled before start");
 
   const inputValue = buildImageInput(prompt, slots);
 
@@ -210,8 +294,19 @@ export async function runImageInteraction(params: {
     "Running image interaction",
   );
 
-  const response = (await ai.interactions.create(
+  // D1: Thread AbortSignal and apply timeout.
+  const createPromise = ai.interactions.create(
     requestBody as Parameters<typeof ai.interactions.create>[0],
+  );
+  const abortPromise = new Promise<never>((_, reject) => {
+    signal?.addEventListener("abort", () => {
+      reject(new Error("Image interaction aborted by client disconnect"));
+    }, { once: true });
+  });
+  const response = (await withTimeout(
+    Promise.race([createPromise, abortPromise]),
+    IMAGE_TIMEOUT_MS,
+    "Image interaction",
   )) as RawInteractionResponse;
 
   const imageData = response.output_image?.data;

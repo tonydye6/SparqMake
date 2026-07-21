@@ -8,6 +8,7 @@ import { designerPersonasTable, type DesignerPersona, type PersonaReferenceImage
 import { generateCaptions } from "../services/claude.js";
 import { generateAllImages, generateImage, outpaintImage, PLATFORM_CONFIGS, type ReferenceImage, type VaryMode } from "../services/imagen.js";
 import { AI_MODELS, estimateClaudeCost, estimateGeminiTextCost, estimateImagenCost } from "../lib/ai-config.js";
+import { reserveBudget, budgetExceededBody } from "../lib/budget.js";
 import { compositeImage, reframeImage, imageDimensions, type LayoutSpec, type BrandColorGuidance } from "../services/compositing.js";
 import { renderHeadlineIntoImage, HeadlineRenderError, MAX_HEADLINE_RENDER_ATTEMPTS } from "../services/headline-render.js";
 import { detectSubject, predictClip, type SubjectBox } from "../services/focal-point.js";
@@ -1125,52 +1126,9 @@ const TakesBody = z.object({
   count: z.number().int().min(1).max(MAX_TAKE_COUNT).default(DEFAULT_TAKE_COUNT),
 });
 
-// Reserve `estimatedCost` USD of daily-budget headroom (advisory-locked, same
-// scheme as /generate and /regenerate). Returns the reservation id to settle
-// later, or an `ok:false` result the caller turns into a 429.
-async function reserveBudget(
-  creativeId: string,
-  estimatedCost: number,
-): Promise<{ ok: true; reservationId: string | null } | { ok: false; todaySpend: number; threshold: number }> {
-  const [thresholdRow] = await db.select().from(appSettingsTable).where(eq(appSettingsTable.key, "dailyCostThreshold"));
-  const budgetThreshold = thresholdRow ? parseFloat(thresholdRow.value) : null;
-  if (budgetThreshold === null || isNaN(budgetThreshold) || budgetThreshold <= 0) {
-    return { ok: true, reservationId: null };
-  }
-
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
-  const estimatedGenerationCost = estimatedCost;
-  const reservationId = crypto.randomUUID();
-
-  const result = await db.transaction(async (tx) => {
-    const BUDGET_LOCK_KEY = 100001;
-    await tx.execute(sql`SELECT pg_advisory_xact_lock(${BUDGET_LOCK_KEY})`);
-    const [todayResult] = await tx.select({
-      totalCost: sql<number>`COALESCE(SUM(${costLogsTable.costUsd}), 0)`,
-    }).from(costLogsTable).where(gte(costLogsTable.createdAt, todayStart));
-    const currentSpend = Number(todayResult?.totalCost || 0);
-    if (currentSpend + estimatedGenerationCost > budgetThreshold) {
-      return { exceeded: true as const, todaySpend: currentSpend };
-    }
-    await tx.insert(costLogsTable).values({
-      id: reservationId,
-      creativeId,
-      service: "system",
-      operation: "budget_reservation",
-      model: null,
-      costUsd: estimatedGenerationCost,
-    });
-    return { exceeded: false as const, todaySpend: currentSpend };
-  });
-
-  if (result.exceeded) return { ok: false, todaySpend: result.todaySpend, threshold: budgetThreshold };
-  return { ok: true, reservationId };
-}
-
-// Reserve daily-budget headroom for `imageCount` images (advisory-locked, same
-// scheme as /generate and /regenerate). Returns the reservation id to settle
-// later, or an `ok:false` result the caller turns into a 429.
+// Reserve daily-budget headroom for `imageCount` images. Delegates to the
+// shared reserveBudget helper so the same lock key and cost_logs SUM are used
+// whether the caller is /generate, /video, or the copilot sessions route.
 async function reserveImageBudget(
   creativeId: string,
   imageCount: number,
@@ -1183,15 +1141,6 @@ async function reserveImageBudget(
 // Gemini text calls (design spec + vision quality check).
 function estimateDesignedUnitCost(): number {
   return estimateImagenCost(1) + estimateGeminiTextCost() * 2;
-}
-
-function budgetExceededBody(todaySpend: number, threshold: number) {
-  return {
-    error: "Daily budget exceeded",
-    todaySpend,
-    threshold,
-    message: `Today's spend ($${todaySpend.toFixed(2)}) has reached the daily budget limit ($${threshold.toFixed(2)}). Increase the limit in Cost Dashboard settings or wait until tomorrow.`,
-  };
 }
 
 // Generate one image at `platform` for `campaign`, composite the overlay, and

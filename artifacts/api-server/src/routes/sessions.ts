@@ -29,11 +29,10 @@ import {
   creativesTable,
   creativeVariantsTable,
   costLogsTable,
-  appSettingsTable,
 } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
-import { sql, gte } from "drizzle-orm";
 import { estimateImagenCost, estimateClaudeCost, estimateGeminiTextCost, COST_ESTIMATES } from "../lib/ai-config.js";
+import { reserveBudget, budgetExceededBody } from "../lib/budget.js";
 import { recordTasteSignal } from "../services/taste-signals.js";
 import { logger } from "../lib/logger.js";
 
@@ -63,6 +62,12 @@ const ScheduleItemSchema = z.object({
   scheduledAt: z.string().datetime(),
 });
 
+// D3: Enumerate valid platform keys so an empty string or unknown value is
+// rejected 400 instead of silently flowing through to the model.
+const VALID_PLATFORM_KEYS = [
+  "instagram_feed", "instagram_story", "twitter", "linkedin", "tiktok", "youtube",
+] as const;
+
 const CreateTurnBody = z.object({
   action: z.enum([
     "draft",
@@ -76,7 +81,8 @@ const CreateTurnBody = z.object({
     "schedule",
   ]),
   instruction: z.string().min(0).max(2000).default(""),
-  platform: z.string().optional(),
+  // D3: strict enum — rejects "" and unknown platform keys with 400.
+  platform: z.enum(VALID_PLATFORM_KEYS).optional(),
   compareCount: z.number().int().min(2).max(5).optional(),
   region: RegionSchema.optional(),
   schedules: z.array(ScheduleItemSchema).max(10).optional(),
@@ -181,55 +187,26 @@ router.post(
       return;
     }
 
-    const [thresholdRow] = await db.select().from(appSettingsTable).where(eq(appSettingsTable.key, "dailyCostThreshold"));
-    const budgetThreshold = thresholdRow ? parseFloat(thresholdRow.value) : null;
-
-    // reservationId is non-null only when we inserted a budget_reservation row
-    // that must be cleaned up (deleted) after the turn completes or fails.
-    let reservationId: string | null = null;
-
-    if (budgetThreshold !== null && !isNaN(budgetThreshold) && budgetThreshold > 0) {
-      const todayStart = new Date();
-      todayStart.setHours(0, 0, 0, 0);
-
-      const estimatedCost = estimateTurnCost(body.action, body.compareCount);
-      const candidateId = crypto.randomUUID();
-
-      const budgetCheckResult = await db.transaction(async (tx) => {
-        const BUDGET_LOCK_KEY = 100002;
-        await tx.execute(sql`SELECT pg_advisory_xact_lock(${BUDGET_LOCK_KEY})`);
-        const [todayResult] = await tx.select({
-          totalCost: sql<number>`COALESCE(SUM(${costLogsTable.costUsd}), 0)`,
-        }).from(costLogsTable).where(gte(costLogsTable.createdAt, todayStart));
-        const currentSpend = Number(todayResult?.totalCost || 0);
-
-        if (currentSpend + estimatedCost > budgetThreshold) {
-          return { exceeded: true as const, todaySpend: currentSpend };
-        }
-
-        await tx.insert(costLogsTable).values({
-          id: candidateId,
-          creativeId: session.creativeId,
-          service: "system",
-          operation: "budget_reservation",
-          model: null,
-          costUsd: estimatedCost,
-        });
-        return { exceeded: false as const, todaySpend: currentSpend };
+    // D4: Fail fast when the direct Gemini key is missing — the Replit proxy
+    // does not support the pinned model names and would return UNSUPPORTED_MODEL.
+    if (!process.env["GEMINI_API_KEY"]) {
+      res.status(503).json({
+        error: "AI model access is not configured",
+        message: "GEMINI_API_KEY is not set — Co-pilot Studio requires a direct Gemini API key to access the required models. Set the secret and restart.",
       });
-
-      if (budgetCheckResult.exceeded) {
-        res.status(429).json({
-          error: "Daily budget exceeded",
-          todaySpend: budgetCheckResult.todaySpend,
-          threshold: budgetThreshold,
-        });
-        return;
-      }
-
-      // Track the reservation so we can delete it once the turn finishes
-      reservationId = candidateId;
+      return;
     }
+
+    // B1: Use the single shared reserveBudget helper (same lock key 100001 as
+    // /generate and /video) so concurrent turns and legacy generations are all
+    // serialized against the same daily-spend total.
+    const estimatedCost = estimateTurnCost(body.action, body.compareCount);
+    const budgetResult = await reserveBudget(session.creativeId, estimatedCost);
+    if (!budgetResult.ok) {
+      res.status(429).json(budgetExceededBody(budgetResult.todaySpend, budgetResult.threshold));
+      return;
+    }
+    const reservationId = budgetResult.reservationId;
 
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
@@ -238,6 +215,10 @@ router.post(
       "X-Accel-Buffering": "no",
     });
 
+    // D1: AbortController wires client disconnect and SSE timeout into model calls
+    // so hung interactions are cancelled and their reservation rows cleaned up.
+    const turnAbort = new AbortController();
+
     const SSE_TIMEOUT_MS = 5 * 60 * 1000;
     let clientDisconnected = false;
     const sseTimeout = setTimeout(() => {
@@ -245,9 +226,16 @@ router.post(
         res.write(`event: error\ndata: ${JSON.stringify({ message: "Turn timed out after 5 minutes" })}\n\n`);
       }
       clientDisconnected = true;
+      turnAbort.abort();
       res.end();
     }, SSE_TIMEOUT_MS);
-    req.on("close", () => { clientDisconnected = true; clearTimeout(sseTimeout); });
+    req.on("close", () => {
+      clientDisconnected = true;
+      clearTimeout(sseTimeout);
+      // Abort the in-flight model call so the turn doesn't run to completion
+      // billing the budget after the user has already navigated away.
+      turnAbort.abort();
+    });
 
     function sendEvent(event: string, data: Record<string, unknown>) {
       if (clientDisconnected) return;
@@ -265,8 +253,12 @@ router.post(
           region: body.region,
           schedules: body.schedules,
           sourceVariantId: body.sourceVariantId,
+          signal: turnAbort.signal,
         },
         userId: actor.id,
+        // B2: Pass reservationId so executeTurn can delete it atomically with
+        // the real cost_logs insert, preventing phantom rows after a crash.
+        reservationId: reservationId ?? undefined,
         onProgress: (event) => {
           sendEvent(event.type, { message: event.message, step: event.step, done: event.done, ...event.data });
         },
@@ -277,13 +269,8 @@ router.post(
       const errMsg = err instanceof Error ? err.message : String(err);
       sendEvent("error", { message: errMsg });
     } finally {
-      // Always reconcile the budget reservation: delete it so only the actual
-      // cost row written by executeTurn counts toward the daily spend.
-      if (reservationId) {
-        db.delete(costLogsTable).where(eq(costLogsTable.id, reservationId)).catch((e: unknown) => {
-          logger.error({ err: e, reservationId }, "Failed to delete budget reservation row");
-        });
-      }
+      // B2: Reservation is now settled atomically inside executeTurn's transaction
+      // (on success) or released in executeTurn's error path.  No cleanup needed here.
       clearTimeout(sseTimeout);
       if (!clientDisconnected) res.end();
     }
@@ -334,8 +321,17 @@ router.post(
       }
     }
 
+    // C7: Derive thumbnail from the picked variant so the continue-rail stays
+    // in sync. Prefer compositedImageUrl (final output) over rawImageUrl.
+    const [pickedVariant] = await db
+      .select({ compositedImageUrl: creativeVariantsTable.compositedImageUrl, rawImageUrl: creativeVariantsTable.rawImageUrl })
+      .from(creativeVariantsTable)
+      .where(eq(creativeVariantsTable.id, variantId));
+    const newThumbnail = pickedVariant?.compositedImageUrl || pickedVariant?.rawImageUrl || null;
+
     const sessionUpdate: Record<string, unknown> = { activeVariantId: variantId, updatedAt: new Date() };
     if (restoredInteractionId) sessionUpdate.imageInteractionId = restoredInteractionId;
+    if (newThumbnail) sessionUpdate.thumbnailUrl = newThumbnail;
 
     await db.update(studioSessionsTable).set(sessionUpdate).where(eq(studioSessionsTable.id, sessionId));
 
@@ -401,22 +397,36 @@ router.post(
   },
 );
 
+// B3: Count of platform slots used by fan_out (must match PLATFORM_CONFIGS keys)
+// to compute worst-case outpaint allowance without importing PLATFORM_CONFIGS here.
+const FAN_OUT_PLATFORM_COUNT = 6;
+
+// B4: Fixed video duration used for reservation (D2 pinned duration = 6s).
+const VIDEO_RESERVATION_DURATION_S = 6;
+
 function estimateTurnCost(action: string, compareCount?: number): number {
   switch (action) {
     case "draft":
-      return estimateImagenCost(1) + estimateClaudeCost() + estimateGeminiTextCost();
+      // B3: Include QA corrective-pass allowance (up to 1 extra image gen)
+      return estimateImagenCost(1) + estimateClaudeCost() + estimateGeminiTextCost()
+        + estimateImagenCost(1); // QA allowance
     case "edit_image":
     case "edit_region":
-      return estimateImagenCost(1) + estimateClaudeCost();
+      // B3: Include QA corrective-pass allowance
+      return estimateImagenCost(1) + estimateClaudeCost()
+        + estimateImagenCost(1); // QA allowance
     case "caption":
       return estimateClaudeCost();
     case "compare":
       return (compareCount || 3) * (estimateImagenCost(1) + estimateClaudeCost());
     case "convert_video":
     case "edit_video":
-      return COST_ESTIMATES.VIDEO_GENERATION_USD;
+      // B4: Reserve based on the pinned 6s duration so reservation == charge formula.
+      return VIDEO_RESERVATION_DURATION_S * COST_ESTIMATES.VIDEO_COST_PER_SECOND_USD;
     case "fan_out":
-      return estimateClaudeCost() + estimateGeminiTextCost();
+      // B3: Worst-case all platforms outpaint (generative fill per aspect ratio)
+      return estimateClaudeCost() + estimateGeminiTextCost()
+        + estimateImagenCost(FAN_OUT_PLATFORM_COUNT); // outpaint allowance
     case "schedule":
       return 0;
     default:
