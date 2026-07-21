@@ -1,6 +1,6 @@
 const API_BASE = import.meta.env.VITE_API_URL || "";
 
-function sanitizeReturnTo(raw: string | null): string {
+export function sanitizeReturnTo(raw: string | null): string {
   if (!raw || !raw.startsWith("/") || raw.startsWith("//")) return "/";
   return raw;
 }

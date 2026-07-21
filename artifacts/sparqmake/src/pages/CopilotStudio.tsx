@@ -1468,8 +1468,14 @@ export default function CopilotStudio() {
 
   // Deep-link from ContentPlan: fetch the creative's brief + brand, then
   // auto-start a Co-pilot session pre-seeded with that context.
+  // seedAttemptedRef ensures the deep-link is consumed exactly once — without
+  // it, a failed auto-start would re-trigger this effect forever (seeding
+  // flips back to false while campaignId stays set), trapping the user on
+  // the loading spinner instead of landing them on the Studio home.
+  const seedAttemptedRef = useRef(false);
   useEffect(() => {
-    if (!campaignId || sessionId || seeding) return;
+    if (!campaignId || urlSessionId || sessionId || seeding || seedAttemptedRef.current) return;
+    seedAttemptedRef.current = true;
     setSeeding(true);
     void (async () => {
       try {
@@ -1516,7 +1522,7 @@ export default function CopilotStudio() {
         setSeeding(false);
       }
     })();
-  }, [campaignId, sessionId, seeding, toast]);
+  }, [campaignId, urlSessionId, urlPlatform, sessionId, seeding, toast]);
 
   if (seeding) {
     return (

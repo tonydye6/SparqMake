@@ -33,7 +33,7 @@ const queryClient = new QueryClient({
   },
 });
 
-function AuthGate({ children }: { children: React.ReactNode }) {
+export function AuthGate({ children }: { children: React.ReactNode }) {
   const { authenticated, loading } = useAuth();
 
   if (loading) {
@@ -61,7 +61,10 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
     const relativePath = currentPath.replace(basePath, "") || "/";
     if (relativePath !== "/login") {
-      return <Redirect to={`/login?returnTo=${encodeURIComponent(relativePath)}`} />;
+      // Preserve the query string (e.g. ?campaign=... deep-links from the
+      // content plan) so the user lands back on the exact URL after login.
+      const returnTo = `${relativePath}${window.location.search}`;
+      return <Redirect to={`/login?returnTo=${encodeURIComponent(returnTo)}`} />;
     }
   }
 
