@@ -1,0 +1,322 @@
+SPARQMAKE · CO-PILOT STUDIO · CHAT PANE REDESIGN ("QUIET STUDIO")
+
+You are redesigning the Co-pilot Studio session view. This is a FRONTEND-ONLY build.
+
+=== HARD CONSTRAINTS (read first) ===
+
+1. FRONTEND ONLY. Do not modify anything under artifacts/api-server/ (routes, services,
+   schema, migrations, storage). No new endpoints. No request or response shape changes.
+   Every feature below runs on the EXISTING endpoints:
+   POST /api/sessions/:id/turns (SSE), POST /sessions/:id/branch,
+   POST /sessions/:id/turns/:turnId/pick, GET /api/assets, GET /api/creatives/:id/variants.
+2. No database, drizzle, or migration changes of any kind.
+3. Product copy: NO em dashes in any UI string. Use a middot, comma, or colon instead.
+   En dash only for numeric ranges. A canonical copy table is at the bottom; use it verbatim.
+4. Viewer role stays read-only. Every new interactive control (composer, slash menu,
+   asset picker, suggestion chips, region tools, rewrite chips, Use this, Try again)
+   is HIDDEN, not merely disabled, when useCanWrite() is false. Viewers keep: browsing
+   turns, the preview, Download, and the existing read-only notice.
+5. Gates: pnpm run typecheck must be GREEN at the end of every phase. Run the frontend
+   vitest suites after Phases C and E. STOP at the end of each phase and report what you
+   did before continuing. If you do continue, the phases are ordered so each one leaves
+   the app shippable on its own.
+
+=== CURRENT STATE (what you are changing) ===
+
+artifacts/sparqmake/src/pages/CopilotStudio.tsx (~1800 lines) contains the entire
+Co-pilot Studio: HomeView, StatusBadge, a CHIPS array, sessionReducer, SessionView
+(thread + composer dock + preview), FanOutCard, TurnCard, and the root component.
+
+The session view currently stacks up to six control rows above the composer: 5 action
+chips, an Edit region chip, an Edit video chip, a 7-pill "Caption for:" row, region
+banners, an inline asset picker panel, and attach chips. The thread is fixed at
+w-[420px]; the preview image is capped at max-w-sm (384px); turn thumbnails are 64px
+with the duration floating OUTSIDE the card; raw server error strings render in
+bubbles; each progress message gets its own spinner; the composer is 2 fixed rows and
+sends only on Cmd+Enter.
+
+This redesign DELETES the docked control stack as a structure. The composer becomes the
+single verb surface (slash commands + @asset mentions, Enter sends). Next-step
+suggestions render on the turn card that earned them. Controls move onto the objects
+they belong to: region select onto the image, platform targeting and rewrites onto a
+caption card. The thread becomes resizable and collapsible. Nothing becomes unreachable.
+
+Known dead code you will remove along the way:
+- captionTargetPlatform state (~line 523): set by the "Caption for:" pills but NEVER
+  sent with any request. The platform picker is a dead control today.
+- TurnCard's isActive prop: declared and computed but never used.
+- Caption alternates render with onClick={() => {}} (a no-op).
+
+Behavior you must PRESERVE exactly (do not regress):
+- SSE event-frame parser (blank-line framed, handles chunk boundaries).
+- AbortController on unmount / back-navigation (turnAbortRef); aborted turns show no
+  error toast (the wasAborted branch).
+- Auto-draft one-shot guard after a concept pick (autoDraftFiredRef).
+- Session persistence in the URL (?session=) incl. the consume-once guard, and the
+  ContentPlan deep-link (?campaign= + ?platform=) seeding flow.
+- Asset picker state resets when switching sessions.
+- FanOutCard approve/schedule logic incl. the YouTube convert-to-video flow and the
+  local-datetime helper (no UTC drift).
+- pickCompareTake and pickHistoryVariant flows.
+- generation requests: runTurn's payload shape is unchanged.
+
+=== PHASE A · FILE SPLIT (pure refactor, zero behavior change, safe to run alone) ===
+
+Create artifacts/sparqmake/src/pages/copilot/ and split CopilotStudio.tsx into:
+
+  index.tsx        root component (URL params, seeding, view switch)
+  types.ts         Concept, SessionSummary, Turn, Session, Variant, FanOutPlatformCard,
+                   SessionState, SessionAction, reducer helpers
+  HomeView.tsx     HomeView + StatusBadge, unchanged
+  SessionView.tsx  layout shell, state + reducer + runTurn/loadSession logic
+  Composer.tsx     the composer (this phase: move the existing dock + textarea as is)
+  TurnCard.tsx     TurnCard (as is)
+  FanOutCard.tsx   FanOutCard (as is)
+  PreviewPane.tsx  preview image + region overlay + history strip (as is)
+
+CopilotStudio.tsx becomes a single re-export of copilot/index.tsx so the router and
+all imports keep working. NO logic changes in this phase, move code only. While moving,
+you may delete the unused isActive prop; keep captionTargetPlatform until Phase D
+removes its pill row. Gate: typecheck green, app behaves identically. STOP.
+
+=== PHASE B · COMPOSER: slash commands, @assets, Enter sends, dock deletion ===
+
+New files: commands.ts (command registry), plus rebuild Composer.tsx.
+
+Composer input:
+- Autosizing textarea: 1 row min, 6 rows max, then internal scroll.
+- Enter sends. Shift+Enter inserts a newline.
+- Persistent hint line under the input (muted, ~11px), copy table string #1.
+- Placeholders: no image yet -> copy #2; image exists -> copy #3.
+- While a turn runs: typing allowed, sending disabled, hint swaps to copy #4.
+- Send button (icon) right-aligned; disabled while running or empty.
+- Paperclip icon stays as a mouse alternative to the @ picker.
+
+Slash commands (commands.ts registry; typing "/" at position 0 opens a menu anchored
+above the composer; filter as the user types; ArrowUp/Down + Enter select; Esc closes):
+
+  /draft <brief>       -> runTurn("draft", brief). Always available.
+  /edit <instruction>  -> runTurn("edit_image", ...). Needs imageInteractionId.
+                          ALSO THE DEFAULT: plain text with an image routes here;
+                          plain text without an image routes to draft (as today).
+  /region              -> enters region-select mode on the preview image (Phase D
+                          wires the popover). Needs imageInteractionId.
+  /caption [platform] <instruction>
+                       -> runTurn("caption", instruction, platform). The platform
+                          token autocompletes (all, ig-feed, ig-story, twitter,
+                          linkedin, tiktok, youtube); omitted = all platforms.
+                          THIS IS THE FIRST TIME platform is actually sent with
+                          caption turns; the backend already accepts it.
+  /takes               -> runTurn("compare", "Generate 3 fresh takes") (count 3).
+  /video <instruction> -> convert_video when session.videoInteractionId is null,
+                          else edit_video. The menu row's note must say which one it
+                          will do right now.
+  /set                 -> runTurn("fan_out", "Create platform-optimized versions
+                          for all channels").
+  /schedule            -> NOT a turn. Scrolls to and highlights the newest fan_out
+                          turn card (it owns the real Schedule button). If no fan_out
+                          turn exists, the row is disabled with note copy #6.
+
+Unavailable commands render in the menu greyed WITH their reason, never hidden.
+
+@asset mentions (replaces the inline asset panel):
+- Typing "@" opens an asset picker popover anchored at the caret position; the text
+  after "@" filters by name. Data source unchanged: GET /api/assets?brandId=&limit=100,
+  image assets only, fetched once per session, reset on session switch.
+- Picking an asset removes the "@query" text from the input and adds a compact
+  attachment chip INSIDE the composer frame (thumbnail + name + remove x), shown in a
+  row above the input text. Max 3; at 3 the picker footer shows copy #5.
+- Attachments send as assetIds exactly as today and clear after send.
+
+DELETE from the dock: the 5 CHIPS, the Edit region chip, the Edit video chip, the
+"Caption for:" pill row (and now the captionTargetPlatform state), the region banner
+rows, the inline asset panel, and the attach chip row. The composer + hint is all that
+remains below the thread. Gate: typecheck green; manually verify draft, edit, caption,
+takes, video, and set all fire correct requests. STOP.
+
+=== PHASE C · TURN CARDS: meta-in-card, suggestions, error cards, progress + Stop ===
+
+New files: suggestions.ts, ErrorCard.tsx. Rebuild TurnCard.tsx.
+
+Turn card anatomy (copilot turns):
+- Header row inside the card: action label (existing ACTION_LABELS) + qualifier
+  ("preserving edit", "QA corrected") + right-aligned muted meta: cost ($0.0700) then
+  duration (55.2s) with a small clock icon. DELETE the duration line that currently
+  floats outside the card.
+- Body: per-action content as today (compare grid, fan-out card, schedule receipt,
+  video line), except image thumbnails grow from 64px to 92px.
+- Footer: suggestion chips (below).
+- User turns keep the right-aligned bubble incl. the region annotation.
+
+Time travel:
+- Clicking the result thumbnail on an image-producing turn (draft, edit_image,
+  edit_region, and compare AFTER a take was picked) calls the existing
+  pickHistoryVariant(variantId) branch flow and shows an active ring + a small
+  "current" tag on the thumbnail whose variant is active.
+- HARD GUARD: never offer click-to-branch on caption, fan_out, convert_video,
+  edit_video, or schedule turns (branching from those can sever the edit chain
+  server-side; the UI must not offer it).
+
+Suggestions (suggestions.ts):
+- Pure function suggestionsFor(turn, session) -> array of {label, kind, payload}.
+  No AI calls. Rendered ONLY on the most recent done copilot turn, max 3 chips,
+  hidden for viewers, disabled while running.
+- "fill" chips put a command string in the composer and focus it (caret at end);
+  "run" chips fire runTurn immediately; "nav" chips navigate.
+
+  after draft:        Make it bolder (fill "/edit make the composition bolder and
+                      more energetic") · 3 fresh takes (run /takes) · Write captions
+                      (fill "/caption ")
+  after edit_image /
+  edit_region:        Push it further (fill "/edit ") · Compare takes (run /takes) ·
+                      Make platform set (run /set)
+  after compare:      no chips; helper text copy #9 until a take is picked
+  after caption:      Punchier (run caption with "Rewrite the caption to be punchier
+                      and more engaging") · Make platform set (run /set)
+  after convert_video: Refine the video (fill "/video ") · Make platform set (run /set)
+  after edit_video:   Refine again (fill "/video ") · Make platform set (run /set)
+  after fan_out:      no chips (the card owns approve + schedule)
+  after schedule:     Open calendar (nav /calendar) · Start another post (nav home)
+
+Error cards (ErrorCard.tsx). Raw server strings must NEVER render in the thread:
+- Title (mapped below), one-sentence body, a collapsed "Details" disclosure containing
+  the raw error text in monospace, and actions: Try again + Dismiss.
+- Try again re-issues the EXACT same request. Keep a ref map of turnId -> the request
+  payload {action, instruction, platform, region, assetIds, sourceVariantId} for every
+  runTurn call in this session; for error turns loaded from history, reconstruct from
+  turn.action + turn.instruction + turn.metadata.
+- Dismiss collapses the card to a single muted row.
+- Mapping (first match on status code / error text substring wins):
+    429 + budget/reservation  -> title copy #E1t, body copy #E1b
+    429 + rate/limit          -> #E2t / #E2b
+    400 + invalid_request or media type -> #E3t / #E3b
+    timeout / timed out       -> #E4t / #E4b
+    5xx / network / fetch     -> #E5t / #E5b
+    anything else             -> #E6t / #E6b
+
+Progress (replaces the stacked spinner list):
+- ONE progress line pinned between thread and composer: single spinner + the LATEST
+  progress message only (new messages REPLACE, never stack) + elapsed seconds counter
+  + a Stop button.
+- Stop calls the existing AbortController's abort(). The existing wasAborted handling
+  applies (no error toast). Cancelled turns render as a muted "Stopped" row (copy #8).
+- Turn cards with status running show only a subtle pulsing border, no second spinner.
+
+Gate: typecheck green + frontend vitest. Verify: an error renders as a card with
+working Try again; Stop cancels without a toast; suggestions appear only on the newest
+done turn. STOP.
+
+=== PHASE D · PREVIEW PANE: 560px artifact, image toolbar, region popover, caption card ===
+
+New file: CaptionCard.tsx. Rebuild PreviewPane.tsx.
+
+Artifact width: replace max-w-sm with w-full max-w-[560px]. KEEP the existing
+my-auto centering behavior and its explanatory comment (long captions must not push
+the image top above the scrollable area).
+
+Image toolbar: on hover or keyboard focus of the image frame, show a small overlay
+toolbar top-right: "Select region" (toggles region mode; hidden for viewers) and
+"Download" (anchor to the full-size image URL; available to viewers).
+
+Region editing: drag-select exactly as today (crosshair, min 5% box). On release,
+instead of a dock banner, show a floating popover anchored near the selection
+(flip if near an edge): autofocused text input (placeholder copy #7), an Apply button,
+Esc or the x cancels. Apply runs edit_region with the same payload as today, including
+any attached assets. The dashed pending-region overlay stays until the turn starts.
+
+Caption card (CaptionCard.tsx), replacing the plain caption block:
+- Bordered card with a small "Caption" header.
+- Platform pills: All · IG Feed · IG Story · Twitter · LinkedIn · TikTok · YouTube.
+  Single select, All default. Selecting a platform shows that platform's caption text
+  from the loaded variants when one exists (fall back to the active variant's caption)
+  and scopes every rewrite action to that platform.
+- Rewrite chips: Punchier · Shorter · Add CTA (each runs a caption turn with its
+  instruction AND the selected platform) plus a "Rewrite..." chip that fills the
+  composer with "/caption <selected platform> ".
+- Alternates (from caption-turn SSE data) render inside the card: headline + caption
+  each with two buttons: "Use this" (runs a caption turn, scoped to the selected
+  platform, instruction: `Use exactly this caption and headline, verbatim:` followed
+  by the alternate's headline and caption) and "Copy" (clipboard). Delete the old
+  no-op onClick block.
+
+History strip: thumbnails grow 56px -> 72px, keep click-to-branch + active ring, add
+a subtle edge fade on horizontal scroll.
+
+Gate: typecheck green. Verify with the network tab: a rewrite chip fired with
+IG Feed selected sends platform "instagram_feed" on the caption turn. STOP.
+
+=== PHASE E · THREAD RAIL, FANOUT POLISH, CLEANUP ===
+
+Resizable thread:
+- Default 400px. Drag handle on the thread/preview border, clamp 360 to 560px,
+  double-click resets to 400. Persist as localStorage "copilot.threadWidth".
+
+Collapsible thread:
+- A collapse control in the session header folds the thread to a 56px icon rail:
+  one icon per copilot turn (reuse the existing action->icon mapping), stacked
+  chronologically, active turn highlighted; clicking an icon expands the thread and
+  scrolls to that turn. Persist as localStorage "copilot.threadCollapsed".
+- While collapsed, render the composer as a floating single-line variant centered at
+  the bottom of the preview pane so the user can keep working.
+
+FanOutCard visual pass (LOGIC UNTOUCHED): +4px card padding, platform badge text to
+10px, approve checkmark hit area to 18px, Schedule button height to 32px.
+
+Cleanup: remove now-unused imports/state across copilot/; confirm no component still
+references the deleted dock pieces.
+
+Gate: typecheck green + frontend vitest. STOP.
+
+=== FINAL REGRESSION GATE (run before reporting done) ===
+
+Functional checklist, all must pass in the browser:
+1. draft, edit_image, edit_region, caption (All and one specific platform), compare
+   + pick, convert_video, edit_video, fan_out + approve + schedule, and the schedule
+   receipt all still work end to end.
+2. Concept pick auto-drafts exactly once; reload restores the session from ?session=;
+   the ContentPlan deep-link (?campaign=) still seeds a session.
+3. Viewer account: no composer, no chips, no region tools, no Try again; Download
+   works; read-only notice shows.
+4. Mid-turn Back/unmount aborts the request without an error toast; Stop lands a
+   Stopped row.
+5. Fan-out YouTube card still converts to video and becomes schedulable; edited
+   schedule times do not shift by timezone.
+6. Suggestions render only on the newest done copilot turn.
+7. Thumbnail click branches and updates the preview; caption/fan-out/video/schedule
+   cards offer no branch affordance.
+8. Thread width + collapsed state survive a reload.
+9. pnpm run typecheck green; frontend vitest green.
+10. grep the copilot/ directory for the em dash character: zero hits in UI strings.
+
+Screenshots to attach to your report: resting session with suggestions · slash menu
+open showing a disabled command with its reason · asset picker with an attached chip ·
+region popover over the image · single progress line with Stop · an error card with
+Details expanded · caption card with a non-All platform selected · collapsed icon rail
+with the floating composer.
+
+=== CANONICAL COPY (use verbatim, no em dashes anywhere) ===
+
+#1  Enter to send · Shift+Enter new line · / commands · @ attach assets
+#2  Describe the post you want, then press Enter
+#3  Describe a change, or type / for commands
+#4  Waiting for the current step to finish
+#5  Up to 3 assets per instruction
+#6  Run /set first
+#7  What should change here?
+#8  Stopped
+#9  Pick a take to continue
+Viewer notice: View-only · editors and admins can make changes
+
+Error copy:
+#E1t Budget limit reached
+#E1b This turn would pass the session budget. Try again in a minute or adjust budgets in Settings.
+#E2t Too many generations at once
+#E2b The studio allows 5 generations per minute. Give it a moment and try again.
+#E3t The model rejected the image format
+#E3b Something about the current image did not match what the model expects. Try again, it usually clears.
+#E4t The model took too long
+#E4b The generation timed out. Try again, shorter instructions often help.
+#E5t Connection hiccup
+#E5b The server had a moment. Your session is safe, try again.
+#E6t That step did not go through
+#E6b The full error is under Details. Try again usually works.
