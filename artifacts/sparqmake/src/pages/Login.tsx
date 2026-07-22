@@ -1,3 +1,6 @@
+import { Redirect } from "wouter";
+import { useAuth } from "@/hooks/useAuth";
+
 const API_BASE = import.meta.env.VITE_API_URL || "";
 
 export function sanitizeReturnTo(raw: string | null): string {
@@ -9,6 +12,32 @@ export default function Login() {
   const params = new URLSearchParams(window.location.search);
   const returnTo = sanitizeReturnTo(params.get("returnTo"));
   const authError = params.get("error");
+
+  const { authenticated, loading } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="flex flex-col items-center space-y-6">
+          <div className="flex items-center space-x-3">
+            <img
+              src={`${import.meta.env.BASE_URL}images/sparq-logo.png`}
+              alt="SparqMake"
+              className="w-10 h-10 rounded"
+            />
+            <span className="font-display font-bold text-2xl text-foreground">
+              SPARQ<span className="text-primary">MAKE</span>
+            </span>
+          </div>
+          <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+        </div>
+      </div>
+    );
+  }
+
+  if (authenticated) {
+    return <Redirect to={returnTo} />;
+  }
 
   const handleGoogleSignIn = () => {
     window.location.href = `${API_BASE}/api/auth/google?returnTo=${encodeURIComponent(returnTo)}`;
