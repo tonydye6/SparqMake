@@ -1,0 +1,48 @@
+PULL AND VERIFY: branch feat/creative-director (Creative Director fixes)
+
+The branch github.com/tonydye6/SparqMake feat/creative-director contains 3 reviewed
+commits that make Co-pilot Studio image generation use the brand asset library and
+stored steering context. Your job is to pull it, verify it, and report — do NOT
+refactor, rewrite, or "improve" the changes. If something fails, report the failure
+with full output and stop; do not fix beyond what a failing test literally requires.
+
+STEP 1 — PULL
+git fetch origin && git checkout feat/creative-director
+Confirm HEAD is 8f9baad and pnpm run typecheck is green.
+
+STEP 2 — TESTS
+Run the api-server vitest suites. The new file
+artifacts/api-server/src/services/creative-direction.test.ts must pass along with
+every existing suite. Report any failure verbatim.
+
+STEP 3 — CAPABILITY VERIFICATION (needs the live GEMINI_API_KEY in this env)
+cd artifacts/api-server && pnpm exec tsx scripts/verify-interactions-capabilities.ts
+It writes docs/INTERACTIONS_CAPABILITIES.md. Include the file's contents in your
+report. ONLY IF the typed-references probe says "Supported: YES", set the env var
+INTERACTIONS_TYPED_REFS=on. Otherwise leave it unset.
+
+STEP 4 — LIVE E2E (use the Crown U brand, which has a populated asset library)
+1. Start a new Co-pilot session with a brief that mentions the crown or logo
+   (e.g. "hype post for the Crown U championship run"). After the draft:
+   - The progress line should show "Creative director: selected N library assets".
+   - Inspect the copilot turn row's metadata (session_turns.metadata): it must
+     contain artDirection, directorSelections (with assetIds + roles),
+     aspectRatio, catalogSize. If directorSelections includes the Crown U logo
+     asset, confirm the rendered image actually carries it.
+2. Run an edit turn ("make the background less busy"). Verify in the server logs
+   that the image prompt now begins with "STYLE CONTRACT" and ends with the raw
+   instruction under "INSTRUCTION".
+3. Run an edit that contradicts brand colors ("make the background neon green").
+   The instruction must WIN (background goes green) — the contract must not
+   override an explicit user request.
+4. Attach an asset in the composer on a DRAFT turn (new session) and confirm the
+   draft's references include it (attachedAssetNames in turn metadata).
+5. Confirm unchanged behavior: compare + pick, caption (all + one platform),
+   convert_video, fan_out + schedule, viewer read-only, session reload restore,
+   and the legacy StudioNext board at /studio still generates.
+
+STEP 5 — REPORT
+Reply with: typecheck + vitest output summary, the capabilities doc contents, the
+turn-metadata JSON of one director-selected draft, one before/after edit prompt
+from the logs, and any E2E deviations. Then STOP. Do not merge to main; the merge
+decision happens after review of your report.
