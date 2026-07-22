@@ -57,7 +57,9 @@ function RegionPopover({
   const inputRef = useRef<HTMLInputElement>(null);
   const assetsPickerRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => { inputRef.current?.focus(); }, []);
+  // preventScroll: focusing must never scroll ancestor containers — that
+  // shoves the preview image out of alignment inside its rounded crop box.
+  useEffect(() => { inputRef.current?.focus({ preventScroll: true }); }, []);
 
   useEffect(() => {
     const handle = (e: MouseEvent) => {
@@ -109,14 +111,22 @@ function RegionPopover({
     onApply(instruction.trim(), attachedAssets.map(a => a.id));
   };
 
-  // Anchor the popover near the bottom-right of the selection box
-  const left = `${Math.min(region.x1 * 100, 75)}%`;
-  const top = `${Math.min(region.y1 * 100 + 2, 88)}%`;
+  // Anchor near the selection without ever leaving the preview column:
+  // right-align when the region ends on the right half, and open above the
+  // region when it ends near the bottom so the popover stays fully visible.
+  const anchorRight = region.x1 > 0.5;
+  const anchorAbove = region.y1 > 0.7;
+  const style: React.CSSProperties = {
+    ...(anchorRight ? { right: 0 } : { left: `${Math.min(region.x0 * 100, 55)}%` }),
+    ...(anchorAbove
+      ? { bottom: `${Math.min((1 - region.y0) * 100 + 2, 90)}%` }
+      : { top: `${Math.min(region.y1 * 100 + 2, 88)}%` }),
+  };
 
   return (
     <div
-      className="absolute z-30 bg-popover border border-border rounded-xl shadow-xl p-3 w-72"
-      style={{ left, top }}
+      className="absolute z-30 bg-popover border border-border rounded-xl shadow-xl p-3 w-72 max-w-full"
+      style={style}
       onMouseDown={e => e.stopPropagation()}
     >
       {/* Header */}
@@ -165,7 +175,11 @@ function RegionPopover({
             </div>
           )}
           {!assetsLoading && filteredAssets.length === 0 && (
-            <p className="text-xs text-muted-foreground px-3 py-2">No matching assets.</p>
+            <p className="text-xs text-muted-foreground px-3 py-2">
+              {(brandAssets ?? []).length === 0
+                ? "No image assets in this brand's library yet."
+                : "No matching assets."}
+            </p>
           )}
           {attachedAssets.length >= 3 && (
             <p className="text-xs text-muted-foreground px-3 py-1.5 border-b border-border bg-muted/30">
@@ -357,7 +371,7 @@ export function PreviewPane({
       {/* Image + hover toolbar — my-auto keeps content centered when
           the pane is taller than the image (overflow-safe vertical centering) */}
       <div className="flex justify-center px-6 my-auto pb-2">
-        <div className="w-full max-w-[560px]">
+        <div className="w-full max-w-[560px] relative">
           <div
             className={cn(
               "relative rounded-xl overflow-hidden shadow-lg border border-border bg-card group",
@@ -460,21 +474,25 @@ export function PreviewPane({
               />
             )}
 
-            {/* Region popover — anchored near the selection */}
-            {pendingRegion && (
-              <RegionPopover
-                region={pendingRegion}
-                onApply={(instruction, assetIds) => {
-                  handleRegionEdit(instruction, assetIds);
-                  setPendingRegion(null);
-                }}
-                onCancel={() => setPendingRegion(null)}
-                brandAssets={brandAssets}
-                assetsLoading={assetsLoading}
-                onLoadAssets={onLoadAssets}
-              />
-            )}
           </div>
+
+          {/* Region popover — rendered OUTSIDE the overflow-hidden image box
+              so it is never clipped and focusing it can't scroll/shift the
+              image. Positioned against this relative wrapper, which matches
+              the image box footprint. */}
+          {pendingRegion && (
+            <RegionPopover
+              region={pendingRegion}
+              onApply={(instruction, assetIds) => {
+                handleRegionEdit(instruction, assetIds);
+                setPendingRegion(null);
+              }}
+              onCancel={() => setPendingRegion(null)}
+              brandAssets={brandAssets}
+              assetsLoading={assetsLoading}
+              onLoadAssets={onLoadAssets}
+            />
+          )}
         </div>
       </div>
 

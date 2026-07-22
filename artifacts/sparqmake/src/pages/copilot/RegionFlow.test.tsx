@@ -236,7 +236,7 @@ describe("drawing and applying a region", () => {
       { x0: 0.2, y0: 0.3, x1: 0.6, y1: 0.8 },
       undefined,
       undefined,
-      [],
+      undefined,
     );
     // Popover closed after apply
     expect(screen.queryByPlaceholderText("What should change here?")).not.toBeInTheDocument();
@@ -256,7 +256,7 @@ describe("drawing and applying a region", () => {
       { x0: 0.2, y0: 0.3, x1: 0.6, y1: 0.8 },
       undefined,
       undefined,
-      [],
+      undefined,
     );
   });
 
