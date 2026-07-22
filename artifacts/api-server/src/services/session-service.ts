@@ -676,6 +676,16 @@ export async function executeTurn(params: {
     await db.update(sessionTurnsTable).set({
       status: wasAborted ? "cancelled" : "error",
       error: wasAborted ? "Turn cancelled" : errMsg,
+      // Persist the original request context so the client's "Try again" can
+      // rebuild a complete payload (a region edit retried without its region
+      // is a guaranteed server error).
+      metadata: {
+        ...(input.instruction ? { instruction: input.instruction } : {}),
+        ...(input.region ? { region: input.region } : {}),
+        ...(input.platform ? { platform: input.platform } : {}),
+        ...(input.assetIds && input.assetIds.length > 0 ? { assetIds: input.assetIds } : {}),
+        ...(input.sourceVariantId ? { sourceVariantId: input.sourceVariantId } : {}),
+      },
       updatedAt: new Date(),
     }).where(eq(sessionTurnsTable.id, copilotTurn.id));
 
@@ -961,8 +971,12 @@ async function executeEditImage(params: {
     variantIds,
     interactionId: imageResult.interactionId,
     costUsd,
-    summary: `Targeted edit: not a re-roll, composition preserved`,
-    metadata: { instruction: input.instruction },
+    summary: `Targeted edit: not a re-roll, composition preserved${attached.names.length > 0 ? ` — used ${attached.names.join(", ")}` : ""}`,
+    metadata: {
+      instruction: input.instruction,
+      ...(input.assetIds && input.assetIds.length > 0 ? { assetIds: input.assetIds } : {}),
+      ...(attached.names.length > 0 ? { attachedAssetNames: attached.names } : {}),
+    },
     modelUsed: COPILOT_MODELS.NANO_BANANA_MODEL,
   };
 }
@@ -1265,6 +1279,10 @@ async function applyQaPass(params: {
   // D1: Optional abort signal — if set, QA corrective image calls are also
   // cancelled when the client disconnects (same as the parent turn).
   signal?: AbortSignal;
+  // Reference images (e.g. attached Asset Library assets) from the parent
+  // edit — passed to the corrective call so a retry can actually use the
+  // same references instead of inventing replacements.
+  slots?: ImageSlot[];
 }): Promise<{ interactionId?: string; qaRetried: boolean; qaIssue?: string }> {
   const { variantIds, instruction, interactionId, sessionId, parentAction, creativeId, brandId, onProgress } = params;
 
@@ -1338,8 +1356,11 @@ async function applyQaPass(params: {
 
   try {
     const corrected = await runImageInteraction({
-      prompt: `Correction needed: ${verdict.correctionHint}. Original instruction: "${instruction}"`,
-      slots: [],
+      prompt:
+        `Correction needed: ${verdict.correctionHint}. Original instruction: "${instruction}". ` +
+        `IMPORTANT: Make the smallest change that fixes the issue. Do not remove, replace, or restyle ` +
+        `anything the original instruction did not target — preserve the existing background, subjects, and composition.`,
+      slots: params.slots ?? [],
       previousInteractionId: interactionId,
       aspectRatio: "1:1",
       // D1: If the client disconnected, the QA corrective call is also cancelled.
@@ -1439,6 +1460,13 @@ async function executeEditImageWithQa(params: {
   onProgress: ProgressCallback;
 }): Promise<ActionResult> {
   const result = await executeEditImage(params);
+  // Re-resolve any attached Asset Library references so a QA correction can
+  // use the same reference images instead of inventing replacements.
+  const attached = await loadAttachedAssetSlots({
+    brandId: params.creative.brandId,
+    instruction: params.input.instruction,
+    assetIds: params.input.assetIds,
+  });
   const qa = await applyQaPass({
     variantIds: result.variantIds,
     instruction: params.input.instruction,
@@ -1449,6 +1477,7 @@ async function executeEditImageWithQa(params: {
     brandId: params.creative.brandId,
     onProgress: params.onProgress,
     signal: params.input.signal,
+    slots: attached.slots,
   });
   return {
     ...result,
@@ -1545,6 +1574,7 @@ async function executeEditRegion(params: {
     brandId: creative.brandId,
     onProgress,
     signal: input.signal,
+    slots: attached.slots,
   });
 
   const costUsd = estimateImagenCost(1) + estimateClaudeCost();
@@ -1553,8 +1583,15 @@ async function executeEditRegion(params: {
     variantIds,
     interactionId: qa.interactionId ?? imageResult.interactionId,
     costUsd,
-    summary: `Region edit applied within [${(region.x0 * 100).toFixed(0)}%,${(region.y0 * 100).toFixed(0)}%] to [${(region.x1 * 100).toFixed(0)}%,${(region.y1 * 100).toFixed(0)}%]`,
-    metadata: { instruction: input.instruction, region, qaRetried: qa.qaRetried, qaIssue: qa.qaIssue },
+    summary: `Region edit applied within [${(region.x0 * 100).toFixed(0)}%,${(region.y0 * 100).toFixed(0)}%] to [${(region.x1 * 100).toFixed(0)}%,${(region.y1 * 100).toFixed(0)}%]${attached.names.length > 0 ? ` using ${attached.names.join(", ")}` : ""}`,
+    metadata: {
+      instruction: input.instruction,
+      region,
+      qaRetried: qa.qaRetried,
+      qaIssue: qa.qaIssue,
+      ...(input.assetIds && input.assetIds.length > 0 ? { assetIds: input.assetIds } : {}),
+      ...(attached.names.length > 0 ? { attachedAssetNames: attached.names } : {}),
+    },
     modelUsed: COPILOT_MODELS.NANO_BANANA_MODEL,
   };
 }

@@ -83,12 +83,14 @@ function reconstructPayload(turn: Turn): {
   instruction: string;
   platform?: string;
   region?: Region;
+  assetIds?: string[];
 } {
   return {
     action: turn.action,
-    instruction: turn.instruction ?? "",
+    instruction: (turn.instruction ?? (turn.metadata?.instruction as string | undefined)) || "",
     platform: turn.metadata?.platform as string | undefined,
     region: turn.metadata?.region as Region | undefined,
+    assetIds: turn.metadata?.assetIds as string[] | undefined,
   };
 }
 
@@ -106,6 +108,14 @@ export function ErrorCard({ turn, runTurn, canWrite, turnPayload }: ErrorCardPro
     );
   }
 
+  // A region edit retried without its region is a guaranteed server error —
+  // if neither the in-memory payload nor the turn metadata has the region,
+  // don't offer a broken retry.
+  const reconstructed = reconstructPayload(turn);
+  const canRetry =
+    turn.action !== "edit_region" ||
+    Boolean(turnPayload?.region || reconstructed.region);
+
   const handleRetry = () => {
     if (turnPayload) {
       void runTurn(
@@ -119,7 +129,7 @@ export function ErrorCard({ turn, runTurn, canWrite, turnPayload }: ErrorCardPro
       );
     } else {
       const p = reconstructPayload(turn);
-      void runTurn(p.action, p.instruction, p.platform, p.region);
+      void runTurn(p.action, p.instruction, p.platform, p.region, undefined, undefined, p.assetIds);
     }
   };
 
@@ -156,7 +166,7 @@ export function ErrorCard({ turn, runTurn, canWrite, turnPayload }: ErrorCardPro
         </div>
       )}
 
-      {canWrite && (
+      {canWrite && canRetry && (
         <button
           onClick={handleRetry}
           className="flex items-center gap-1.5 text-xs text-primary hover:underline"
