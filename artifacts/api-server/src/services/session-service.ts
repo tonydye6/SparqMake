@@ -206,7 +206,9 @@ Return ONLY valid JSON:
   ${platformList.map(p => `"${p}": { "caption": "...", "headline": "..." }`).join(",\n  ")}${twoAlternates && platform ? `,\n  "alternates": [{ "caption": "...", "headline": "..." }, { "caption": "...", "headline": "..." }]` : ""}
 }${alternatesInstruction}
 
-Each headline: punchy, platform-appropriate, 3-8 words. No em dashes.`;
+Each headline: punchy, platform-appropriate, 3-8 words. No em dashes.
+
+You must ALWAYS respond with the JSON object above — never refuse or explain. If the image contains logos, branding, or recognizable marks, simply write captions that do not name them.`;
 
   const imageData = imageBuffer.toString("base64");
   // Stored mime types can lie (e.g. a .png filename holding JPEG bytes from the
@@ -260,6 +262,50 @@ Each headline: punchy, platform-appropriate, 3-8 words. No em dashes.`;
     : undefined;
 
   return { captions, alternates };
+}
+
+/**
+ * Caption rewrite that never sinks a successful image edit. If the caption
+ * model refuses or returns unparseable output, fall back to the captions of
+ * the current active variant's sibling set (same creative + image), or empty
+ * captions as a last resort, and surface a soft warning via onProgress.
+ */
+async function rewriteCaptionsSafe(params: {
+  brandId: string;
+  creativeId: string;
+  briefText: string;
+  imageBuffer: Buffer;
+  imageMimeType: string;
+  intent?: string | null;
+  activeVariantId: string | null;
+  onProgress: ProgressCallback;
+}): Promise<CaptionResult> {
+  const { brandId, creativeId, briefText, imageBuffer, imageMimeType, intent, activeVariantId, onProgress } = params;
+  try {
+    const { captions } = await buildImageAwareCaption({ brandId, briefText, imageBuffer, imageMimeType, intent });
+    onProgress({ type: "progress", step: "captions", message: "Captions updated", done: true });
+    return captions;
+  } catch (err) {
+    console.warn(`[copilot] caption rewrite failed, keeping previous captions: ${err instanceof Error ? err.message : String(err)}`);
+    onProgress({ type: "progress", step: "captions", message: "Couldn't rewrite captions for this image — keeping the previous ones", done: true });
+    const defaults = { caption: "", headline: "" };
+    const empty = Object.fromEntries(
+      Object.keys(PLATFORM_CONFIGS).map(p => [p, { ...defaults }]),
+    ) as unknown as CaptionResult;
+    if (!activeVariantId) return empty;
+    const [active] = await db.select().from(creativeVariantsTable).where(eq(creativeVariantsTable.id, activeVariantId));
+    if (!active?.rawImageUrl) return empty;
+    const siblings = await db.select().from(creativeVariantsTable).where(and(
+      eq(creativeVariantsTable.creativeId, creativeId),
+      eq(creativeVariantsTable.rawImageUrl, active.rawImageUrl),
+    ));
+    return Object.fromEntries(
+      Object.keys(PLATFORM_CONFIGS).map(p => {
+        const sib = siblings.find(v => v.platform === p);
+        return [p, { caption: sib?.caption || "", headline: sib?.headlineText || "" }];
+      }),
+    ) as unknown as CaptionResult;
+  }
 }
 
 async function saveTurnVariants(params: {
@@ -887,15 +933,16 @@ async function executeEditImage(params: {
   onProgress({ type: "progress", step: "image", message: "Edit applied", done: true });
   onProgress({ type: "progress", step: "captions", message: "Rewriting captions against edited image..." });
 
-  const { captions } = await buildImageAwareCaption({
+  const captions = await rewriteCaptionsSafe({
     brandId: creative.brandId,
+    creativeId: creative.id,
     briefText: creative.briefText || "",
     imageBuffer: imageResult.imageBuffer,
     imageMimeType: imageResult.mimeType,
     intent: creative.intent,
+    activeVariantId: session.activeVariantId,
+    onProgress,
   });
-
-  onProgress({ type: "progress", step: "captions", message: "Captions updated", done: true });
 
   const activeVariantId = session.activeVariantId;
   const variantIds = await saveTurnVariants({
@@ -1466,15 +1513,16 @@ async function executeEditRegion(params: {
   onProgress({ type: "progress", step: "image", message: "Region edit applied", done: true });
   onProgress({ type: "progress", step: "captions", message: "Updating captions..." });
 
-  const { captions } = await buildImageAwareCaption({
+  const captions = await rewriteCaptionsSafe({
     brandId: creative.brandId,
+    creativeId: creative.id,
     briefText: input.instruction || creative.briefText || "",
     imageBuffer: imageResult.imageBuffer,
     imageMimeType: imageResult.mimeType,
     intent: creative.intent,
+    activeVariantId: session.activeVariantId,
+    onProgress,
   });
-
-  onProgress({ type: "progress", step: "captions", message: "Captions updated", done: true });
 
   const activeVariantId = session.activeVariantId;
   const variantIds = await saveTurnVariants({
