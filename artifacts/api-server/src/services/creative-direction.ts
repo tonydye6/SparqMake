@@ -384,9 +384,37 @@ export function parseDirectorOutput(
   }
 }
 
+/**
+ * Gemini structured-output schema mirroring directorOutputSchema. Passing
+ * responseSchema makes the API constrain decoding to this shape instead of
+ * merely hinting via responseMimeType, which gemini-3.5-flash was observed
+ * ignoring in live runs (short non-JSON text → prose fallback → no
+ * selections).
+ */
+const DIRECTOR_RESPONSE_SCHEMA = {
+  type: "object",
+  properties: {
+    prompt: { type: "string" },
+    assetSelections: {
+      type: "array",
+      maxItems: 12,
+      items: {
+        type: "object",
+        properties: {
+          assetId: { type: "string" },
+          role: { type: "string", enum: ["subject", "style", "object"] },
+        },
+        required: ["assetId", "role"],
+      },
+    },
+    aspectRatio: { type: "string", enum: ["1:1", "4:5", "9:16", "16:9"] },
+  },
+  required: ["prompt", "assetSelections", "aspectRatio"],
+} as const;
+
 const DIRECTOR_SYSTEM = `You are the creative director for an AI social-content studio. Given a brief, the brand's constraints, and a catalog of the brand's real asset library, produce visual direction for one social image.
 
-Return ONLY valid JSON, no markdown fences:
+Respond with ONLY a single JSON object — no preamble, no commentary, no markdown fences, nothing before or after the JSON:
 {
   "prompt": "4-7 sentences of concrete visual direction: composition, subject framing, lighting, mood, color treatment. Name the selected assets and how each anchors the image. Do not describe caption text; headlines are overlaid separately.",
   "assetSelections": [{ "assetId": "<id from the catalog>", "role": "subject" | "style" | "object" }],
@@ -425,25 +453,59 @@ export async function buildCreativeDirection(params: {
       : `ASSET CATALOG: empty — this brand has no analyzed library assets yet; select nothing.`,
   ].filter(Boolean).join("\n\n");
 
-  const response = await geminiAi.models.generateContent({
-    model: COPILOT_MODELS.ART_DIRECTION_MODEL,
-    contents: [{ role: "user", parts: [{ text: context }] }],
-    config: {
-      systemInstruction: DIRECTOR_SYSTEM,
-      maxOutputTokens: 1024,
-      temperature: 0.7,
-      responseMimeType: "application/json",
-    },
-  });
+  const callDirector = async (temperature: number): Promise<string> => {
+    const response = await geminiAi.models.generateContent({
+      model: COPILOT_MODELS.ART_DIRECTION_MODEL,
+      contents: [{ role: "user", parts: [{ text: context }] }],
+      config: {
+        systemInstruction: DIRECTOR_SYSTEM,
+        // gemini-3.5-flash is a thinking model: its reasoning tokens count
+        // against maxOutputTokens. With a 40-line catalog the old 1024 budget
+        // was consumed by thoughts, truncating the JSON mid-object (the real
+        // root cause of the live "110 chars of non-JSON" fallbacks).
+        maxOutputTokens: 8192,
+        temperature,
+        responseMimeType: "application/json",
+        responseSchema: DIRECTOR_RESPONSE_SCHEMA,
+      },
+    });
+    return response.text ?? "";
+  };
 
-  const text = response.text;
-  if (!text) throw new Error("No creative direction from model");
+  const validIds = new Set(catalog.byId.keys());
 
-  const direction = parseDirectorOutput(text, new Set(catalog.byId.keys()));
+  let text = await callDirector(0.7);
+  let direction = text ? parseDirectorOutput(text, validIds) : null;
+
+  // Retry once at temperature 0 when the first attempt produced no text or
+  // unparseable output. Live runs showed gemini-3.5-flash occasionally
+  // emitting short non-JSON text despite responseMimeType; a deterministic
+  // retry recovers structured selections instead of silently degrading.
+  if (!direction || direction.usedFallback) {
+    logger.warn(
+      { brandId: brand.id, chars: text.length },
+      "Creative director output was not valid JSON — retrying once at temperature 0",
+    );
+    const retryText = await callDirector(0);
+    if (retryText) {
+      const retryDirection = parseDirectorOutput(retryText, validIds);
+      if (!retryDirection.usedFallback) {
+        return retryDirection;
+      }
+      // Prefer whichever attempt produced usable prose for the fallback.
+      if (!direction || !direction.prompt) {
+        text = retryText;
+        direction = retryDirection;
+      }
+    }
+  }
+
+  if (!direction) throw new Error("No creative direction from model");
+
   if (direction.usedFallback) {
     logger.warn(
       { brandId: brand.id, chars: text.length },
-      "Creative director output was not valid JSON — falling back to prose-only direction",
+      "Creative director output was not valid JSON after retry — falling back to prose-only direction",
     );
   }
   return direction;
