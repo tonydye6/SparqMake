@@ -7,6 +7,18 @@ export const AI_MODELS = {
 
 // Co-pilot Studio model pins — env-overridable; defaults derive from AI_MODELS so there
 // is one source of truth for each model family.
+//
+// REGISTRY MAP (two config keys can address the same physical model with
+// SEPARATE env overrides — overriding one does not move the other):
+//   image:  AI_MODELS.GEMINI_FLASH_IMAGE (env GEMINI_IMAGE_MODEL) drives the batch
+//           path (imagen.ts: generate/outpaint/cutout/headline); COPILOT_MODELS.
+//           NANO_BANANA_MODEL (env NANO_BANANA_MODEL) drives Studio turns.
+//   video:  AI_MODELS.VEO_VIDEO (env VEO_MODEL) drives batch video; COPILOT_MODELS.
+//           OMNI_VIDEO_MODEL (env OMNI_VIDEO_MODEL) drives Studio video turns.
+//   text:   AI_MODELS.GEMINI_FLASH_TEXT (env GEMINI_TEXT_MODEL) drives analysis and
+//           design-spec; ART_DIRECTION_MODEL / QA_MODEL pin the Studio director + QA.
+// Naming caveat: GEMINI_FLASH_IMAGE currently defaults to a Pro-tier image model
+// and VEO_VIDEO to an Omni model — the constant names are historical.
 // All Gemini targets require direct GEMINI_API_KEY (proxy does not support them).
 // NANO_BANANA_MODEL / OMNI_VIDEO_MODEL: must be called via the Interactions API
 // (ai.interactions.create), NOT ai.models.generateContent.

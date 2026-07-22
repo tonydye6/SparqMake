@@ -38,6 +38,7 @@ const runImageInteractionMock = vi.fn().mockResolvedValue({
 vi.mock("./interactions-client.js", () => ({
   runImageInteraction: (...args: unknown[]) => runImageInteractionMock(...args),
   runVideoInteraction: vi.fn(),
+  typedRefsEnabled: vi.fn().mockReturnValue(false),
 }));
 
 vi.mock("./context-assembly.js", () => ({

@@ -25,7 +25,23 @@ export interface ImageSlot {
   mimeType: string;
   slot: "character" | "object" | "style";
   description?: string;
+  // Asset Library id when the slot came from a library asset — used for slot
+  // dedupe/budgeting and the turn-metadata paper trail. Never sent to the model.
+  assetId?: string;
 }
+
+/**
+ * Typed reference slots are gated behind INTERACTIONS_TYPED_REFS=on until the
+ * request shape is verified live (scripts/verify-interactions-capabilities.ts).
+ * When off (default), references are sent as untyped inline image blocks with
+ * prose role labels — the shipped behavior.
+ */
+export function typedRefsEnabled(): boolean {
+  return process.env.INTERACTIONS_TYPED_REFS === "on";
+}
+
+/** Reference budget: 6 untyped (shipped behavior), 10 when typed refs are verified on. */
+export const MAX_TYPED_REFERENCES = 10;
 
 export interface InteractionImageResult {
   interactionId: string;
@@ -45,7 +61,7 @@ interface RawInteractionResponse {
 
 type ContentBlock =
   | { type: "text"; text: string }
-  | { type: "image"; data: string; mime_type: string };
+  | { type: "image"; data: string; mime_type: string; reference_type?: "character" | "object" | "style" };
 
 /**
  * Build the `input` content block array for an image-generation interaction.
@@ -76,10 +92,15 @@ function buildImageInput(prompt: string, slots: ImageSlot[]): ContentBlock[] | s
     text: `${prompt}\n\nReference images provided: ${slotDescriptions}`,
   };
 
+  // Typed reference roles (character-consistency / object / style) are only
+  // sent when the flag confirms the live API accepts the field; otherwise the
+  // role reaches the model solely through the prose labels above.
+  const withTypedRefs = typedRefsEnabled();
   const imageBlocks: ContentBlock[] = slots.map((s) => ({
     type: "image",
     data: s.imageBuffer.toString("base64"),
     mime_type: s.mimeType || "image/png",
+    ...(withTypedRefs ? { reference_type: s.slot } : {}),
   }));
 
   return [textBlock, ...imageBlocks];

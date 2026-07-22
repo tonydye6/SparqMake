@@ -54,6 +54,16 @@ function assetSearchText(asset: Asset): string {
   ].join(" ");
 }
 
+/**
+ * Tokenize a brief into the token+stem set scoreAssetAgainstBrief expects.
+ * Exported for the Co-pilot creative director's asset catalog, which ranks
+ * the whole library with the same scoring as this module's matcher.
+ */
+export function buildBriefTokenSet(briefText: string): Set<string> {
+  const raw = tokenize(briefText);
+  return new Set<string>([...raw, ...raw.map(stem)]);
+}
+
 export function scoreAssetAgainstBrief(asset: Asset, briefTokens: Set<string>): { score: number; matchedTerms: string[] } {
   const matched = new Set<string>();
   let score = 0;
