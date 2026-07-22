@@ -629,7 +629,7 @@ export function SessionView({ sessionId, onBack, autoDraftBrief }: SessionViewPr
                   </div>
                 )}
 
-                {turns.map(turn => (
+                {turns.map((turn, idx) => (
                   <TurnCard
                     key={turn.id}
                     turn={turn}
@@ -639,6 +639,10 @@ export function SessionView({ sessionId, onBack, autoDraftBrief }: SessionViewPr
                     canWrite={canWrite}
                     runTurn={runTurn}
                     turnPayload={turnPayloadsRef.current.get(turn.id) ?? null}
+                    prevUserTurn={
+                      turns.slice(0, idx).reverse().find(t => t.role === "user") ?? null
+                    }
+                    isRunning={state.running}
                     onFillComposer={fillComposer}
                     onPickTake={variantId =>
                       canWrite && void pickCompareTake(turn.id, variantId)

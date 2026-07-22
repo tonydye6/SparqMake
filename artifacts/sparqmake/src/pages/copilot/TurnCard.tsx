@@ -9,7 +9,7 @@
  *   - "Stopped" for cancelled turns
  * Spec §Phase C
  */
-import { Check, Bot, Video, Layers, Calendar, Clock } from "lucide-react";
+import { Check, Bot, Video, Layers, Calendar, Clock, RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Turn, Variant, FanOutPlatformCard, RunTurnFn, Region, TurnPayload } from "./types";
 import { ACTION_LABELS } from "./types";
@@ -26,6 +26,8 @@ interface TurnCardProps {
   canWrite: boolean;
   runTurn: RunTurnFn;
   turnPayload?: TurnPayload | null;
+  prevUserTurn?: Turn | null;
+  isRunning: boolean;
   onFillComposer: (text: string) => void;
   onPickTake: (variantId: string) => void;
   onSchedule: (
@@ -56,6 +58,8 @@ export function TurnCard({
   canWrite,
   runTurn,
   turnPayload,
+  prevUserTurn,
+  isRunning,
   onFillComposer,
   onPickTake,
   onSchedule,
@@ -161,7 +165,53 @@ export function TurnCard({
 
           {/* Cancelled */}
           {turn.status === "cancelled" && (
-            <p className="text-xs text-muted-foreground italic">Stopped</p>
+            <div className="space-y-1.5">
+              <p className="text-xs text-muted-foreground italic">Stopped</p>
+              {canWrite && (
+                <button
+                  onClick={() => {
+                    if (isRunning) return;
+                    if (turnPayload) {
+                      void runTurn(
+                        turnPayload.action,
+                        turnPayload.instruction,
+                        turnPayload.platform,
+                        turnPayload.region,
+                        undefined,
+                        turnPayload.sourceVariantId,
+                        turnPayload.assetIds,
+                      );
+                      return;
+                    }
+                    const payload = (prevUserTurn?.instructionPayload ?? {}) as {
+                      platform?: string;
+                      region?: Region | null;
+                      schedules?: Array<{
+                        variantId: string; platform: string; scheduledAt: string;
+                      }>;
+                    };
+                    void runTurn(
+                      prevUserTurn?.action ?? turn.action,
+                      prevUserTurn?.instruction ?? turn.instruction ?? "",
+                      payload.platform,
+                      payload.region,
+                      payload.schedules,
+                    );
+                  }}
+                  disabled={isRunning}
+                  className={cn(
+                    "flex items-center gap-1.5 text-xs",
+                    isRunning
+                      ? "text-muted-foreground cursor-not-allowed"
+                      : "text-primary hover:underline",
+                  )}
+                  data-testid={`button-retry-turn-${turn.id}`}
+                >
+                  <RotateCcw size={11} />
+                  Retry
+                </button>
+              )}
+            </div>
           )}
 
           {/* Error */}

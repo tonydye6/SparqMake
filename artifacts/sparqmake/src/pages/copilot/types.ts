@@ -37,6 +37,7 @@ export interface Turn {
   durationMs: number | null;
   error: string | null;
   metadata: Record<string, unknown> | null;
+  instructionPayload?: Record<string, unknown> | null;
   variantUrls?: string[];
   createdAt: string;
 }
