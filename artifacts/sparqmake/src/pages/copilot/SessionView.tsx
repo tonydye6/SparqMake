@@ -531,6 +531,7 @@ export function SessionView({ sessionId, onBack, autoDraftBrief }: SessionViewPr
     onStop: handleStop,
     onScrollToFanOut: scrollToFanOut,
     hasFanOutTurn,
+    sessionId,
   };
 
   return (

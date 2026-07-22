@@ -49,6 +49,8 @@ interface ComposerProps {
   hasFanOutTurn: boolean;
   /** Compact single-line variant for the floating collapsed composer */
   compact?: boolean;
+  /** Reset key: closes pickers and clears filters when the session changes */
+  sessionId?: string;
 }
 
 export function Composer({
@@ -69,6 +71,7 @@ export function Composer({
   onScrollToFanOut,
   hasFanOutTurn,
   compact = false,
+  sessionId,
 }: ComposerProps) {
   const [showCommands, setShowCommands] = useState(false);
   const [commandFilter, setCommandFilter] = useState("");
@@ -91,6 +94,14 @@ export function Composer({
 
   // Reset selected index when filter changes
   useEffect(() => { setSelectedCmdIndex(0); }, [commandFilter]);
+
+  // Close pickers and clear filters when switching sessions
+  useEffect(() => {
+    setShowAssets(false);
+    setAtFilter("");
+    setShowCommands(false);
+    setCommandFilter("");
+  }, [sessionId]);
 
   const placeholder = regionMode
     ? "Waiting for you to draw a region on the image..."
