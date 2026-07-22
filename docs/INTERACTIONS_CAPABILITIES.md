@@ -1,12 +1,12 @@
 # Interactions API Capabilities (live-verified)
 
-Verified: 2026-07-22T15:50:45.260Z · Model: gemini-3-pro-image
+Verified: 2026-07-22T16:49:06.182Z · Model: gemini-3-pro-image
 
 ## Baseline untyped inline reference
 
 **Supported: YES**
 
-interaction id v1_ChcwLVpnYXJDX0hvbUQtOFlQcXJpb3NBRRIXMC1aZ2FyQ19Ib21ELThZUHFyaW9zQUU
+interaction id v1_ChdnUFJnYXYzSkRyMkFqckVQMTZ1RzJBNBIXZ1BSZ2F2M0pEcjJBanJFUDE2dUcyQTQ
 
 ## Typed reference roles (reference_type on image blocks)
 
