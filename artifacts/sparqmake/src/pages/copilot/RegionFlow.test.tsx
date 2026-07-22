@@ -90,16 +90,15 @@ function Harness() {
   const [attachedAssets, setAttachedAssets] = useState<AssetItem[]>([]);
 
   // Same shape as SessionView.handleRegionEdit
-  const handleRegionEdit = useCallback((instruction: string) => {
+  const handleRegionEdit = useCallback((instruction: string, assetIds: string[]) => {
     if (!instruction.trim() || !pendingRegion) return;
     void runTurnMock(
       "edit_region", instruction, undefined, pendingRegion,
-      undefined, undefined, attachedAssets.map(a => a.id),
+      undefined, undefined, assetIds.length > 0 ? assetIds : undefined,
     );
-    setAttachedAssets([]);
     setPendingRegion(null);
     setRegionMode(false);
-  }, [pendingRegion, attachedAssets]);
+  }, [pendingRegion]);
 
   return (
     <>
@@ -121,6 +120,9 @@ function Harness() {
         handleRegionEdit={handleRegionEdit}
         attachedAssets={attachedAssets}
         onFillComposer={onFillComposerMock}
+        brandAssets={null}
+        assetsLoading={false}
+        onLoadAssets={onLoadAssetsMock}
       />
       <Composer
         session={baseSession}

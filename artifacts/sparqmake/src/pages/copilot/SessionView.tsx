@@ -366,16 +366,15 @@ export function SessionView({ sessionId, onBack, autoDraftBrief }: SessionViewPr
     setAttachedAssets([]);
   }, [state.composerText, state.running, state.session, runTurn, attachedAssets]);
 
-  const handleRegionEdit = useCallback((instruction: string) => {
+  const handleRegionEdit = useCallback((instruction: string, assetIds: string[]) => {
     if (!instruction.trim() || !pendingRegion) return;
     void runTurn(
       "edit_region", instruction, undefined, pendingRegion,
-      undefined, undefined, attachedAssets.map(a => a.id),
+      undefined, undefined, assetIds.length > 0 ? assetIds : undefined,
     );
-    setAttachedAssets([]);
     setPendingRegion(null);
     setRegionMode(false);
-  }, [pendingRegion, runTurn, attachedAssets]);
+  }, [pendingRegion, runTurn]);
 
   const handleStop = useCallback(() => { turnAbortRef.current?.abort(); }, []);
 
@@ -708,6 +707,9 @@ export function SessionView({ sessionId, onBack, autoDraftBrief }: SessionViewPr
           handleRegionEdit={handleRegionEdit}
           attachedAssets={attachedAssets}
           onFillComposer={fillComposer}
+          brandAssets={brandAssets}
+          assetsLoading={assetsLoading}
+          onLoadAssets={loadAssets}
         />
 
         {/* Floating composer when thread is collapsed (writers only) */}

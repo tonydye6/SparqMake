@@ -4,10 +4,10 @@
  * Spec §Phase D
  */
 import { useState, useRef, useEffect } from "react";
-import { Crop, Download, History, MessageSquare } from "lucide-react";
+import { Crop, Download, History, MessageSquare, Paperclip, Check, Loader2 } from "lucide-react";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { SessionState, SessionAction, Region, RunTurnFn, AssetItem } from "./types";
+import type { SessionState, SessionAction, Region, RunTurnFn, AssetItem, BrandAsset } from "./types";
 import { API_BASE } from "./types";
 import { CaptionCard } from "./CaptionCard";
 
@@ -26,9 +26,12 @@ interface PreviewPaneProps {
   setDragCurrent: (v: { x: number; y: number } | null) => void;
   pickHistoryVariant: (variantId: string) => Promise<void>;
   runTurn: RunTurnFn;
-  handleRegionEdit: (instruction: string) => void;
+  handleRegionEdit: (instruction: string, assetIds: string[]) => void;
   attachedAssets: AssetItem[];
   onFillComposer: (text: string) => void;
+  brandAssets: BrandAsset[] | null;
+  assetsLoading: boolean;
+  onLoadAssets: () => Promise<void>;
 }
 
 /** Floating popover that appears near a drawn region selection. */
@@ -36,15 +39,75 @@ function RegionPopover({
   region,
   onApply,
   onCancel,
+  brandAssets,
+  assetsLoading,
+  onLoadAssets,
 }: {
   region: Region;
-  onApply: (instruction: string) => void;
+  onApply: (instruction: string, assetIds: string[]) => void;
   onCancel: () => void;
+  brandAssets: BrandAsset[] | null;
+  assetsLoading: boolean;
+  onLoadAssets: () => Promise<void>;
 }) {
   const [instruction, setInstruction] = useState("");
+  const [attachedAssets, setAttachedAssets] = useState<AssetItem[]>([]);
+  const [showAssets, setShowAssets] = useState(false);
+  const [atFilter, setAtFilter] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const assetsPickerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { inputRef.current?.focus(); }, []);
+
+  useEffect(() => {
+    const handle = (e: MouseEvent) => {
+      if (assetsPickerRef.current && !assetsPickerRef.current.contains(e.target as Node))
+        setShowAssets(false);
+    };
+    document.addEventListener("mousedown", handle);
+    return () => document.removeEventListener("mousedown", handle);
+  }, []);
+
+  const filteredAssets = (brandAssets ?? []).filter(
+    a => !atFilter || a.name.toLowerCase().includes(atFilter),
+  );
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setInstruction(val);
+    const cursor = e.target.selectionStart ?? val.length;
+    const textBefore = val.slice(0, cursor);
+    const atMatch = textBefore.match(/(^|\s)(@\w*)$/);
+    if (atMatch) {
+      setAtFilter(atMatch[2]!.slice(1).toLowerCase());
+      setShowAssets(true);
+      void onLoadAssets();
+    } else {
+      setShowAssets(false);
+    }
+  };
+
+  const pickAsset = (asset: AssetItem) => {
+    setShowAssets(false);
+    setAttachedAssets(prev => {
+      if (prev.some(a => a.id === asset.id)) return prev;
+      if (prev.length >= 3) return prev;
+      return [...prev, asset];
+    });
+    const cleaned = instruction
+      .replace(/(^|\s)(@\w*)$/, (_, space: string) => space)
+      .trimEnd();
+    setInstruction(cleaned);
+    inputRef.current?.focus();
+  };
+
+  const removeAsset = (id: string) =>
+    setAttachedAssets(prev => prev.filter(a => a.id !== id));
+
+  const doApply = () => {
+    if (!instruction.trim()) return;
+    onApply(instruction.trim(), attachedAssets.map(a => a.id));
+  };
 
   // Anchor the popover near the bottom-right of the selection box
   const left = `${Math.min(region.x1 * 100, 75)}%`;
@@ -52,31 +115,141 @@ function RegionPopover({
 
   return (
     <div
-      className="absolute z-30 bg-popover border border-border rounded-xl shadow-xl p-3 w-64"
+      className="absolute z-30 bg-popover border border-border rounded-xl shadow-xl p-3 w-72"
       style={{ left, top }}
       onMouseDown={e => e.stopPropagation()}
     >
+      {/* Header */}
       <div className="flex items-center justify-between mb-2">
         <span className="text-xs font-medium text-foreground">Edit region</span>
         <button onClick={onCancel} className="text-muted-foreground hover:text-foreground">
           <X size={12} />
         </button>
       </div>
-      <input
-        ref={inputRef}
-        type="text"
-        placeholder="What should change here?"
-        value={instruction}
-        onChange={e => setInstruction(e.target.value)}
-        onKeyDown={e => {
-          if (e.key === "Enter" && instruction.trim()) {
+
+      {/* Attached asset chips */}
+      {attachedAssets.length > 0 && (
+        <div className="flex flex-wrap gap-1 mb-2">
+          {attachedAssets.map(a => (
+            <span
+              key={a.id}
+              className="inline-flex items-center gap-1 bg-primary/10 text-primary text-xs rounded-full pl-1 pr-1.5 py-0.5"
+            >
+              {a.thumbnailUrl ? (
+                <img
+                  src={`${API_BASE}${a.thumbnailUrl}`}
+                  alt=""
+                  className="w-4 h-4 rounded-full object-cover"
+                />
+              ) : (
+                <Paperclip size={10} />
+              )}
+              <span className="max-w-[80px] truncate">{a.name}</span>
+              <button onClick={() => removeAsset(a.id)} className="hover:text-foreground">
+                <X size={10} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Asset picker dropdown */}
+      {showAssets && (
+        <div
+          ref={assetsPickerRef}
+          className="mb-2 bg-background border border-border rounded-lg shadow-lg overflow-auto max-h-36"
+        >
+          {assetsLoading && (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground px-3 py-2">
+              <Loader2 size={12} className="animate-spin" /> Loading assets...
+            </div>
+          )}
+          {!assetsLoading && filteredAssets.length === 0 && (
+            <p className="text-xs text-muted-foreground px-3 py-2">No matching assets.</p>
+          )}
+          {attachedAssets.length >= 3 && (
+            <p className="text-xs text-muted-foreground px-3 py-1.5 border-b border-border bg-muted/30">
+              Up to 3 assets per instruction
+            </p>
+          )}
+          {!assetsLoading &&
+            filteredAssets.map(a => {
+              const selected = attachedAssets.some(s => s.id === a.id);
+              return (
+                <button
+                  key={a.id}
+                  onMouseDown={e => {
+                    e.preventDefault();
+                    if (attachedAssets.length < 3 || selected) pickAsset(a);
+                  }}
+                  className={cn(
+                    "w-full flex items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors",
+                    selected ? "bg-primary/10 text-primary" : "hover:bg-muted",
+                  )}
+                >
+                  {a.thumbnailUrl ? (
+                    <img
+                      src={`${API_BASE}${a.thumbnailUrl}`}
+                      alt=""
+                      className="w-6 h-6 rounded object-cover shrink-0"
+                    />
+                  ) : (
+                    <div className="w-6 h-6 rounded bg-muted flex items-center justify-center shrink-0">
+                      <Paperclip size={10} />
+                    </div>
+                  )}
+                  <span className="flex-1 truncate">{a.name}</span>
+                  {selected && <Check size={11} className="shrink-0 text-primary" />}
+                </button>
+              );
+            })}
+        </div>
+      )}
+
+      {/* Input row */}
+      <div className="flex items-center gap-1.5 mb-2">
+        <button
+          onMouseDown={e => {
             e.preventDefault();
-            onApply(instruction.trim());
-          }
-          if (e.key === "Escape") onCancel();
-        }}
-        className="w-full text-xs border border-border rounded-lg px-2.5 py-1.5 bg-background focus:outline-none focus:ring-1 focus:ring-primary mb-2"
-      />
+            void onLoadAssets();
+            setShowAssets(o => !o);
+          }}
+          className={cn(
+            "shrink-0 w-7 h-7 rounded-lg flex items-center justify-center transition-colors",
+            showAssets || attachedAssets.length > 0
+              ? "bg-primary/10 text-primary border border-primary/30"
+              : "border border-border text-muted-foreground hover:text-foreground hover:bg-muted",
+          )}
+          title="Attach library asset (@)"
+        >
+          <Paperclip size={12} />
+        </button>
+        <input
+          ref={inputRef}
+          type="text"
+          placeholder="What should change here?"
+          value={instruction}
+          onChange={handleChange}
+          onKeyDown={e => {
+            if (e.key === "Enter" && instruction.trim()) {
+              e.preventDefault();
+              doApply();
+            }
+            if (e.key === "Escape") {
+              if (showAssets) { setShowAssets(false); return; }
+              onCancel();
+            }
+          }}
+          className="flex-1 text-xs border border-border rounded-lg px-2.5 py-1.5 bg-background focus:outline-none focus:ring-1 focus:ring-primary"
+        />
+      </div>
+
+      {/* Hint */}
+      {attachedAssets.length === 0 && (
+        <p className="text-[10px] text-muted-foreground/60 mb-2">@ to attach library images</p>
+      )}
+
+      {/* Actions */}
       <div className="flex gap-1.5 justify-end">
         <button
           onClick={onCancel}
@@ -85,7 +258,7 @@ function RegionPopover({
           Cancel
         </button>
         <button
-          onClick={() => { if (instruction.trim()) onApply(instruction.trim()); }}
+          onClick={doApply}
           disabled={!instruction.trim()}
           className="text-xs bg-primary text-primary-foreground px-2.5 py-1 rounded-lg disabled:opacity-40 hover:bg-primary/90 transition-colors"
         >
@@ -113,6 +286,9 @@ export function PreviewPane({
   runTurn,
   handleRegionEdit,
   onFillComposer,
+  brandAssets,
+  assetsLoading,
+  onLoadAssets,
 }: PreviewPaneProps) {
   const { activeVariant, historyVariants, allVariants, captionAlternates, running } = state;
 
@@ -288,11 +464,14 @@ export function PreviewPane({
             {pendingRegion && (
               <RegionPopover
                 region={pendingRegion}
-                onApply={instruction => {
-                  handleRegionEdit(instruction);
+                onApply={(instruction, assetIds) => {
+                  handleRegionEdit(instruction, assetIds);
                   setPendingRegion(null);
                 }}
                 onCancel={() => setPendingRegion(null)}
+                brandAssets={brandAssets}
+                assetsLoading={assetsLoading}
+                onLoadAssets={onLoadAssets}
               />
             )}
           </div>
