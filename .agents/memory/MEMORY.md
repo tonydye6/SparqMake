@@ -24,6 +24,7 @@
 - [Migration slot collision](migration-slot-collision.md) — parallel tasks sharing a drizzle index: renumber ours to +1, merge snapshot, manually journal locally-applied SQL (42P07 fix).
 - [Co-pilot Studio as default route](copilot-default-route.md) — /copilot swapped to /; old StudioNext lives at /studio; /copilot redirects to /.
 - [SSE disconnect detection](sse-disconnect-detection.md) — req 'close' fires on body-received, not disconnect; use res.on('close') + writableEnded guard or aborts never fire.
+- [genai SDK real abort](genai-sdk-abort.md) — racing an abortPromise doesn't stop the HTTP call; pass `{ fetchOptions: { signal } }` as the 2nd arg to ai.interactions.create for true ~256ms cancellation.
 - [Co-pilot integration tests](copilot-integration-tests.md) — `*.integration.test.ts` use the real dev DB with mocked model boundaries; seed/cleanup pattern + ai-config mock drift trap.
 - [Copilot attached-asset slots](copilot-asset-slots.md) — edit turns send library assets as image slots (picker ids or name auto-match); brand-scoped, image-only, max 3.
 - [Image mime sniffing](image-mime-sniffing.md) — Anthropic 400s on declared-vs-actual image type mismatch; always magic-byte sniff buffers sent to model APIs (saved .png files can hold JPEG bytes).

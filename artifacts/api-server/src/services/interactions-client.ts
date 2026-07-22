@@ -230,9 +230,13 @@ export async function runVideoInteraction(params: {
     "Running video interaction",
   );
 
-  // D1: Thread AbortSignal and apply timeout.
+  // D1: Thread AbortSignal into the SDK request (fetchOptions.signal) so the
+  // underlying HTTP call is truly cancelled (~256ms, live-verified in
+  // docs/INTERACTIONS_CAPABILITIES.md), not just abandoned. The abortPromise
+  // race remains as a belt-and-suspenders fallback with a clear error message.
   const createPromise = ai.interactions.create(
     requestBody as Parameters<typeof ai.interactions.create>[0],
+    signal ? { fetchOptions: { signal } } : undefined,
   );
   const abortPromise = new Promise<never>((_, reject) => {
     signal?.addEventListener("abort", () => {
@@ -315,9 +319,13 @@ export async function runImageInteraction(params: {
     "Running image interaction",
   );
 
-  // D1: Thread AbortSignal and apply timeout.
+  // D1: Thread AbortSignal into the SDK request (fetchOptions.signal) so the
+  // underlying HTTP call is truly cancelled (~256ms, live-verified in
+  // docs/INTERACTIONS_CAPABILITIES.md), not just abandoned. The abortPromise
+  // race remains as a belt-and-suspenders fallback with a clear error message.
   const createPromise = ai.interactions.create(
     requestBody as Parameters<typeof ai.interactions.create>[0],
+    signal ? { fetchOptions: { signal } } : undefined,
   );
   const abortPromise = new Promise<never>((_, reject) => {
     signal?.addEventListener("abort", () => {
