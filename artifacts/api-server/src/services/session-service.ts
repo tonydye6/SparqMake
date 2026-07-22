@@ -10,9 +10,14 @@
 import { db, studioSessionsTable, sessionTurnsTable, creativesTable, creativeVariantsTable, costLogsTable, brandsTable, assetsTable, styleProfilesTable, designerPersonasTable, calendarEntriesTable, socialAccountsTable } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
 import { sql } from "drizzle-orm";
-import { runImageInteraction, runVideoInteraction, type ImageSlot } from "./interactions-client.js";
-import { generateCaptions } from "./claude.js";
-import { assembleContext, resolveStyleProfile, resolveDesignerPersona } from "./context-assembly.js";
+import { runImageInteraction, runVideoInteraction, typedRefsEnabled, MAX_TYPED_REFERENCES, type ImageSlot } from "./interactions-client.js";
+import { resolveStyleProfile, resolveDesignerPersona } from "./context-assembly.js";
+import {
+  buildSessionStyleContract, wrapEditInstruction, slotTypeForAsset, slotDescriptionForAsset,
+  mergeReferenceSlots, buildAssetCatalog, buildCreativeDirection, buildOverflowDescriptors,
+  loadBrand, type DirectorAssetSelection, type AssetCatalog,
+} from "./creative-direction.js";
+import { INTENT_COPY_DIRECTIVES, isIntent } from "../lib/intents.js";
 import { compositeImage, reframeImage, imageDimensions } from "./compositing.js";
 import { detectSubject, predictClip } from "./focal-point.js";
 import { outpaintImage } from "./imagen.js";
@@ -27,7 +32,7 @@ import { ai as geminiAi } from "@workspace/integrations-gemini-ai";
 import { PLATFORM_CONFIGS } from "./imagen.js";
 import { extractJSON } from "../lib/extract-json.js";
 import type { CaptionResult } from "./claude.js";
-import type { StudioSession, SessionTurn } from "@workspace/db";
+import type { StudioSession, SessionTurn, Asset } from "@workspace/db";
 
 export type { StudioSession, SessionTurn };
 
@@ -120,40 +125,165 @@ async function loadPacketSlots(packet: Awaited<ReturnType<typeof buildGeneration
       mimeType: entry.asset.mimeType || "image/png",
       slot: entry.role === "style_reference" ? "style" : "character",
       description: entry.asset.characterIdentityNote || entry.asset.description || entry.asset.name,
+      assetId: entry.asset.id,
     });
   }
   return slots;
 }
 
-async function artDirectionPrompt(params: {
-  brandId: string;
-  briefText: string;
-  intent?: string | null;
-}): Promise<string> {
-  const { brandId, briefText, intent } = params;
-  const [brand] = await db.select().from(brandsTable).where(eq(brandsTable.id, brandId));
-  if (!brand) throw new Error("Brand not found");
+/**
+ * Load the image files for the creative director's asset selections. The byId
+ * map only ever contains this brand's assets (catalog query is brand-scoped),
+ * so the model cannot select across brands.
+ */
+async function loadCatalogAssetSlots(
+  selections: DirectorAssetSelection[],
+  byId: Map<string, Asset>,
+): Promise<ImageSlot[]> {
+  const slots: ImageSlot[] = [];
+  for (const sel of selections) {
+    const asset = byId.get(sel.assetId);
+    if (!asset?.fileUrl) continue;
+    const loc = resolveUrl(asset.fileUrl);
+    if (!loc) continue;
+    const mime = asset.mimeType || contentTypeFor(loc.filename);
+    if (!mime.startsWith("image/")) continue;
+    const buf = await readBuffer(loc);
+    if (!buf) {
+      logger.warn({ assetId: asset.id, name: asset.name }, "Director-selected asset could not be read; skipping");
+      continue;
+    }
+    const slotType: ImageSlot["slot"] =
+      sel.role === "subject" ? "character" : sel.role === "style" ? "style" : "object";
+    slots.push({
+      imageBuffer: buf,
+      mimeType: mime,
+      slot: slotType,
+      description: slotDescriptionForAsset(asset, slotType),
+      assetId: asset.id,
+    });
+  }
+  return slots;
+}
 
-  const systemInstruction = `You are a world-class art director creating precise visual direction for an AI image generator. Be specific, evocative, and brief (3-5 sentences). Focus on: composition, lighting, mood, color treatment, subject framing. Do not describe text or captions — those are overlaid separately.`;
+interface GenerationPlan {
+  prompt: string;
+  slots: ImageSlot[];
+  aspectRatio: string;
+  styleContract: string;
+  attachedNames: string[];
+  metadata: Record<string, unknown>;
+}
 
-  const context = [
-    brand.imagenPrefix && `Brand visual prefix: ${brand.imagenPrefix}`,
-    brand.characterStyleRules && `Character/style rules: ${brand.characterStyleRules}`,
-    brand.tasteGuidance && `Team taste guidance: ${brand.tasteGuidance}`,
-    intent && `Post intent: ${intent}`,
-    `Brief: ${briefText}`,
-  ].filter(Boolean).join("\n");
+/**
+ * Shared draft/compare assembly: style contract + creative director (full
+ * deck, structured output, library catalog) + deterministic slot budgeting.
+ * The final prompt is the director's prose PLUS the verbatim constraint block,
+ * so brand rules reach the image model unlaundered.
+ */
+async function assembleGenerationPlan(params: {
+  creative: typeof creativesTable.$inferSelect;
+  input: TurnInput;
+  onProgress: ProgressCallback;
+}): Promise<GenerationPlan> {
+  const { creative, input, onProgress } = params;
+  const briefText = input.instruction || creative.briefText || "";
 
-  // ART_DIRECTION_MODEL is a Gemini text model — use generateContent, NOT anthropic.
-  const response = await geminiAi.models.generateContent({
-    model: COPILOT_MODELS.ART_DIRECTION_MODEL,
-    contents: [{ role: "user", parts: [{ text: context }] }],
-    config: { systemInstruction, maxOutputTokens: 512, temperature: 0.7 },
+  const brand = await loadBrand(creative.brandId);
+  const styleProfile = await resolveStyleProfile(creative.brandId, creative.styleProfileId);
+  const persona = await resolveDesignerPersona(creative.personaId);
+  const styleContract = buildSessionStyleContract({ brand, styleProfile, persona });
+
+  // Manual attachments always win slots — the user pointed at these explicitly.
+  const attached = await loadAttachedAssetSlots({
+    brandId: creative.brandId,
+    instruction: input.instruction,
+    assetIds: input.assetIds,
+  });
+  if (attached.names.length > 0) {
+    onProgress({ type: "progress", step: "packet", message: `Using library asset${attached.names.length > 1 ? "s" : ""}: ${attached.names.join(", ")}` });
+  }
+
+  onProgress({ type: "progress", step: "art-direction", message: "Creative director: reading the brief and the asset library..." });
+
+  const catalog: AssetCatalog = await buildAssetCatalog({ brandId: creative.brandId, briefText });
+  const direction = await buildCreativeDirection({
+    brand,
+    styleContract,
+    briefText,
+    intent: creative.intent,
+    catalog,
   });
 
-  const text = response.text;
-  if (!text) throw new Error("No art direction from model");
-  return text.trim();
+  onProgress({
+    type: "progress",
+    step: "art-direction",
+    message: direction.assetSelections.length > 0
+      ? `Creative director: selected ${direction.assetSelections.length} library asset${direction.assetSelections.length !== 1 ? "s" : ""}`
+      : "Creative director: direction written",
+    done: true,
+  });
+
+  const directorSlots = await loadCatalogAssetSlots(direction.assetSelections, catalog.byId);
+
+  // Legacy packet path still honored: creative-level selected assets (from
+  // deep links / future pickers) and style-profile reference images.
+  const selectedAssets = (creative.selectedAssets || []) as Array<{ assetId: string; role: string }>;
+  const selectedAssetIds = selectedAssets.map(a => a.assetId);
+  const styleRefIds = styleProfile?.referenceAssetIds || [];
+  let packetSlots: ImageSlot[] = [];
+  if (selectedAssetIds.length > 0 || styleRefIds.length > 0) {
+    const packet = await buildGenerationPacket({
+      creativeId: creative.id,
+      brandId: creative.brandId,
+      templateId: creative.templateId || "",
+      platform: "all",
+      selectedAssetIds,
+      priorityStyleAssetIds: styleRefIds,
+      briefText,
+      balance: normalizeBalance(creative.referenceBalance) as ReferenceBalance,
+    });
+    packetSlots = await loadPacketSlots(packet);
+  }
+
+  const personaSlots = await loadPersonaSlots(creative.personaId);
+  const cap = typedRefsEnabled() ? MAX_TYPED_REFERENCES : MAX_IMAGE_REFERENCES;
+  const slots = mergeReferenceSlots({
+    attached: attached.slots,
+    director: directorSlots,
+    packet: packetSlots,
+    persona: personaSlots,
+    cap,
+  });
+  onProgress({ type: "progress", step: "packet", message: `References: ${slots.length} image${slots.length !== 1 ? "s" : ""} attached`, done: true });
+
+  // Selected assets that missed the slot budget still steer as text (ported
+  // batch-path behavior); never silently dropped.
+  const usedAssetIds = new Set(slots.map(s => s.assetId).filter(Boolean));
+  const overflowAssets = direction.assetSelections
+    .filter(sel => !usedAssetIds.has(sel.assetId))
+    .map(sel => catalog.byId.get(sel.assetId))
+    .filter((a): a is Asset => Boolean(a));
+  const overflowBlock = buildOverflowDescriptors(overflowAssets);
+
+  const prompt =
+    `${direction.prompt}\n\nNON-NEGOTIABLE BRAND CONSTRAINTS:\n${styleContract}${overflowBlock}`;
+
+  return {
+    prompt,
+    slots,
+    aspectRatio: direction.aspectRatio,
+    styleContract,
+    attachedNames: attached.names,
+    metadata: {
+      artDirection: direction.prompt,
+      directorSelections: direction.assetSelections,
+      directorFallback: direction.usedFallback,
+      aspectRatio: direction.aspectRatio,
+      catalogSize: catalog.lines.length,
+      ...(attached.names.length > 0 ? { attachedAssetNames: attached.names } : {}),
+    },
+  };
 }
 
 async function buildImageAwareCaption(params: {
@@ -178,6 +308,16 @@ async function buildImageAwareCaption(params: {
     ? `\nBRAND VOICE EXAMPLES (few-shot; match this tone and energy):\n${voiceExamples.map((ex, i) => `${i + 1}. "${ex}"`).join("\n")}\n`
     : "";
 
+  // Hashtag strategy (same shape the legacy caption engine uses): per-platform
+  // always-include tags from the brand's stored strategy.
+  const hashtagStrategy = brand.hashtagStrategy as Record<string, { always_include?: string[] }> | null;
+  const hashtagEntries = hashtagStrategy
+    ? Object.entries(hashtagStrategy).filter(([, cfg]) => (cfg?.always_include || []).length > 0)
+    : [];
+  const hashtagSection = hashtagEntries.length > 0
+    ? `\nHASHTAG STRATEGY:\n${hashtagEntries.map(([p, cfg]) => `- ${p}: Always include ${(cfg.always_include || []).map(h => `#${h}`).join(", ")}.`).join("\n")}\n`
+    : "";
+
   // Derive platform list from the single source of truth — adding new platforms
   // to PLATFORM_CONFIGS automatically includes them here without touching this function.
   const platformList = platform ? [platform] : Object.keys(PLATFORM_CONFIGS);
@@ -188,11 +328,15 @@ async function buildImageAwareCaption(params: {
 
   const system = `You are a social media copywriter for ${brand.name}.
 VOICE: ${brand.voiceDescription}
-${brand.trademarkRules ? `TRADEMARK RULES:\n${brand.trademarkRules}\n` : ""}${bannedTerms.length > 0 ? `NEVER USE: ${bannedTerms.join(", ")}\n` : ""}${fewShotSection}
+${brand.trademarkRules ? `TRADEMARK RULES:\n${brand.trademarkRules}\n` : ""}${bannedTerms.length > 0 ? `NEVER USE: ${bannedTerms.join(", ")}\n` : ""}${fewShotSection}${hashtagSection}
 PLATFORM CHARACTER LIMITS:\n${platformLimits}
 IMPORTANT: Captions must be written AGAINST the actual image content — describe what is shown, not what was briefed. The image is attached.`;
 
-  const intentLine = intent ? `Post intent: ${intent}\n` : "";
+  // Goal-aware copy: the full per-intent directive (structure + CTA + headline
+  // framing), not just the intent label.
+  const intentLine = intent && isIntent(intent)
+    ? `POST GOAL:\n${INTENT_COPY_DIRECTIVES[intent]}\n`
+    : intent ? `Post intent: ${intent}\n` : "";
   const briefLine = briefText ? `Brief: ${briefText}\n` : "";
 
   const alternatesInstruction = twoAlternates && platform
@@ -457,6 +601,17 @@ export async function createSession(params: {
       .where(eq(creativesTable.id, existingCreativeId));
     if (!existing) throw new Error("Creative not found");
     if (existing.brandId !== brandId) throw new Error("Creative does not belong to this brand");
+
+    // Deep-link steering: apply incoming intent/style/persona to the existing
+    // creative when provided (previously these were silently dropped, so a
+    // plan-item session generated without any of the chosen steering).
+    const steeringPatch: Partial<typeof creativesTable.$inferInsert> = {};
+    if (intent) steeringPatch.intent = intent;
+    if (styleProfileId) steeringPatch.styleProfileId = styleProfileId;
+    if (personaId) steeringPatch.personaId = personaId;
+    if (Object.keys(steeringPatch).length > 0) {
+      await db.update(creativesTable).set(steeringPatch).where(eq(creativesTable.id, existing.id));
+    }
 
     // Reuse an existing session for this creative (repeat opens of the same
     // plan item should land in the same session, not stack new ones).
@@ -754,47 +909,15 @@ async function executeDraft(params: {
 }): Promise<ActionResult> {
   const { session, creative, input, onProgress } = params;
 
-  onProgress({ type: "progress", step: "art-direction", message: "Writing art direction..." });
-
-  const artDirection = await artDirectionPrompt({
-    brandId: creative.brandId,
-    briefText: input.instruction || creative.briefText || "",
-    intent: creative.intent,
-  });
-
-  onProgress({ type: "progress", step: "packet", message: "Building reference packet..." });
-
-  const selectedAssets = (creative.selectedAssets || []) as Array<{ assetId: string; role: string }>;
-  const selectedAssetIds = selectedAssets.map(a => a.assetId);
-  const styleProfile = await resolveStyleProfile(creative.brandId, creative.styleProfileId);
-  const styleRefIds = styleProfile?.referenceAssetIds || [];
-
-  let packetSlots: ImageSlot[] = [];
-  if (selectedAssetIds.length > 0 || styleRefIds.length > 0) {
-    const packet = await buildGenerationPacket({
-      creativeId: creative.id,
-      brandId: creative.brandId,
-      templateId: creative.templateId || "",
-      platform: "all",
-      selectedAssetIds,
-      priorityStyleAssetIds: styleRefIds,
-      briefText: input.instruction || creative.briefText,
-      balance: normalizeBalance(creative.referenceBalance) as ReferenceBalance,
-    });
-    packetSlots = await loadPacketSlots(packet);
-    onProgress({ type: "progress", step: "packet", message: `Packet: ${packetSlots.length} reference image(s)`, done: true });
-  }
-
-  const personaSlots = await loadPersonaSlots(creative.personaId);
-  const allSlots = [...packetSlots, ...personaSlots].slice(0, MAX_IMAGE_REFERENCES);
+  const plan = await assembleGenerationPlan({ creative, input, onProgress });
 
   onProgress({ type: "progress", step: "image", message: `Generating image via ${COPILOT_MODELS.NANO_BANANA_MODEL}...` });
 
   const imageResult = await runImageInteraction({
-    prompt: artDirection,
-    slots: allSlots,
+    prompt: plan.prompt,
+    slots: plan.slots,
     previousInteractionId: null,
-    aspectRatio: "1:1",
+    aspectRatio: plan.aspectRatio,
     signal: input.signal,
   });
 
@@ -826,7 +949,7 @@ async function executeDraft(params: {
   await writeBuffer("generated", thumbnailFilename, imageResult.imageBuffer);
   const thumbnailUrl = `/api/files/generated/${thumbnailFilename}`;
 
-  const refCount = allSlots.length;
+  const refCount = plan.slots.length;
   const costUsd = estimateImagenCost(1) + estimateClaudeCost() + estimateGeminiTextCost();
 
   return {
@@ -835,7 +958,7 @@ async function executeDraft(params: {
     costUsd,
     summary: `Draft created: ${refCount} brand ref${refCount !== 1 ? "s" : ""} used, captions written against image`,
     thumbnailUrl,
-    metadata: { artDirection, refCount },
+    metadata: { ...plan.metadata, refCount },
     modelUsed: COPILOT_MODELS.NANO_BANANA_MODEL,
   };
 }
@@ -896,11 +1019,15 @@ async function loadAttachedAssetSlots(params: {
       logger.warn({ assetId: asset.id, name: asset.name }, "Attached asset image could not be read; skipping");
       continue;
     }
+    // Slot type from the asset's stored upload-time classification (logo vs
+    // subject vs style) instead of the old hardcoded "object".
+    const slotType = slotTypeForAsset(asset);
     slots.push({
       imageBuffer: buf,
       mimeType: mime,
-      slot: "object",
-      description: `Brand asset "${asset.name}"${asset.description ? ` — ${asset.description}` : ""}. Reproduce this exact asset faithfully as shown — do not redesign, restyle, or invent a different version of it.`,
+      slot: slotType,
+      description: slotDescriptionForAsset(asset, slotType),
+      assetId: asset.id,
     });
     names.push(asset.name);
   }
@@ -930,10 +1057,18 @@ async function executeEditImage(params: {
     onProgress({ type: "progress", step: "image", message: `Using library asset${attached.names.length > 1 ? "s" : ""}: ${attached.names.join(", ")}` });
   }
 
+  // Brand-aware edits: the raw instruction never travels alone. The style
+  // contract carries brand DNA, style profile, persona fingerprint, and taste
+  // guidance; the user's instruction stays primary on any conflict.
+  const brand = await loadBrand(creative.brandId);
+  const styleProfile = await resolveStyleProfile(creative.brandId, creative.styleProfileId);
+  const persona = await resolveDesignerPersona(creative.personaId);
+  const styleContract = buildSessionStyleContract({ brand, styleProfile, persona });
+
   onProgress({ type: "progress", step: "image", message: `Editing image (targeted preserving edit, not a re-roll)...` });
 
   const imageResult = await runImageInteraction({
-    prompt: input.instruction,
+    prompt: wrapEditInstruction(styleContract, input.instruction),
     slots: attached.slots,
     previousInteractionId: session.imageInteractionId,
     aspectRatio: "1:1",
@@ -1094,34 +1229,7 @@ async function executeCompare(params: {
   const count = input.compareCount || 3;
   onProgress({ type: "progress", step: "compare", message: `Generating ${count} takes for comparison...` });
 
-  const selectedAssets = (creative.selectedAssets || []) as Array<{ assetId: string; role: string }>;
-  const selectedAssetIds = selectedAssets.map(a => a.assetId);
-  const styleProfile = await resolveStyleProfile(creative.brandId, creative.styleProfileId);
-  const styleRefIds = styleProfile?.referenceAssetIds || [];
-
-  let packetSlots: ImageSlot[] = [];
-  if (selectedAssetIds.length > 0 || styleRefIds.length > 0) {
-    const packet = await buildGenerationPacket({
-      creativeId: creative.id,
-      brandId: creative.brandId,
-      templateId: creative.templateId || "",
-      platform: "all",
-      selectedAssetIds,
-      priorityStyleAssetIds: styleRefIds,
-      briefText: input.instruction || creative.briefText,
-      balance: normalizeBalance(creative.referenceBalance) as ReferenceBalance,
-    });
-    packetSlots = await loadPacketSlots(packet);
-  }
-
-  const personaSlots = await loadPersonaSlots(creative.personaId);
-  const allSlots = [...packetSlots, ...personaSlots].slice(0, MAX_IMAGE_REFERENCES);
-
-  const artDirection = await artDirectionPrompt({
-    brandId: creative.brandId,
-    briefText: input.instruction || creative.briefText || "",
-    intent: creative.intent,
-  });
+  const plan = await assembleGenerationPlan({ creative, input, onProgress });
 
   // F4: Generate all N takes concurrently — each call is independent so there
   // is no ordering dependency.  The UI receives the takes in a deterministic
@@ -1130,10 +1238,10 @@ async function executeCompare(params: {
   const takeResults = await Promise.all(
     Array.from({ length: count }, (_, i) =>
       runImageInteraction({
-        prompt: `${artDirection}\n\nVARIATION ${i + 1}: Fresh composition, same brief.`,
-        slots: allSlots,
+        prompt: `${plan.prompt}\n\nVARIATION ${i + 1}: Fresh composition, same brief.`,
+        slots: plan.slots,
         previousInteractionId: null,
-        aspectRatio: "1:1",
+        aspectRatio: plan.aspectRatio,
         signal: input.signal,
       }),
     ),
@@ -1185,7 +1293,7 @@ async function executeCompare(params: {
     interactionId: perTakeInteractionIds[0],
     costUsd: totalCost,
     summary: `${count} takes generated side-by-side for comparison`,
-    metadata: { count, perTakeVariantIds, perTakeInteractionIds },
+    metadata: { ...plan.metadata, count, perTakeVariantIds, perTakeInteractionIds },
     modelUsed: COPILOT_MODELS.NANO_BANANA_MODEL,
   };
 }
@@ -1218,7 +1326,7 @@ async function runCopilotQaPass(
   imageBuffer: Buffer,
   instruction: string,
   brandContext?: string,
-): Promise<{ ok: boolean; issue?: string; correctionHint?: string }> {
+): Promise<{ ok: boolean; issue?: string; correctionHint?: string; qaError?: boolean }> {
   try {
     const brandSection = brandContext
       ? `\nBrand rules to verify:\n${brandContext}\n`
@@ -1251,8 +1359,11 @@ async function runCopilotQaPass(
       correctionHint: typeof parsed.correctionHint === "string" ? parsed.correctionHint : undefined,
     };
   } catch (err) {
+    // Fail-open is intentional for UX (never lose a good image to a QA outage)
+    // but no longer silent: qaError travels into the turn metadata so skipped
+    // gates are visible instead of masquerading as passes.
     logger.warn({ err }, "Copilot QA pass failed — skipping gate");
-    return { ok: true };
+    return { ok: true, qaError: true };
   }
 }
 
@@ -1283,7 +1394,7 @@ async function applyQaPass(params: {
   // edit — passed to the corrective call so a retry can actually use the
   // same references instead of inventing replacements.
   slots?: ImageSlot[];
-}): Promise<{ interactionId?: string; qaRetried: boolean; qaIssue?: string }> {
+}): Promise<{ interactionId?: string; qaRetried: boolean; qaIssue?: string; qaError?: boolean }> {
   const { variantIds, instruction, interactionId, sessionId, parentAction, creativeId, brandId, onProgress } = params;
 
   if (!variantIds.length || !interactionId) {
@@ -1307,18 +1418,29 @@ async function applyQaPass(params: {
   }
 
   // Build brand-rule context for QA verification so the model checks both
-  // instruction adherence and brand-compliance in a single pass.
+  // instruction adherence and brand-compliance in a single pass. The QA model
+  // gets the real rules (banned terms, trademark, colors, taste), not just the
+  // brand's name and voice line.
   const [brand] = await db.select().from(brandsTable).where(eq(brandsTable.id, brandId));
   const brandContext = brand
     ? [
         brand.name ? `Brand: ${brand.name}` : null,
         brand.voiceDescription ? `Voice/style: ${brand.voiceDescription}` : null,
-      ].filter(Boolean).join(". ")
+        brand.characterStyleRules ? `Character/style rules: ${brand.characterStyleRules}` : null,
+        `Brand colors: primary ${brand.colorPrimary}, secondary ${brand.colorSecondary}, accent ${brand.colorAccent}`,
+        brand.bannedTerms && brand.bannedTerms.length > 0 ? `Banned terms (must not appear as visible text): ${brand.bannedTerms.join(", ")}` : null,
+        brand.trademarkRules ? `Trademark rules: ${brand.trademarkRules}` : null,
+        brand.negativePrompt ? `Never include: ${brand.negativePrompt}` : null,
+        brand.tasteGuidance ? `Team taste guidance: ${brand.tasteGuidance}` : null,
+      ].filter(Boolean).join("\n")
     : undefined;
 
   onProgress({ type: "progress", step: "qa", message: "QA: reviewing edit quality and brand compliance..." });
   const verdict = await runCopilotQaPass(imageBuffer, instruction, brandContext);
 
+  if (verdict.qaError) {
+    return { interactionId, qaRetried: false, qaError: true };
+  }
   if (verdict.ok || !verdict.correctionHint) {
     return { interactionId, qaRetried: false };
   }
@@ -1449,7 +1571,7 @@ async function executeDraftWithQa(params: {
   return {
     ...result,
     interactionId: qa.interactionId ?? result.interactionId,
-    metadata: { ...(result.metadata || {}), qaRetried: qa.qaRetried, qaIssue: qa.qaIssue },
+    metadata: { ...(result.metadata || {}), qaRetried: qa.qaRetried, qaIssue: qa.qaIssue, ...(qa.qaError ? { qaError: true } : {}) },
   };
 }
 
@@ -1482,7 +1604,7 @@ async function executeEditImageWithQa(params: {
   return {
     ...result,
     interactionId: qa.interactionId ?? result.interactionId,
-    metadata: { ...(result.metadata || {}), qaRetried: qa.qaRetried, qaIssue: qa.qaIssue },
+    metadata: { ...(result.metadata || {}), qaRetried: qa.qaRetried, qaIssue: qa.qaIssue, ...(qa.qaError ? { qaError: true } : {}) },
   };
 }
 
@@ -1531,8 +1653,15 @@ async function executeEditRegion(params: {
     onProgress({ type: "progress", step: "image", message: `Using library asset${attached.names.length > 1 ? "s" : ""}: ${attached.names.join(", ")}` });
   }
 
+  // Brand-aware edits: region edits carry the style contract too, so changes
+  // inside the region stay on-brand (the region template + instruction win).
+  const brand = await loadBrand(creative.brandId);
+  const styleProfile = await resolveStyleProfile(creative.brandId, creative.styleProfileId);
+  const persona = await resolveDesignerPersona(creative.personaId);
+  const styleContract = buildSessionStyleContract({ brand, styleProfile, persona });
+
   const imageResult = await runImageInteraction({
-    prompt: regionPrompt,
+    prompt: wrapEditInstruction(styleContract, regionPrompt),
     slots: attached.slots,
     previousInteractionId: session.imageInteractionId,
     aspectRatio: "1:1",
@@ -1589,6 +1718,7 @@ async function executeEditRegion(params: {
       region,
       qaRetried: qa.qaRetried,
       qaIssue: qa.qaIssue,
+      ...(qa.qaError ? { qaError: true } : {}),
       ...(input.assetIds && input.assetIds.length > 0 ? { assetIds: input.assetIds } : {}),
       ...(attached.names.length > 0 ? { attachedAssetNames: attached.names } : {}),
     },
