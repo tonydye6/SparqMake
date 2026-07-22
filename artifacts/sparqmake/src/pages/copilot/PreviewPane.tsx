@@ -3,7 +3,7 @@
  * CaptionCard, 72px history strip with edge fade.
  * Spec §Phase D
  */
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useLayoutEffect } from "react";
 import { Crop, Download, History, MessageSquare, Paperclip, Check, Loader2 } from "lucide-react";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -56,6 +56,7 @@ function RegionPopover({
   const [atFilter, setAtFilter] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const assetsPickerRef = useRef<HTMLDivElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
 
   // preventScroll: focusing must never scroll ancestor containers — that
   // shoves the preview image out of alignment inside its rounded crop box.
@@ -123,8 +124,40 @@ function RegionPopover({
       : { top: `${Math.min(region.y1 * 100 + 2, 88)}%` }),
   };
 
+  // After rendering, measure the popover against the nearest scrollable
+  // ancestor and the viewport, and nudge it vertically so it is never
+  // clipped off-screen (e.g. tall selections that flip the popover above
+  // the region and push it past the top of the page).
+  useLayoutEffect(() => {
+    const el = popoverRef.current;
+    if (!el) return;
+    el.style.transform = "";
+    const rect = el.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) return; // non-visual env
+    let clipTop = 0;
+    let clipBottom = window.innerHeight;
+    let node: HTMLElement | null = el.parentElement;
+    while (node) {
+      const overflowY = getComputedStyle(node).overflowY;
+      if (overflowY === "auto" || overflowY === "scroll" || overflowY === "hidden") {
+        const r = node.getBoundingClientRect();
+        clipTop = Math.max(clipTop, r.top);
+        clipBottom = Math.min(clipBottom, r.bottom);
+        break;
+      }
+      node = node.parentElement;
+    }
+    const margin = 8;
+    let shift = 0;
+    if (rect.top < clipTop + margin) shift = clipTop + margin - rect.top;
+    else if (rect.bottom > clipBottom - margin)
+      shift = Math.max(clipBottom - margin - rect.bottom, clipTop + margin - rect.top);
+    if (shift) el.style.transform = `translateY(${shift}px)`;
+  }, [region, showAssets, attachedAssets.length]);
+
   return (
     <div
+      ref={popoverRef}
       className="absolute z-30 bg-popover border border-border rounded-xl shadow-xl p-3 w-72 max-w-full"
       style={style}
       onMouseDown={e => e.stopPropagation()}
