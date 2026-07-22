@@ -111,12 +111,14 @@ export function SessionView({ sessionId, onBack, autoDraftBrief }: SessionViewPr
   const threadRef = useRef<HTMLDivElement>(null);
   const turnAbortRef = useRef<AbortController | null>(null);
   const autoDraftFiredRef = useRef(false);
-  const widthRef = useRef(loadWidth());
   const inFlightPayloadRef = useRef<TurnPayload | null>(null);
   const turnPayloadsRef = useRef(new Map<string, TurnPayload>());
 
-  // Thread width / collapsed state
+  // Thread width / collapsed state.  widthRef mirrors threadWidth so drag
+  // handlers always read the current width without stale-closure lag; it is
+  // seeded from the same state value to guarantee they can never diverge.
   const [threadWidth, setThreadWidth] = useState(loadWidth);
+  const widthRef = useRef(threadWidth);
   const [collapsed, setCollapsed] = useState(loadCollapsed);
   const isResizingRef = useRef(false);
   const resizeStartXRef = useRef(0);
